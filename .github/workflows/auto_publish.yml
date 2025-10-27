@@ -3,7 +3,17 @@ name: Publicação Automática de Loterias
 on:
   workflow_dispatch:
   schedule:
-    - cron: '45 22 * * *'  # executa diariamente às 22h45 (horário UTC ≈ 19h45 Brasília)
+    # Executa diariamente às 22:45 UTC (≈ 19:45 Brasília; atenção a horário de verão)
+    - cron: "45 22 * * *"
+
+# Evita duas execuções simultâneas do mesmo workflow/branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Permissões mínimas necessárias
+permissions:
+  contents: read
 
 jobs:
   run:
@@ -16,7 +26,8 @@ jobs:
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Instalar dependências
         run: |
@@ -26,46 +37,87 @@ jobs:
       - name: Verificar pendências
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+
+          # Conta 1 (OBRIGATÓRIA)
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
           TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_1 }}
+
+          # Conta 2 (OPCIONAL: tudo ou nada)
           TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
           TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
           TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
           TWITTER_ACCESS_TOKEN_SECRET_2: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_2 }}
+
+          # Configuração do bot
           BACKLOG_DAYS: ${{ secrets.BACKLOG_DAYS }}
           MAX_TWEETS_PER_RUN: ${{ secrets.MAX_TWEETS_PER_RUN }}
           RATE_DELAY_SECONDS: ${{ secrets.RATE_DELAY_SECONDS }}
           RATE_BACKOFF_SECONDS: ${{ secrets.RATE_BACKOFF_SECONDS }}
           LOOP_MODE: ${{ secrets.LOOP_MODE }}
         run: |
-          echo "Verificando variáveis..."
+          echo "🔎 Verificando variáveis de ambiente (sem exibir valores)..."
           python - <<'PY'
           import os, sys
-          req = [
-              "GOOGLE_SERVICE_JSON",
-              "TWITTER_API_KEY_1", "TWITTER_API_SECRET_1",
-              "TWITTER_ACCESS_TOKEN_1", "TWITTER_ACCESS_TOKEN_SECRET_1"
+
+          def is_set(k: str) -> bool:
+            v = os.getenv(k)
+            return bool(v and str(v).strip())
+
+          missing = []
+
+          # Obrigatórias
+          required = [
+            "GOOGLE_SERVICE_JSON",
+            "TWITTER_API_KEY_1", "TWITTER_API_SECRET_1",
+            "TWITTER_ACCESS_TOKEN_1", "TWITTER_ACCESS_TOKEN_SECRET_1",
           ]
-          missing = [k for k in req if not os.getenv(k)]
+          for k in required:
+            if not is_set(k):
+              missing.append(k)
+
+          # Conta 2 (opcional): se qualquer uma estiver setada, todas devem estar
+          c2 = [
+            "TWITTER_API_KEY_2", "TWITTER_API_SECRET_2",
+            "TWITTER_ACCESS_TOKEN_2", "TWITTER_ACCESS_TOKEN_SECRET_2",
+          ]
+          c2_set = [k for k in c2 if is_set(k)]
+          if c2_set and len(c2_set) != len(c2):
+            print("❌ Conta #2 parcialmente configurada. Defina TODAS as variáveis ou remova todas:")
+            print("   Presentes:", c2_set)
+            print("   Faltando:", [k for k in c2 if k not in c2_set])
+            sys.exit(1)
+
           if missing:
-              print("Faltam variáveis:", missing)
-              sys.exit(1)
+            print("❌ Faltam variáveis obrigatórias:", missing)
+            sys.exit(1)
+
+          if len(c2_set) == len(c2) and c2_set:
+            print("✅ Conta #2: configurada (todas as variáveis presentes).")
+          else:
+            print("ℹ️ Conta #2: não configurada (será ignorada).")
+
           print("✅ Todas as variáveis obrigatórias estão presentes.")
           PY
 
       - name: Executar o bot
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+
+          # Conta 1 (OBRIGATÓRIA)
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
           TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_1 }}
+
+          # Conta 2 (OPCIONAL)
           TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
           TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
           TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
           TWITTER_ACCESS_TOKEN_SECRET_2: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_2 }}
+
+          # Configuração do bot
           BACKLOG_DAYS: ${{ secrets.BACKLOG_DAYS }}
           MAX_TWEETS_PER_RUN: ${{ secrets.MAX_TWEETS_PER_RUN }}
           RATE_DELAY_SECONDS: ${{ secrets.RATE_DELAY_SECONDS }}
