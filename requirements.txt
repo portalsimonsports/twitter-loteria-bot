@@ -1,0 +1,8 @@
+gspread
+oauth2client
+tweepy
+python-dotenv
+requests
+google-auth
+google-api-python-client
+pytz
