@@ -6,12 +6,10 @@ on:
     # Executa diariamente às 22:45 UTC (≈ 19:45 Brasília; atenção a horário de verão)
     - cron: "45 22 * * *"
 
-# Evita duas execuções simultâneas do mesmo workflow/branch
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Permissões mínimas necessárias
 permissions:
   contents: read
 
@@ -44,7 +42,7 @@ jobs:
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
           TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_1 }}
 
-          # Conta 2 (OPCIONAL: tudo ou nada)
+          # Conta 2 (OPCIONAL)
           TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
           TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
           TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
@@ -67,7 +65,7 @@ jobs:
 
           missing = []
 
-          # Obrigatórias
+          # Obrigatórias (Conta 1 + Google)
           required = [
             "GOOGLE_SERVICE_JSON",
             "TWITTER_API_KEY_1", "TWITTER_API_SECRET_1",
@@ -77,23 +75,21 @@ jobs:
             if not is_set(k):
               missing.append(k)
 
-          # Conta 2 (opcional): se qualquer uma estiver setada, todas devem estar
+          if missing:
+            print("❌ Faltam variáveis obrigatórias:", missing)
+            sys.exit(1)
+
+          # Conta 2: se estiver parcial, apenas avisa e ignora (não falha)
           c2 = [
             "TWITTER_API_KEY_2", "TWITTER_API_SECRET_2",
             "TWITTER_ACCESS_TOKEN_2", "TWITTER_ACCESS_TOKEN_SECRET_2",
           ]
           c2_set = [k for k in c2 if is_set(k)]
           if c2_set and len(c2_set) != len(c2):
-            print("❌ Conta #2 parcialmente configurada. Defina TODAS as variáveis ou remova todas:")
+            print("⚠️ Conta #2 parcialmente configurada. Será IGNORADA.")
             print("   Presentes:", c2_set)
             print("   Faltando:", [k for k in c2 if k not in c2_set])
-            sys.exit(1)
-
-          if missing:
-            print("❌ Faltam variáveis obrigatórias:", missing)
-            sys.exit(1)
-
-          if len(c2_set) == len(c2) and c2_set:
+          elif len(c2_set) == len(c2) and c2_set:
             print("✅ Conta #2: configurada (todas as variáveis presentes).")
           else:
             print("ℹ️ Conta #2: não configurada (será ignorada).")
@@ -111,7 +107,7 @@ jobs:
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
           TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_1 }}
 
-          # Conta 2 (OPCIONAL)
+          # Conta 2 (OPCIONAL — se estiver parcial, o bot deve ignorar)
           TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
           TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
           TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
