@@ -1,10 +1,10 @@
 name: Publicação Automática de Loterias
 
 on:
-  workflow_dispatch:
   schedule:
-    # Executa diariamente às 22:45 UTC (≈ 19:45 Brasília; atenção a horário de verão)
-    - cron: "45 22 * * *"
+    # Executa a cada 30 minutos (*/30 * * * *)
+    - cron: "*/30 * * * *"
+  workflow_dispatch: # Permite execução manual a qualquer hora
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -31,8 +31,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt --no-cache-dir
+          pip install gspread oauth2client # Adicionado para manipular Google Sheets
 
-      - name: Verificar pendências
+      - name: Verificar pendências e condição da coluna H
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
 
@@ -55,46 +56,66 @@ jobs:
           RATE_BACKOFF_SECONDS: ${{ secrets.RATE_BACKOFF_SECONDS }}
           LOOP_MODE: ${{ secrets.LOOP_MODE }}
         run: |
-          echo "🔎 Verificando variáveis de ambiente (sem exibir valores)..."
+          echo "🔎 Verificando variáveis de ambiente e condição da coluna H..."
           python - <<'PY'
-          import os, sys
+          import os
+          import sys
+          import json
+          import gspread
+          from oauth2client.service_account import ServiceAccountCredentials
 
+          # Verificar variáveis obrigatórias
           def is_set(k: str) -> bool:
-            v = os.getenv(k)
-            return bool(v and str(v).strip())
+              v = os.getenv(k)
+              return bool(v and str(v).strip())
 
           missing = []
-
-          # Obrigatórias (Conta 1 + Google)
           required = [
-            "GOOGLE_SERVICE_JSON",
-            "TWITTER_API_KEY_1", "TWITTER_API_SECRET_1",
-            "TWITTER_ACCESS_TOKEN_1", "TWITTER_ACCESS_TOKEN_SECRET_1",
+              "GOOGLE_SERVICE_JSON",
+              "TWITTER_API_KEY_1", "TWITTER_API_SECRET_1",
+              "TWITTER_ACCESS_TOKEN_1", "TWITTER_ACCESS_TOKEN_SECRET_1",
           ]
           for k in required:
-            if not is_set(k):
-              missing.append(k)
+              if not is_set(k):
+                  missing.append(k)
 
           if missing:
-            print("❌ Faltam variáveis obrigatórias:", missing)
-            sys.exit(1)
+              print("❌ Faltam variáveis obrigatórias:", missing)
+              sys.exit(1)
 
-          # Conta 2: se estiver parcial, apenas avisa e ignora (não falha)
+          # Verificar condição da coluna H (procura por células vazias)
+          scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+          creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.getenv("GOOGLE_SERVICE_JSON")), scope)
+          client = gspread.authorize(creds)
+
+          # Substitua pelo ID da sua planilha e nome da aba
+          spreadsheet_id = "SEU_SPREADSHEET_ID"  # Insira o ID da sua planilha Google Sheets
+          sheet = client.open_by_key(spreadsheet_id).sheet1  # Use a aba desejada (sheet1 é a padrão)
+
+          # Obter a coluna H (índice 7, começando de 0)
+          column_h = sheet.col_values(8)  # Coluna H é a 8ª coluna
+          has_empty = any(not cell.strip() for cell in column_h if cell)  # Verifica se há célula vazia
+
+          if not has_empty:
+              print("❌ Nenhuma célula vazia encontrada na coluna H. Publicação não será executada.")
+              sys.exit(0)  # Sai com sucesso, mas não prossegue
+          else:
+              print("✅ Célula vazia encontrada na coluna H. Prosseguindo com a publicação.")
+
+          # Verificação opcional da Conta 2
           c2 = [
-            "TWITTER_API_KEY_2", "TWITTER_API_SECRET_2",
-            "TWITTER_ACCESS_TOKEN_2", "TWITTER_ACCESS_TOKEN_SECRET_2",
+              "TWITTER_API_KEY_2", "TWITTER_API_SECRET_2",
+              "TWITTER_ACCESS_TOKEN_2", "TWITTER_ACCESS_TOKEN_SECRET_2",
           ]
           c2_set = [k for k in c2 if is_set(k)]
           if c2_set and len(c2_set) != len(c2):
-            print("⚠️ Conta #2 parcialmente configurada. Será IGNORADA.")
-            print("   Presentes:", c2_set)
-            print("   Faltando:", [k for k in c2 if k not in c2_set])
+              print("⚠️ Conta #2 parcialmente configurada. Será IGNORADA.")
+              print("   Presentes:", c2_set)
+              print("   Faltando:", [k for k in c2 if k not in c2_set])
           elif len(c2_set) == len(c2) and c2_set:
-            print("✅ Conta #2: configurada (todas as variáveis presentes).")
+              print("✅ Conta #2: configurada (todas as variáveis presentes).")
           else:
-            print("ℹ️ Conta #2: não configurada (será ignorada).")
-
-          print("✅ Todas as variáveis obrigatórias estão presentes.")
+              print("ℹ️ Conta #2: não configurada (será ignorada).")
           PY
 
       - name: Executar o bot
