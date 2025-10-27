@@ -40,13 +40,13 @@ jobs:
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
-          TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
 
           # Conta 2 (OPCIONAL)
           TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
           TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
           TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
-          TWITTER_ACCESS_TOKEN_SECRET_2: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_2 }}
+          TWITTER_ACCESS_TOKEN_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
 
           # Configuração do bot
           BACKLOG_DAYS: ${{ secrets.BACKLOG_DAYS }}
@@ -105,13 +105,13 @@ jobs:
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
-          TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
 
           # Conta 2 (OPCIONAL — se estiver parcial, o bot deve ignorar)
           TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
           TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
           TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
-          TWITTER_ACCESS_TOKEN_SECRET_2: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_2 }}
+          TWITTER_ACCESS_TOKEN_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
 
           # Configuração do bot
           BACKLOG_DAYS: ${{ secrets.BACKLOG_DAYS }}
