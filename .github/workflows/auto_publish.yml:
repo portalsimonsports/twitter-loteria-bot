@@ -2,8 +2,12 @@ name: Publicação Automática de Loterias
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # executa a cada 30 minutos
+    - cron: "*/30 * * * *"   # roda a cada 30 minutos (UTC)
   workflow_dispatch:         # permite rodar manualmente
+
+concurrency:
+  group: twitter-loteria-bot
+  cancel-in-progress: true
 
 jobs:
   run:
@@ -18,12 +22,43 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Cache do pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Instalar dependências
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Executar o bot
+      # Checa pendências na planilha usando funções do próprio bot.py
+      - name: Verificar pendências
+        id: check
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          BACKLOG_DAYS: "1"
+        run: |
+          python - <<'PY'
+          import os, datetime
+          from bot import ler_registros_sem_duplicados, linhas_pendentes, TZ
+          BACKLOG_DAYS = int(os.getenv("BACKLOG_DAYS","1"))
+          hoje = datetime.datetime.now(TZ).date()
+          inicio = hoje - datetime.timedelta(days=BACKLOG_DAYS)
+          dados = ler_registros_sem_duplicados()
+          pend = linhas_pendentes(dados, inicio, hoje)
+          has = 'true' if len(pend) > 0 else 'false'
+          print(f"🔎 Pendências encontradas: {len(pend)}")
+          # exporta para o output do step
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"has_pendencias={has}\n")
+          PY
+
+      - name: Executar o bot (só se houver pendências)
+        if: steps.check.outputs.has_pendencias == 'true'
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
 
@@ -39,7 +74,7 @@ jobs:
           TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
           TWITTER_ACCESS_TOKEN_SECRET_2: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_2 }}
 
-          # ==== Configuração de execução ====
+          # ==== Execução ====
           BACKLOG_DAYS: "1"
           MAX_TWEETS_PER_RUN: "10"
           RATE_DELAY_SECONDS: "120"
