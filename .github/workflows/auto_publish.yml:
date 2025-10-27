@@ -2,27 +2,47 @@ name: Publicação Automática de Loterias
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # a cada 30 minutos
-  workflow_dispatch:
+    - cron: "*/30 * * * *"   # executa a cada 30 minutos
+  workflow_dispatch:         # permite rodar manualmente
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
+      - name: Checkout do repositório
         uses: actions/checkout@v4
-      - name: Setup Python
+
+      - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run bot
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Executar o bot
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
-          TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
-          TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
-          TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
-          TWITTER_ACCESS_TOKEN_SECRET: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
-          BACKLOG_DAYS: 1
+
+          # ==== Conta 1 ====
+          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
+          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
+          TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_1 }}
+
+          # ==== Conta 2 ====
+          TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
+          TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
+          TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
+          TWITTER_ACCESS_TOKEN_SECRET_2: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET_2 }}
+
+          # ==== Configuração de execução ====
+          BACKLOG_DAYS: "1"
+          MAX_TWEETS_PER_RUN: "10"
+          RATE_DELAY_SECONDS: "120"
+          RATE_BACKOFF_SECONDS: "900"
+          LOOP_MODE: "false"
         run: python bot.py
