@@ -3,16 +3,19 @@ name: Publicação Automática de Loterias
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/10 * * * *"   # roda a cada 10 minutos
+    - cron: "*/10 * * * *" # roda a cada 10 minutos
 
 concurrency:
   group: publish-loterias
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
 
     steps:
       - name: Checkout do repositório
@@ -22,6 +25,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Cache do pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Instalar dependências
         run: |
@@ -34,53 +45,58 @@ jobs:
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
-          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
         run: |
           python - <<'PY'
           import os, sys
           req = [
             "GOOGLE_SERVICE_JSON",
-            "TWITTER_API_KEY_1", "TWITTER_API_SECRET_1",
-            "TWITTER_ACCESS_TOKEN_1", "TWITTER_ACCESS_SECRET_1"
+            "TWITTER_API_KEY_1","TWITTER_API_SECRET_1",
+            "TWITTER_ACCESS_TOKEN_1","TWITTER_ACCESS_TOKEN_SECRET_1"
           ]
           miss = [k for k in req if not os.getenv(k)]
           if miss:
-              print("❌ Faltam secrets:", miss); sys.exit(1)
-          print("✅ Secrets ok")
+              print("❌ Faltam variáveis:", miss); sys.exit(1)
+          print("✅ Secrets OK")
           PY
 
-      - name: Executar publicador (ciclo único)
+      - name: Executar o bot (ciclo único)
         env:
-          # === Google ===
-          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          # === OBRIGATÓRIOS ===
+          GOOGLE_SERVICE_JSON:           ${{ secrets.GOOGLE_SERVICE_JSON }}
 
-          # === X/Twitter (até N contas; aqui 2 exemplos) ===
-          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
-          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
-          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
-          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
+          # === CONTAS X (adicione mais _2, _3... se quiser) ===
+          TWITTER_API_KEY_1:             ${{ secrets.TWITTER_API_KEY_1 }}
+          TWITTER_API_SECRET_1:          ${{ secrets.TWITTER_API_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_1:        ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
+          TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
 
-          TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
-          TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
-          TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
-          TWITTER_ACCESS_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
+          TWITTER_API_KEY_2:             ${{ secrets.TWITTER_API_KEY_2 }}
+          TWITTER_API_SECRET_2:          ${{ secrets.TWITTER_API_SECRET_2 }}
+          TWITTER_ACCESS_TOKEN_2:        ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
+          TWITTER_ACCESS_TOKEN_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
 
-          # === Redes extras (opcionais) ===
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
-          PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
-          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
-          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+          # === REDES OPCIONAIS ===
+          DISCORD_WEBHOOK_URL:           ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PINTEREST_ACCESS_TOKEN:        ${{ secrets.PINTEREST_ACCESS_TOKEN }}
+          PINTEREST_BOARD_ID:            ${{ secrets.PINTEREST_BOARD_ID }}
+          FB_PAGE_ID:                    ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_ACCESS_TOKEN:          ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
 
-          # === Comportamento ===
-          BACKLOG_DAYS: ${{ secrets.BACKLOG_DAYS }}
-          MAX_TWEETS_PER_RUN: ${{ secrets.MAX_TWEETS_PER_RUN }}
-          RATE_DELAY_SECONDS: ${{ secrets.RATE_DELAY_SECONDS }}
-          RATE_BACKOFF_SECONDS: ${{ secrets.RATE_BACKOFF_SECONDS }}
-          LOOP_MODE: "false"           # em Actions sempre ciclo único
-          PUBLISH_ANYTIME: "true"      # ignora janela 22h45
-          POST_X_WITH_IMAGE: ${{ secrets.POST_X_WITH_IMAGE }}
+          # === COMPORTAMENTO ===
+          PUBLISH_ANYTIME: "true"          # ignora 22h45
+          LOOP_MODE: "false"               # Actions = execução única
+          BACKLOG_DAYS: "2"
+          MAX_TWEETS_PER_RUN: "30"
+          RATE_DELAY_SECONDS: "20"
+          RATE_BACKOFF_SECONDS: "900"
 
+          # === IMAGEM NO X ===
+          POST_X_WITH_IMAGE: "false"       # mude para "true" quando quiser testar
+
+          # === (opcional) overrides de planilha/aba ===
+          SHEET_ID: "16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI"
+          ABA: "ImportadosBlogger2"
         run: |
-          echo "🚀 Executando ciclo de publicação…"
+          echo "🚀 Publicando…"
           python bot.py
