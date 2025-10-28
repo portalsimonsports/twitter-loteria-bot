@@ -3,7 +3,7 @@ name: Publicação Automática de Loterias
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/10 * * * *"   # roda a cada 10 minutos
+    - cron: "*/10 * * * *"   # roda a cada 10 minutos (UTC)
 
 concurrency:
   group: publish-loterias
@@ -28,17 +28,14 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt --no-cache-dir
 
-      - name: Verificar pendências
+      - name: Verificar variáveis obrigatórias
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
+          # mapeia seu padrão ACCESS_SECRET_* para a var esperada pelo bot (ACCESS_TOKEN_SECRET)
           TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
-          TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
-          TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
-          TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
-          TWITTER_ACCESS_TOKEN_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
         run: |
           echo "🔍 Verificando variáveis obrigatórias..."
           python - <<'PY'
@@ -56,19 +53,31 @@ jobs:
 
       - name: Executar o bot (ciclo único)
         env:
+          # ===== Google =====
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
-          # Contas
+
+          # ===== X / Twitter — Conta 1 =====
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
           TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
+
+          # ===== X / Twitter — Conta 2 (opcional) =====
           TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
           TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
           TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
           TWITTER_ACCESS_TOKEN_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
-          # Comportamento
-          PUBLISH_ANYTIME: "true"           # ignora 22h45
-          LOOP_MODE: "false"                # em Actions, ciclo único
+
+          # ===== Outras redes (opcionais) =====
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
+          PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+
+          # ===== Comportamento =====
+          PUBLISH_ANYTIME: "true"           # ignora 22h45 aqui no Actions
+          LOOP_MODE: "false"                # ciclo único no Actions
           BACKLOG_DAYS: ${{ secrets.BACKLOG_DAYS }}
           MAX_TWEETS_PER_RUN: ${{ secrets.MAX_TWEETS_PER_RUN }}
           RATE_DELAY_SECONDS: ${{ secrets.RATE_DELAY_SECONDS }}
