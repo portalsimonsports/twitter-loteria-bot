@@ -1,212 +1,86 @@
-# ================================================================
-# bot.py — Portal SimonSports (X + Multirrede + Loteca)
-# Versão unificada — 28/10/2025
-# Compatível com Render, Replit e GitHub Actions
-# ================================================================
-import os, json, time, datetime, requests, pytz, gspread, tweepy
-from dotenv import load_dotenv
-from oauth2client.service_account import ServiceAccountCredentials
-from PIL import Image, ImageDraw, ImageFont
+name: Publicação Automática de Loterias
 
-# === CONFIG INICIAL ===
-load_dotenv()
-TZ = pytz.timezone("America/Sao_Paulo")
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"   # roda a cada 10 minutos
 
-SHEET_ID = "16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI"
-ABA = "ImportadosBlogger2"
-COL_X, COL_DISCORD, COL_PINTEREST, COL_FACEBOOK = 8, 13, 14, 15  # H, M, N, O
+concurrency:
+  group: publish-loterias
+  cancel-in-progress: true
 
-def _int(v, dflt): 
-    try: return int(str(v).strip())
-    except: return dflt
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
 
-BACKLOG_DAYS = _int(os.getenv("BACKLOG_DAYS", "1"), 1)
-MAX_TWEETS_PER_RUN = _int(os.getenv("MAX_TWEETS_PER_RUN", "30"), 30)
-RATE_DELAY_SECONDS = _int(os.getenv("RATE_DELAY_SECONDS", "120"), 120)
-RATE_BACKOFF_SECONDS = _int(os.getenv("RATE_BACKOFF_SECONDS", "900"), 900)
-LOOP_MODE = os.getenv("LOOP_MODE", "false").lower() in {"1","true","yes","on"}
-LOOP_INTERVAL_SECONDS = _int(os.getenv("LOOP_INTERVAL_SECONDS", "900"), 900)
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
 
-# === PLANILHA ===
-_gsj = os.getenv("GOOGLE_SERVICE_JSON")
-if not _gsj:
-    raise RuntimeError("Faltando GOOGLE_SERVICE_JSON.")
-SERVICE_JSON = json.loads(_gsj)
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(SERVICE_JSON, scope)
-gs = gspread.authorize(creds)
-ABA_DADOS = gs.open_by_key(SHEET_ID).worksheet(ABA)
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt --no-cache-dir
 
-# === HELPERS ===
-def limpar(v): return (v or "").strip()
-def _first_nonempty(*vals):
-    for v in vals:
-        if v and str(v).strip(): return str(v).strip()
-    return ""
+      - name: Verificar variáveis obrigatórias
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
+          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
+          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          req = [
+            "GOOGLE_SERVICE_JSON",
+            "TWITTER_API_KEY_1", "TWITTER_API_SECRET_1",
+            "TWITTER_ACCESS_TOKEN_1", "TWITTER_ACCESS_SECRET_1"
+          ]
+          miss = [k for k in req if not os.getenv(k)]
+          if miss:
+              print("❌ Faltam secrets:", miss); sys.exit(1)
+          print("✅ Secrets ok")
+          PY
 
-def ler_registros():
-    rows = ABA_DADOS.get_all_values()
-    if not rows: return []
-    hdr = rows[0]
-    return [dict(zip(hdr, r)) for r in rows[1:]]
+      - name: Executar publicador (ciclo único)
+        env:
+          # === Google ===
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
 
-# === TWITTER ===
-def _criar_client_v2(k, s, t, ts):
-    return tweepy.Client(consumer_key=k, consumer_secret=s, access_token=t, access_token_secret=ts, wait_on_rate_limit=True)
+          # === X/Twitter (até N contas; aqui 2 exemplos) ===
+          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
+          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
+          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
 
-def carregar_contas():
-    contas=[]; idx=1
-    while True:
-        k=os.getenv(f"TWITTER_API_KEY_{idx}")
-        s=os.getenv(f"TWITTER_API_SECRET_{idx}")
-        t=os.getenv(f"TWITTER_ACCESS_TOKEN_{idx}")
-        ts=_first_nonempty(os.getenv(f"TWITTER_ACCESS_TOKEN_SECRET_{idx}"), os.getenv(f"TWITTER_ACCESS_SECRET_{idx}"))
-        if not all([k,s,t,ts]): break
-        try:
-            api=_criar_client_v2(k,s,t,ts)
-            me=api.get_me().data
-            print(f"✅ Conta #{idx}: @{me.username}")
-            contas.append({"api":api,"handle":me.username})
-        except Exception as e:
-            print(f"⚠️ Conta #{idx} erro: {e}")
-        idx+=1
-    if not contas: raise RuntimeError("Nenhuma conta X conectada.")
-    return contas
+          TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
+          TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
+          TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
+          TWITTER_ACCESS_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
 
-CONTAS = carregar_contas()
-RR_IDX = 0
+          # === Redes extras (opcionais) ===
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
+          PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
 
-def publicar_x_round_robin(texto):
-    global RR_IDX
-    for i in range(len(CONTAS)):
-        conta = CONTAS[(RR_IDX+i)%len(CONTAS)]
-        try:
-            resp = conta["api"].create_tweet(text=texto)
-            link = f"https://x.com/{conta['handle']}/status/{resp.data['id']}"
-            print(f"✅ Publicado em @{conta['handle']}: {link}")
-            RR_IDX = (RR_IDX+1)%len(CONTAS)
-            return True, link
-        except tweepy.TooManyRequests:
-            print(f"⏳ Rate-limit, aguardando {RATE_BACKOFF_SECONDS}s...")
-            time.sleep(RATE_BACKOFF_SECONDS)
-        except Exception as e:
-            print(f"⚠️ Erro publicação X: {e}")
-    return False, ""
+          # === Comportamento ===
+          BACKLOG_DAYS: ${{ secrets.BACKLOG_DAYS }}
+          MAX_TWEETS_PER_RUN: ${{ secrets.MAX_TWEETS_PER_RUN }}
+          RATE_DELAY_SECONDS: ${{ secrets.RATE_DELAY_SECONDS }}
+          RATE_BACKOFF_SECONDS: ${{ secrets.RATE_BACKOFF_SECONDS }}
+          LOOP_MODE: "false"           # em Actions sempre ciclo único
+          PUBLISH_ANYTIME: "true"      # ignora janela 22h45
+          POST_X_WITH_IMAGE: ${{ secrets.POST_X_WITH_IMAGE }}
 
-# === REDES EXTRAS ===
-def publicar_discord(txt, img):
-    hook=os.getenv("DISCORD_WEBHOOK_URL")
-    if not hook: return False
-    try:
-        payload={"content":txt}
-        if img: payload={"content":txt,"embeds":[{"image":{"url":img}}]}
-        r=requests.post(hook,json=payload)
-        print(f"📨 Discord: {r.status_code}")
-        return r.ok
-    except Exception as e:
-        print("⚠️ Discord:", e)
-        return False
-
-def publicar_pinterest(txt, img):
-    tok=os.getenv("PINTEREST_ACCESS_TOKEN"); board=os.getenv("PINTEREST_BOARD_ID")
-    if not (tok and board and img): return False
-    try:
-        url="https://api.pinterest.com/v5/pins"
-        hdr={"Authorization":f"Bearer {tok}"}
-        data={"board_id":board,"title":txt.split("\n")[0][:100],"description":txt[:300],"media_source":{"source_type":"image_url","url":img}}
-        r=requests.post(url,headers=hdr,json=data)
-        print(f"📨 Pinterest: {r.status_code}")
-        return r.ok
-    except Exception as e:
-        print("⚠️ Pinterest:", e)
-        return False
-
-def publicar_facebook(txt, img):
-    pid=os.getenv("FB_PAGE_ID"); tok=os.getenv("FB_PAGE_ACCESS_TOKEN")
-    if not (pid and tok and img): return False
-    try:
-        r=requests.post(f"https://graph.facebook.com/{pid}/photos",data={"url":img,"caption":txt,"access_token":tok})
-        print(f"📨 Facebook: {r.status_code}")
-        return r.ok
-    except Exception as e:
-        print("⚠️ Facebook:", e)
-        return False
-
-# === TEXTO ===
-def montar_texto(row):
-    lot = limpar(row.get("Loteria"))
-    conc = limpar(row.get("Concurso"))
-    dt = limpar(row.get("Data"))
-    nums = limpar(row.get("Números") or row.get("Numeros"))
-    url = limpar(row.get("URL"))
-    if lot.lower()=="loteca": return None
-    return f"Acesse: {url}\n🎟️ Resultado da {lot}\n📅 Concurso {conc} — {dt}\n🔹 Números: {nums}\n#LoteriasCaixa #{lot.replace(' ','')} #PortalSimonSports"
-
-def montar_texto_loteca(row):
-    dt = limpar(row.get("Data"))
-    url = limpar(row.get("URL"))
-    jogos = limpar(row.get("Números") or row.get("Numeros"))
-    linhas = jogos.split("|")
-    partes = [f"⚽ Resultado da LOTECA — {dt}\n"]
-    for j in linhas:
-        j=j.strip()
-        if j: partes.append(j)
-    partes.append(f"\nMais informações: {url}")
-    return "\n".join(partes)
-
-# === REGISTRO ===
-def marcar(linha, col, val="Sim"):
-    try: ABA_DADOS.update_cell(linha, col, val)
-    except Exception as e: print(f"⚠️ Falha ao marcar linha {linha}: {e}")
-
-def logar(msg):
-    print(msg)
-    with open("log_publicacoes.txt","a",encoding="utf-8") as f:
-        f.write(f"[{datetime.datetime.now(TZ)}] {msg}\n")
-
-# === EXECUÇÃO ===
-def run_once():
-    agora=datetime.datetime.now(TZ)
-    hoje=agora.date()
-    inicio=hoje-datetime.timedelta(days=BACKLOG_DAYS)
-    dados=ler_registros()
-    publicados=0
-
-    for i,row in enumerate(dados,start=2):
-        lot=limpar(row.get("Loteria"))
-        if not lot: continue
-        publicado_x=limpar(row.get("Publicado_X"))
-        publicado_d=limpar(row.get("Publicado_Discord"))
-        publicado_p=limpar(row.get("Publicado_Pinterest"))
-        publicado_f=limpar(row.get("Publicado_Facebook"))
-        if publicado_x and publicado_d and publicado_p and publicado_f: continue
-
-        texto = montar_texto(row) if lot.lower()!="loteca" else montar_texto_loteca(row)
-        if not texto: continue
-
-        img=limpar(row.get("URL IMAGEM") or row.get("Url Imagem") or row.get("Imagem"))
-        url=limpar(row.get("URL"))
-
-        if not publicado_x:
-            ok,link=publicar_x_round_robin(texto)
-            if ok: marcar(i,COL_X,"Sim"); logar(f"[X] {lot} {url} {link}")
-        if not publicado_d and publicar_discord(texto,img): marcar(i,COL_DISCORD,"Sim")
-        if not publicado_p and publicar_pinterest(texto,img): marcar(i,COL_PINTEREST,"Sim")
-        if not publicado_f and publicar_facebook(texto,img): marcar(i,COL_FACEBOOK,"Sim")
-
-        publicados+=1
-        if publicados>=MAX_TWEETS_PER_RUN: break
-        time.sleep(RATE_DELAY_SECONDS)
-
-    logar(f"✅ Publicações concluídas: {publicados}")
-
-# === ENTRYPOINT ===
-if __name__=="__main__":
-    if LOOP_MODE:
-        print(f"🔁 LOOP ativo ({LOOP_INTERVAL_SECONDS}s)")
-        while True:
-            run_once()
-            time.sleep(LOOP_INTERVAL_SECONDS)
-    else:
-        run_once()
+        run: |
+          echo "🚀 Executando ciclo de publicação…"
+          python bot.py
