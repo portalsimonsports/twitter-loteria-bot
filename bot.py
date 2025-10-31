@@ -10,6 +10,7 @@
 # - Keepalive Flask opcional (/ e /ping) com ENABLE_KEEPALIVE=true (usa PORT do ambiente)
 # - Stubs de Discord/Pinterest/Facebook (sem postar; só prontos p/ expansão)
 # - NOVO: BOT_ORIGEM (ou autodetecção), LOG_SHEET_TAB opcional e DRY_RUN
+# - NOVO: Template de texto EXACTO do cliente (título, link, convite Telegram)
 
 import os
 import io
@@ -60,7 +61,6 @@ PAUSA_ENTRE_POSTS = float(os.getenv("PAUSA_ENTRE_POSTS", "2.0"))
 def _detect_origem():
     if os.getenv("BOT_ORIGEM"):
         return os.getenv("BOT_ORIGEM").strip()
-    # Autodetecção
     if os.getenv("GITHUB_ACTIONS"): return "GitHub"
     if os.getenv("REPL_ID") or os.getenv("REPLIT_DB_URL"): return "Replit"
     if os.getenv("RENDER"): return "Render"
@@ -98,6 +98,10 @@ TW2 = {
     "ACCESS_TOKEN":   os.getenv("TWITTER_ACCESS_TOKEN_2", ""),
     "ACCESS_SECRET":  os.getenv("TWITTER_ACCESS_SECRET_2", ""),
 }
+
+# ===== Links padrão de Telegram (pode sobrescrever via env) =====
+TELEGRAM_CANAL_1 = os.getenv("TELEGRAM_CANAL_1", "https://t.me/portalsimonsportsdicasesportivas").strip()
+TELEGRAM_CANAL_2 = os.getenv("TELEGRAM_CANAL_2", "https://t.me/portalsimonsports").strip()
 
 # =========================
 # UTILITÁRIOS
@@ -193,10 +197,8 @@ def coletar_candidatos(ws):
     col_status = _status_col_for_target()
 
     for r_index, row in enumerate(data, start=2):
-        # ignora se a coluna da rede estiver preenchida (qualquer conteúdo)
         if len(row) >= col_status and _not_empty(row[col_status-1]):
             continue
-        # respeita janela por Data (C)
         data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else ""
         if not _within_backlog(data_br, BACKLOG_DAYS):
             continue
@@ -204,7 +206,6 @@ def coletar_candidatos(ws):
     return cand
 
 def log_publicacao(sh, row, network, tweet_url=None, status="OK", erro=None):
-    """Escreve uma linha de LOG na aba LOG_SHEET_TAB (se existir/nome definido)."""
     if not LOG_SHEET_TAB:
         return
     try:
@@ -219,7 +220,7 @@ def log_publicacao(sh, row, network, tweet_url=None, status="OK", erro=None):
     url      = (row[COL_URL-1]      if _safe_len(row, COL_URL)      else "").strip()
     linha = [
         _ts_br(),          # DataHora
-        BOT_ORIGEM,        # Origem (GitHub/Replit/Render/Local)
+        BOT_ORIGEM,        # Origem
         network,           # Rede
         loteria,
         concurso,
@@ -243,17 +244,14 @@ def log_publicacao(sh, row, network, tweet_url=None, status="OK", erro=None):
 class XAccount:
     def __init__(self, label, api_key, api_secret, access_token, access_secret):
         self.label = label
-        # v2 (tweets)
         self.client_v2 = tweepy.Client(
             consumer_key=api_key,
             consumer_secret=api_secret,
             access_token=access_token,
             access_token_secret=access_secret
         )
-        # v1.1 (mídia)
         auth = tweepy.OAuth1UserHandler(api_key, api_secret, access_token, access_secret)
         self.api_v1 = tweepy.API(auth)
-        # identidade
         try:
             me = self.client_v2.get_me()
             self.user_id = me.data.id if me and me.data else None
@@ -275,7 +273,6 @@ def build_x_accounts():
         raise RuntimeError("Nenhuma conta X configurada (defina *_1 e/ou *_2).")
     return accs
 
-# Anti-duplicados
 _recent_tweets_cache = defaultdict(set)
 _postados_nesta_execucao = defaultdict(set)
 
@@ -294,7 +291,6 @@ def x_load_recent_texts(acc: XAccount, max_results=50):
                     out.add(t)
         return out
     except Exception as e:
-        # Suprime 401 Unauthorized (apenas leitura)
         msg = str(e)
         if "401" in msg or "Unauthorized" in msg:
             _log(f"[{acc.handle}] aviso: ignorando restrição de leitura (401 Unauthorized).")
@@ -311,7 +307,6 @@ def x_is_dup(acc: XAccount, text: str) -> bool:
 def x_upload_media_if_any(acc: XAccount, row, alt_text: str = "") -> list | None:
     if not POST_X_WITH_IMAGE:
         return None
-
     try:
         from PIL import Image
     except Exception:
@@ -380,36 +375,39 @@ def x_create_tweet(acc: XAccount, text: str, media_ids=None):
         return None
 
 # =========================
-# TEXTO E LEGENDA
+# TEXTO E LEGENDA — FORMATO EXATO (título + link + convite Telegram)
 # =========================
 def montar_texto_e_legenda(row) -> tuple[str, str]:
+    # A: Loteria | B: Concurso | C: Data | E: URL
     loteria  = (row[COL_Loteria-1]  if _safe_len(row, COL_Loteria)  else "").strip()
     concurso = (row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "").strip()
     data_br  = (row[COL_Data-1]     if _safe_len(row, COL_Data)     else "").strip()
-    numeros  = (row[COL_Numeros-1]  if _safe_len(row, COL_Numeros)  else "").strip()
     url      = (row[COL_URL-1]      if _safe_len(row, COL_URL)      else "").strip()
 
-    # TÍTULO (ALT TEXT da imagem)
-    partes_titulo = []
-    if loteria:  partes_titulo.append(loteria)
-    if concurso: partes_titulo.append(f"Concurso {concurso}")
-    if data_br:  partes_titulo.append(data_br)
-    titulo = " - ".join(partes_titulo).strip() or "Resultado da Loteria"
+    # Linha 1 — título (concatenação A, B e C)
+    titulo_linha = " — ".join(filter(None, [loteria, f"Concurso {concurso} ({data_br})"]))
 
-    # LEGENDA (texto do tweet)
-    partes_legenda = []
-    if numeros:
-        nums_formatados = " ".join(numeros.split())
-        partes_legenda.append(f"Números: {nums_formatados}")
-    if url:
-        partes_legenda.append(url)
-    partes_legenda.append("#PortalSimonSports")
+    # Linha 3 — chamada do link
+    chamada_link = f"Confira o resultado completo aqui >> {url}" if url else ""
 
-    legenda = "\n".join(partes_legenda).strip()
-    if len(legenda) > 260:
-        legenda = legenda[:257] + "..."
+    # Linhas finais — convite Telegram + 2 links
+    convite = "Inscreva-se nos canais do Telegram e receba as publicações em primeira mão — simples, grátis e divertido:"
+    tel1 = TELEGRAM_CANAL_1 if TELEGRAM_CANAL_1 else ""
+    tel2 = TELEGRAM_CANAL_2 if TELEGRAM_CANAL_2 else ""
 
-    return titulo, legenda
+    linhas = [l for l in [titulo_linha, chamada_link, convite, tel1, tel2] if l]
+    legenda = "\n".join(linhas).strip()
+
+    # Segurança de tamanho do X (280 chars)
+    if len(legenda) > 280:
+        base = "\n".join([x for x in [titulo_linha, chamada_link] if x])
+        sobra = 280 - len(base) - 1
+        extras = "\n".join([convite, tel1, tel2])[:max(0, sobra)]
+        legenda = base + ("\n" + extras if extras else "")
+
+    # O "título" retornado é usado como ALT da imagem
+    titulo_alt = titulo_linha or "Resultado"
+    return titulo_alt, legenda
 
 # =========================
 # OUTRAS REDES (stubs)
@@ -447,11 +445,10 @@ def start_keepalive():
         return "ok", 200
 
     def run():
-        # Usa PORT do ambiente (Render/Replit definem PORT)
         port = int(os.getenv("PORT", str(KEEPALIVE_PORT or 5000)))
         app.run(host="0.0.0.0", port=port)
 
-    th = Thread(target=run, daemon=False)  # não-daemon para manter vivo
+    th = Thread(target=run, daemon=False)
     th.start()
     _log(f"Keepalive Flask ativo em 0.0.0.0:{os.getenv('PORT', KEEPALIVE_PORT)} (/ e /ping)")
     return th
@@ -480,7 +477,6 @@ def publicar_em_x(sh, ws, candidatos):
         resp = x_create_tweet(acc, legenda, media_ids=media_ids)
         tweet_url = None
         if resp and isinstance(resp, dict):
-            # DRY_RUN retorna dict compatível
             tweet_id = (resp.get("data") or {}).get("id")
             if tweet_id and tweet_id != "DRY_RUN":
                 tweet_url = f"https://x.com/i/web/status/{tweet_id}"
@@ -533,7 +529,6 @@ def main():
 
     if not candidatos:
         _log("Nenhuma linha candidata.")
-        # Mantém processo vivo para o pinger do Render/Replit, se habilitado
         if ENABLE_KEEPALIVE:
             _log("Aguardando pings (KEEPALIVE ativo).")
             try:
@@ -550,7 +545,6 @@ def main():
         total += publicar_em_outras_redes(sh, ws, candidatos)
 
     _log(f"Resumo: publicados nesta rodada = {total}")
-    # Mesmo após publicar, se KEEPALIVE estiver ativo, mantém vivo:
     if ENABLE_KEEPALIVE:
         _log("Execução concluída. Mantendo processo vivo para pings.")
         try:
@@ -564,10 +558,8 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         _log(f"[FATAL] {e}")
-        # Tenta logar a falha (sem parar a subida)
         try:
             sh, _ = _open_sh_and_ws()
-            # Como não temos a linha/row aqui, registra um log genérico (se houver LOG_SHEET_TAB)
             if LOG_SHEET_TAB:
                 ws_log = sh.worksheet(LOG_SHEET_TAB)
                 linha = [_ts_br(), BOT_ORIGEM, TARGET_NETWORK, "", "", "", "", "ERRO", "", str(e)]
