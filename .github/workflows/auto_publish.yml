@@ -3,7 +3,7 @@ name: Publicação Automática de Loterias
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/10 * * * *" # roda a cada 10 minutos
+    - cron: "*/10 * * * *"  # a cada 10 minutos (UTC)
 
 concurrency:
   group: publish-loterias
@@ -39,64 +39,50 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt --no-cache-dir
 
-      - name: Verificar variáveis obrigatórias
+      - name: Verificar secrets obrigatórios
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
-          TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
+          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
         run: |
           python - <<'PY'
           import os, sys
           req = [
             "GOOGLE_SERVICE_JSON",
             "TWITTER_API_KEY_1","TWITTER_API_SECRET_1",
-            "TWITTER_ACCESS_TOKEN_1","TWITTER_ACCESS_TOKEN_SECRET_1"
+            "TWITTER_ACCESS_TOKEN_1","TWITTER_ACCESS_SECRET_1"
           ]
           miss = [k for k in req if not os.getenv(k)]
           if miss:
-              print("❌ Faltam variáveis:", miss); sys.exit(1)
+              print("❌ Faltam secrets:", miss); sys.exit(1)
           print("✅ Secrets OK")
           PY
 
       - name: Executar o bot (ciclo único)
         env:
-          # === OBRIGATÓRIOS ===
-          GOOGLE_SERVICE_JSON:           ${{ secrets.GOOGLE_SERVICE_JSON }}
-
-          # === CONTAS X (adicione mais _2, _3... se quiser) ===
-          TWITTER_API_KEY_1:             ${{ secrets.TWITTER_API_KEY_1 }}
-          TWITTER_API_SECRET_1:          ${{ secrets.TWITTER_API_SECRET_1 }}
-          TWITTER_ACCESS_TOKEN_1:        ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
-          TWITTER_ACCESS_TOKEN_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
-
-          TWITTER_API_KEY_2:             ${{ secrets.TWITTER_API_KEY_2 }}
-          TWITTER_API_SECRET_2:          ${{ secrets.TWITTER_API_SECRET_2 }}
-          TWITTER_ACCESS_TOKEN_2:        ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
-          TWITTER_ACCESS_TOKEN_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
-
-          # === REDES OPCIONAIS ===
-          DISCORD_WEBHOOK_URL:           ${{ secrets.DISCORD_WEBHOOK_URL }}
-          PINTEREST_ACCESS_TOKEN:        ${{ secrets.PINTEREST_ACCESS_TOKEN }}
-          PINTEREST_BOARD_ID:            ${{ secrets.PINTEREST_BOARD_ID }}
-          FB_PAGE_ID:                    ${{ secrets.FB_PAGE_ID }}
-          FB_PAGE_ACCESS_TOKEN:          ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
-
-          # === COMPORTAMENTO ===
-          PUBLISH_ANYTIME: "true"          # ignora 22h45
-          LOOP_MODE: "false"               # Actions = execução única
+          TZ: America/Sao_Paulo
+          BOT_ORIGEM: GitHub
+          TARGET_NETWORK: X
           BACKLOG_DAYS: "2"
-          MAX_TWEETS_PER_RUN: "30"
-          RATE_DELAY_SECONDS: "20"
-          RATE_BACKOFF_SECONDS: "900"
-
-          # === IMAGEM NO X ===
-          POST_X_WITH_IMAGE: "false"       # mude para "true" quando quiser testar
-
-          # === (opcional) overrides de planilha/aba ===
-          SHEET_ID: "16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI"
-          ABA: "ImportadosBlogger2"
-        run: |
-          echo "🚀 Publicando…"
-          python bot.py
+          POST_X_WITH_IMAGE: "false"
+          MAX_PUBLICACOES_RODADA: "30"
+          PAUSA_ENTRE_POSTS: "2.0"
+          # Planilha
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          SHEET_TAB: ImportadosBlogger2
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          # X conta 1 (obrigatória)
+          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
+          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
+          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
+          # X conta 2 (opcional)
+          TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
+          TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
+          TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
+          TWITTER_ACCESS_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
+          # Log opcional
+          LOG_SHEET_TAB: LOG_Publicacoes
+        run: python bot.py
