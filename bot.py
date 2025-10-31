@@ -1,16 +1,15 @@
 # bot.py — Portal SimonSports — Publicador de Loterias (X/Twitter) + filtros por rede
-# Rev: 2025-10-30 — TZ America/Sao_Paulo — FULL + ORIGEM + LOG opcional + DRY_RUN
-# - Lê a aba "ImportadosBlogger2" (padrão) da planilha GOOGLE_SHEET_ID
-# - Ignora linhas cuja coluna da rede-alvo (H/M/N/O) esteja NÃO VAZIA (qualquer texto)
-# - Backlog por Data (dd/mm/aaaa) via BACKLOG_DAYS
-# - X (Twitter): round-robin entre 2 contas, Tweepy v2 (tweet) e v1.1 (mídia)
-# - Anti-duplicados no X: cache de últimos tweets + cache da execução (evita 403)
-# - Marca a planilha após publicar (timestamp + origem) na coluna da rede executada
-# - Upload de imagem opcional (POST_X_WITH_IMAGE=true) com import local do Pillow
-# - Keepalive Flask opcional (/ e /ping) com ENABLE_KEEPALIVE=true (usa PORT do ambiente)
-# - Stubs de Discord/Pinterest/Facebook (sem postar; só prontos p/ expansão)
-# - NOVO: BOT_ORIGEM (ou autodetecção), LOG_SHEET_TAB opcional e DRY_RUN
-# - NOVO: Template de texto EXACTO do cliente (título, link, convite Telegram)
+# Rev: 2025-10-31 — TZ America/Sao_Paulo — FULL + ORIGEM + LOG opcional + DRY_RUN + THREAD_MODE
+# - Lê "ImportadosBlogger2" da planilha GOOGLE_SHEET_ID
+# - Ignora linhas cuja coluna da rede (H/M/N/O) esteja NÃO VAZIA
+# - Backlog por Data (C, dd/mm/aaaa) via BACKLOG_DAYS
+# - X (Twitter): round-robin 2 contas, Tweepy v2 (tweet) e v1.1 (mídia)
+# - Anti-duplicados: cache tweets recentes + cache na execução
+# - Marca planilha: "Publicado via {Origem} em dd/mm/aaaa HH:MM"
+# - POST_X_WITH_IMAGE=true: anexa imagem das colunas 6 ou 7
+# - THREAD_MODE=true: Tweet 1 (título + imagem) -> resposta (números + link + telegram)
+# - Keepalive Flask opcional (Render/Replit)
+# - LOG_SHEET_TAB opcional para registrar publicações
 
 import os
 import io
@@ -37,17 +36,20 @@ TZ = pytz.timezone("America/Sao_Paulo")
 SHEET_ID   = os.getenv("GOOGLE_SHEET_ID", "").strip()
 SHEET_TAB  = os.getenv("SHEET_TAB", "ImportadosBlogger2").strip()
 
-# Aba de LOG (opcional). Se definido, cada publicação gera 1 linha no log
+# Aba de LOG (opcional). Se definida, cada publicação gera 1 linha no log
 LOG_SHEET_TAB = os.getenv("LOG_SHEET_TAB", "").strip()  # ex: "LOG_Publicacoes"
 
 # Rede alvo (X, DISCORD, PINTEREST, FACEBOOK)
 TARGET_NETWORK = os.getenv("TARGET_NETWORK", "X").strip().upper()
 
-BACKLOG_DAYS   = int(os.getenv("BACKLOG_DAYS", "2"))
-POST_X_WITH_IMAGE = os.getenv("POST_X_WITH_IMAGE", "false").strip().lower() == "true"
+BACKLOG_DAYS       = int(os.getenv("BACKLOG_DAYS", "2"))
+POST_X_WITH_IMAGE  = os.getenv("POST_X_WITH_IMAGE", "false").strip().lower() == "true"
+DRY_RUN            = os.getenv("DRY_RUN", "false").strip().lower() == "true"
+THREAD_MODE        = os.getenv("THREAD_MODE", "false").strip().lower() == "true"
 
-# Executa sem postar/sem escrever planilha (para testes)
-DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
+# Links Telegram (usados no segundo tweet quando THREAD_MODE=true)
+TELEGRAM_CANAL_1 = os.getenv("TELEGRAM_CANAL_1", "https://t.me/portalsimonsportsdicasesportivas").strip()
+TELEGRAM_CANAL_2 = os.getenv("TELEGRAM_CANAL_2", "https://t.me/portalsimonsports").strip()
 
 # Keepalive (opcional)
 ENABLE_KEEPALIVE = os.getenv("ENABLE_KEEPALIVE", "false").strip().lower() == "true"
@@ -55,7 +57,7 @@ KEEPALIVE_PORT   = int(os.getenv("KEEPALIVE_PORT", "8080"))
 
 # Lotes e pausas
 MAX_PUBLICACOES_RODADA = int(os.getenv("MAX_PUBLICACOES_RODADA", "30"))
-PAUSA_ENTRE_POSTS = float(os.getenv("PAUSA_ENTRE_POSTS", "2.0"))
+PAUSA_ENTRE_POSTS      = float(os.getenv("PAUSA_ENTRE_POSTS", "2.5"))
 
 # Origem (explícita) ou autodetecção
 def _detect_origem():
@@ -68,21 +70,21 @@ def _detect_origem():
 BOT_ORIGEM = _detect_origem()
 
 # Colunas 1-based (estrutura padrão PSS)
-COL_Loteria      = 1
-COL_Concurso     = 2
-COL_Data         = 3
-COL_Numeros      = 4
-COL_URL          = 5
-COL_URL_Imagem   = 6
-COL_Imagem       = 7
+COL_Loteria      = 1  # A
+COL_Concurso     = 2  # B
+COL_Data         = 3  # C (dd/mm/aaaa)
+COL_Numeros      = 4  # D
+COL_URL          = 5  # E
+COL_URL_Imagem   = 6  # F
+COL_Imagem       = 7  # G
 
 # === Mapeamento exato das colunas de status (1-based) ===
 # H = 8, M = 13, N = 14, O = 15
 COL_STATUS_REDES = {
     "X":          8,  # H → Publicado_X
-    "DISCORD":   13,  # M → Publicado_Discord
-    "PINTEREST": 14,  # N → Publicado_Pinterest
-    "FACEBOOK":  15,  # O → Publicado_Facebook
+    "DISCORD":   13,  # M
+    "PINTEREST": 14,  # N
+    "FACEBOOK":  15,  # O
 }
 
 # Chaves do X — Conta 1 e 2 (round-robin)
@@ -98,10 +100,6 @@ TW2 = {
     "ACCESS_TOKEN":   os.getenv("TWITTER_ACCESS_TOKEN_2", ""),
     "ACCESS_SECRET":  os.getenv("TWITTER_ACCESS_SECRET_2", ""),
 }
-
-# ===== Links padrão de Telegram (pode sobrescrever via env) =====
-TELEGRAM_CANAL_1 = os.getenv("TELEGRAM_CANAL_1", "https://t.me/portalsimonsportsdicasesportivas").strip()
-TELEGRAM_CANAL_2 = os.getenv("TELEGRAM_CANAL_2", "https://t.me/portalsimonsports").strip()
 
 # =========================
 # UTILITÁRIOS
@@ -197,8 +195,10 @@ def coletar_candidatos(ws):
     col_status = _status_col_for_target()
 
     for r_index, row in enumerate(data, start=2):
+        # ignora se já publicado na rede-alvo
         if len(row) >= col_status and _not_empty(row[col_status-1]):
             continue
+        # janela por data
         data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else ""
         if not _within_backlog(data_br, BACKLOG_DAYS):
             continue
@@ -244,14 +244,17 @@ def log_publicacao(sh, row, network, tweet_url=None, status="OK", erro=None):
 class XAccount:
     def __init__(self, label, api_key, api_secret, access_token, access_secret):
         self.label = label
+        # v2 (tweets)
         self.client_v2 = tweepy.Client(
             consumer_key=api_key,
             consumer_secret=api_secret,
             access_token=access_token,
             access_token_secret=access_secret
         )
+        # v1.1 (mídia)
         auth = tweepy.OAuth1UserHandler(api_key, api_secret, access_token, access_secret)
         self.api_v1 = tweepy.API(auth)
+        # identidade
         try:
             me = self.client_v2.get_me()
             self.user_id = me.data.id if me and me.data else None
@@ -273,6 +276,7 @@ def build_x_accounts():
         raise RuntimeError("Nenhuma conta X configurada (defina *_1 e/ou *_2).")
     return accs
 
+# Anti-duplicados
 _recent_tweets_cache = defaultdict(set)
 _postados_nesta_execucao = defaultdict(set)
 
@@ -307,6 +311,7 @@ def x_is_dup(acc: XAccount, text: str) -> bool:
 def x_upload_media_if_any(acc: XAccount, row, alt_text: str = "") -> list | None:
     if not POST_X_WITH_IMAGE:
         return None
+
     try:
         from PIL import Image
     except Exception:
@@ -374,40 +379,79 @@ def x_create_tweet(acc: XAccount, text: str, media_ids=None):
         _log(f"[{acc.handle}] erro ao postar: {e}")
         return None
 
+def x_reply_tweet(acc: "XAccount", in_reply_to_tweet_id: str, text: str):
+    t = (text or "").strip()
+    if not t:
+        return None
+    try:
+        if DRY_RUN:
+            _log(f"[DRY_RUN] (não postar) Reply to {in_reply_to_tweet_id}:\n{t}")
+            return {"data": {"id": "DRY_RUN_REPLY"}}
+        resp = acc.client_v2.create_tweet(text=t, in_reply_to_tweet_id=in_reply_to_tweet_id)
+        _log(f"[{acc.handle}] REPLY OK → {resp.data}")
+        return resp
+    except Exception as e:
+        _log(f"[{acc.handle}] erro ao responder: {e}")
+        return None
+
 # =========================
-# TEXTO E LEGENDA — FORMATO EXATO (título + link + convite Telegram)
+# TEXTO — THREAD MODE
 # =========================
-def montar_texto_e_legenda(row) -> tuple[str, str]:
-    # A: Loteria | B: Concurso | C: Data | E: URL
+def _fmt_nums_line(numeros_raw: str) -> str:
+    """Normaliza números: vírgula/;| → espaço, 2 dígitos quando possível."""
+    import re
+    s = re.sub(r"[;,|]", " ", str(numeros_raw or ""))
+    toks = [t for t in s.split() if t.strip()]
+    out = []
+    for t in toks:
+        if t.isdigit():
+            out.append(f"{int(t):02d}")
+        else:
+            out.append(t)
+    return " ".join(out)
+
+def montar_thread_textos(row) -> tuple[str, str, str]:
+    # A: Loteria | B: Concurso | C: Data | D: Números | E: URL
     loteria  = (row[COL_Loteria-1]  if _safe_len(row, COL_Loteria)  else "").strip()
     concurso = (row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "").strip()
     data_br  = (row[COL_Data-1]     if _safe_len(row, COL_Data)     else "").strip()
+    numeros  = (row[COL_Numeros-1]  if _safe_len(row, COL_Numeros)  else "").strip()
     url      = (row[COL_URL-1]      if _safe_len(row, COL_URL)      else "").strip()
 
-    # Linha 1 — título (concatenação A, B e C)
-    titulo_linha = " — ".join(filter(None, [loteria, f"Concurso {concurso} ({data_br})"]))
+    # Tweet 1 — apenas título (para ficar acima da imagem)
+    titulo_linha = " — ".join(filter(None, [loteria, f"Concurso {concurso} ({data_br})"])) or "Resultado"
 
-    # Linha 3 — chamada do link
-    chamada_link = f"Confira o resultado completo aqui >> {url}" if url else ""
+    # Tweet 2 — detalhes “abaixo do logo” (na resposta)
+    detalhes = []
+    if numeros:
+        detalhes.append(_fmt_nums_line(numeros))
+    if url:
+        detalhes.append(f"Confira o resultado completo aqui >> {url}")
 
-    # Linhas finais — convite Telegram + 2 links
     convite = "Inscreva-se nos canais do Telegram e receba as publicações em primeira mão — simples, grátis e divertido:"
-    tel1 = TELEGRAM_CANAL_1 if TELEGRAM_CANAL_1 else ""
-    tel2 = TELEGRAM_CANAL_2 if TELEGRAM_CANAL_2 else ""
+    if TELEGRAM_CANAL_1 or TELEGRAM_CANAL_2:
+        detalhes += [convite]
+        if TELEGRAM_CANAL_1: detalhes.append(TELEGRAM_CANAL_1)
+        if TELEGRAM_CANAL_2: detalhes.append(TELEGRAM_CANAL_2)
 
-    linhas = [l for l in [titulo_linha, chamada_link, convite, tel1, tel2] if l]
+    tweet2 = "\n".join(detalhes).strip()
+    alt_text = titulo_linha  # ALT da imagem
+    return titulo_linha, tweet2, alt_text
+
+# (Fallback) modo 1 tweet — não usado quando THREAD_MODE=true, mas deixamos para compatibilidade
+def montar_texto_e_legenda(row) -> tuple[str, str]:
+    loteria  = (row[COL_Loteria-1]  if _safe_len(row, COL_Loteria)  else "").strip()
+    concurso = (row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "").strip()
+    data_br  = (row[COL_Data-1]     if _safe_len(row, COL_Data)     else "").strip()
+    numeros  = (row[COL_Numeros-1]  if _safe_len(row, COL_Numeros)  else "").strip()
+    url      = (row[COL_URL-1]      if _safe_len(row, COL_URL)      else "").strip()
+
+    titulo = " — ".join(filter(None, [loteria, f"Concurso {concurso} ({data_br})"]))
+    linhas = []
+    if numeros: linhas.append(_fmt_nums_line(numeros))
+    if url:     linhas.append(f"Confira o resultado completo aqui >> {url}")
     legenda = "\n".join(linhas).strip()
-
-    # Segurança de tamanho do X (280 chars)
-    if len(legenda) > 280:
-        base = "\n".join([x for x in [titulo_linha, chamada_link] if x])
-        sobra = 280 - len(base) - 1
-        extras = "\n".join([convite, tel1, tel2])[:max(0, sobra)]
-        legenda = base + ("\n" + extras if extras else "")
-
-    # O "título" retornado é usado como ALT da imagem
-    titulo_alt = titulo_linha or "Resultado"
-    return titulo_alt, legenda
+    return (titulo or "Resultado"), legenda
 
 # =========================
 # OUTRAS REDES (stubs)
@@ -471,20 +515,37 @@ def publicar_em_x(sh, ws, candidatos):
         acc = contas[acc_idx % len(contas)]
         acc_idx += 1
 
-        titulo, legenda = montar_texto_e_legenda(row)
-        media_ids = x_upload_media_if_any(acc, row, alt_text=titulo)
+        if THREAD_MODE:
+            titulo_1, texto_2, alt = montar_thread_textos(row)
+            media_ids = x_upload_media_if_any(acc, row, alt_text=alt)
+            # Tweet 1 (título + imagem)
+            resp1 = x_create_tweet(acc, titulo_1, media_ids=media_ids)
+            tweet1_id = None
+            if resp1:
+                try:
+                    tweet1_id = (resp1.get("data") or {}).get("id") if isinstance(resp1, dict) else (resp1.data or {}).get("id")
+                except Exception:
+                    tweet1_id = None
+            # Tweet 2 (resposta com detalhes)
+            if tweet1_id and texto_2:
+                x_reply_tweet(acc, tweet1_id, texto_2)
+            resp = resp1  # para logging/contagem
+        else:
+            # modo 1 tweet (fallback)
+            titulo, legenda = montar_texto_e_legenda(row)
+            media_ids = x_upload_media_if_any(acc, row, alt_text=titulo)
+            resp = x_create_tweet(acc, "\n".join([titulo, legenda]).strip(), media_ids=media_ids)
 
-        resp = x_create_tweet(acc, legenda, media_ids=media_ids)
         tweet_url = None
         if resp and isinstance(resp, dict):
-            tweet_id = (resp.get("data") or {}).get("id")
-            if tweet_id and tweet_id != "DRY_RUN":
-                tweet_url = f"https://x.com/i/web/status/{tweet_id}"
+            tid = (resp.get("data") or {}).get("id")
+            if tid and tid != "DRY_RUN":
+                tweet_url = f"https://x.com/i/web/status/{tid}"
         elif resp is not None:
             try:
-                tweet_id = (resp.data or {}).get("id")
-                if tweet_id:
-                    tweet_url = f"https://x.com/i/web/status/{tweet_id}"
+                tid = (resp.data or {}).get("id")
+                if tid:
+                    tweet_url = f"https://x.com/i/web/status/{tid}"
             except Exception:
                 tweet_url = None
 
@@ -518,7 +579,7 @@ def publicar_em_outras_redes(sh, ws, candidatos):
     return publicados
 
 def main():
-    _log(f"Implantando... Origem={BOT_ORIGEM} | DRY_RUN={DRY_RUN} | Rede={TARGET_NETWORK}")
+    _log(f"Implantando... Origem={BOT_ORIGEM} | DRY_RUN={DRY_RUN} | Rede={TARGET_NETWORK} | THREAD_MODE={THREAD_MODE}")
     keepalive_thread = None
     if ENABLE_KEEPALIVE:
         keepalive_thread = start_keepalive()
