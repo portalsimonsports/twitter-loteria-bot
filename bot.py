@@ -2,7 +2,7 @@
 # Rev: 2025-10-31 — TZ America/Sao_Paulo — FULL (multi-contas, imagem, sem LOG_SHEET_TAB)
 # - 1 único tweet com: título + números + link + canais (opcionais) + imagem (coluna 6/7)
 # - X_POST_IN_ALL_ACCOUNTS=true: publica a MESMA linha em TODAS as contas; senão, round-robin
-# - Mantém anti-duplicados, backlog por data, marcação na planilha e keepalive opcional
+# - Anti-duplicados, backlog por data, marcação na planilha e keepalive opcional
 
 import os, io, json, time, pytz, tweepy, requests, datetime as dt
 from threading import Thread
@@ -201,11 +201,12 @@ def montar_corpo_unico(row)->str:
     if len(texto)>280:
         # prioriza título, números e link
         base=[]
-        for l in [linhas[0],linhas[1] if linhas[1] else None,linhas[2], "", linhas[4] if len(linhas)>4 else "",linhas[5] if len(linhas)>5 else ""]:
+        for l in [linhas[0],linhas[1] if linhas[1] else None,linhas[2], "", (f"🔗 {url}" if url else "")]:
             if not l: continue
             base.append(l)
             if len("\n".join(base))>265: break
-        texto="\n".join(base)[:277]+"..."
+        texto="\n".join([b for b in base if b]).strip()
+        if len(texto)>280: texto = texto[:277] + "..."
     return texto
 
 # -------- Coleta / Publicação --------
@@ -255,19 +256,30 @@ def publicar_em_x(ws,candidatos):
 def publicar_em_outras_redes(ws,candidatos):
     _log("Outras redes não implementadas nesta versão."); return 0
 
+# -------- Keepalive (para Render/Replit) --------
 def start_keepalive():
     try:
         from flask import Flask
     except Exception:
         _log("Flask não instalado; keepalive desativado."); return None
-    app=Flask(__name__)
-    @app.get("/")   ;  def root(): return ("ok",200)
-    @app.get("/ping"); def ping(): return ("ok",200)
+
+    app = Flask(__name__)
+
+    @app.get("/")
+    def root():
+        return ("ok", 200)
+
+    @app.get("/ping")
+    def ping():
+        return ("ok", 200)
+
     def run():
-        port=int(os.getenv("PORT",str(KEEPALIVE_PORT or 5000)))
-        app.run(host="0.0.0.0",port=port)
-    th=Thread(target=run,daemon=False); th.start()
-    _log(f"Keepalive Flask ativo em 0.0.0.0:{os.getenv('PORT',KEEPALIVE_PORT)} (/ e /ping)")
+        port = int(os.getenv("PORT", str(KEEPALIVE_PORT or 5000)))
+        app.run(host="0.0.0.0", port=port)
+
+    th = Thread(target=run, daemon=False)
+    th.start()
+    _log(f"Keepalive Flask ativo em 0.0.0.0:{os.getenv('PORT', KEEPALIVE_PORT)} (/ e /ping)")
     return th
 
 def main():
@@ -277,7 +289,7 @@ def main():
     candidatos=coletar_candidatos(ws)
     _log(f"Candidatas: {len(candidatos)} (limite {MAX_PUBLICACOES_RODADA})")
     if not candidatos:
-        _log("Nenhuma linha candidata."); 
+        _log("Nenhuma linha candidata.")
         if ENABLE_KEEPALIVE:
             while True: time.sleep(600)
         return
@@ -287,4 +299,5 @@ def main():
 if __name__=="__main__":
     try: main()
     except Exception as e:
-        _log(f"[FATAL] {e}"); raise
+        _log(f"[FATAL] {e}")
+        raise
