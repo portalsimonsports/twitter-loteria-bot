@@ -1,9 +1,9 @@
 # bot.py — Portal SimonSports — Publicador de Loterias (X/Twitter) + filtros por rede
-# Rev: 2025-10-31 — TZ America/Sao_Paulo — FULL + ORIGEM + LOG opcional + DRY_RUN + THREAD_MODE
+# Rev: 2025-10-31 — TZ America/Sao_Paulo — FULL + ORIGEM + LOG + DRY_RUN + THREAD_MODE + X_POST_IN_ALL_ACCOUNTS
 # - Lê "ImportadosBlogger2" da planilha GOOGLE_SHEET_ID
 # - Ignora linhas cuja coluna da rede (H/M/N/O) esteja NÃO VAZIA
 # - Backlog por Data (C, dd/mm/aaaa) via BACKLOG_DAYS
-# - X (Twitter): round-robin 2 contas, Tweepy v2 (tweet) e v1.1 (mídia)
+# - X (Twitter): round-robin 2 contas ou "todas as contas", Tweepy v2 (tweet) e v1.1 (mídia)
 # - Anti-duplicados: cache tweets recentes + cache na execução
 # - Marca planilha: "Publicado via {Origem} em dd/mm/aaaa HH:MM"
 # - POST_X_WITH_IMAGE=true: anexa imagem das colunas 6 ou 7
@@ -46,6 +46,9 @@ BACKLOG_DAYS       = int(os.getenv("BACKLOG_DAYS", "2"))
 POST_X_WITH_IMAGE  = os.getenv("POST_X_WITH_IMAGE", "false").strip().lower() == "true"
 DRY_RUN            = os.getenv("DRY_RUN", "false").strip().lower() == "true"
 THREAD_MODE        = os.getenv("THREAD_MODE", "false").strip().lower() == "true"
+
+# Novo: publicar a MESMA linha em TODAS as contas X
+X_POST_IN_ALL_ACCOUNTS = os.getenv("X_POST_IN_ALL_ACCOUNTS", "false").strip().lower() == "true"
 
 # Links Telegram (usados no segundo tweet quando THREAD_MODE=true)
 TELEGRAM_CANAL_1 = os.getenv("TELEGRAM_CANAL_1", "https://t.me/portalsimonsportsdicasesportivas").strip()
@@ -438,7 +441,7 @@ def montar_thread_textos(row) -> tuple[str, str, str]:
     alt_text = titulo_linha  # ALT da imagem
     return titulo_linha, tweet2, alt_text
 
-# (Fallback) modo 1 tweet — não usado quando THREAD_MODE=true, mas deixamos para compatibilidade
+# (Fallback) modo 1 tweet — compatibilidade
 def montar_texto_e_legenda(row) -> tuple[str, str]:
     loteria  = (row[COL_Loteria-1]  if _safe_len(row, COL_Loteria)  else "").strip()
     concurso = (row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "").strip()
@@ -502,6 +505,7 @@ def start_keepalive():
 # =========================
 def publicar_em_x(sh, ws, candidatos):
     contas = build_x_accounts()
+    _log("Contas carregadas:", ", ".join([c.label for c in contas]))
     publicados = 0
 
     for acc in contas:
@@ -512,49 +516,61 @@ def publicar_em_x(sh, ws, candidatos):
     limite = min(MAX_PUBLICACOES_RODADA, len(candidatos))
 
     for rownum, row in candidatos[:limite]:
-        acc = contas[acc_idx % len(contas)]
+        # Alvos: todas as contas OU round-robin
+        alvos = contas if X_POST_IN_ALL_ACCOUNTS else [contas[acc_idx % len(contas)]]
         acc_idx += 1
 
+        # Monta textos 1x
         if THREAD_MODE:
             titulo_1, texto_2, alt = montar_thread_textos(row)
-            media_ids = x_upload_media_if_any(acc, row, alt_text=alt)
-            # Tweet 1 (título + imagem)
-            resp1 = x_create_tweet(acc, titulo_1, media_ids=media_ids)
-            tweet1_id = None
-            if resp1:
-                try:
-                    tweet1_id = (resp1.get("data") or {}).get("id") if isinstance(resp1, dict) else (resp1.data or {}).get("id")
-                except Exception:
-                    tweet1_id = None
-            # Tweet 2 (resposta com detalhes)
-            if tweet1_id and texto_2:
-                x_reply_tweet(acc, tweet1_id, texto_2)
-            resp = resp1  # para logging/contagem
         else:
-            # modo 1 tweet (fallback)
             titulo, legenda = montar_texto_e_legenda(row)
-            media_ids = x_upload_media_if_any(acc, row, alt_text=titulo)
-            resp = x_create_tweet(acc, "\n".join([titulo, legenda]).strip(), media_ids=media_ids)
 
-        tweet_url = None
-        if resp and isinstance(resp, dict):
-            tid = (resp.get("data") or {}).get("id")
-            if tid and tid != "DRY_RUN":
-                tweet_url = f"https://x.com/i/web/status/{tid}"
-        elif resp is not None:
-            try:
-                tid = (resp.data or {}).get("id")
-                if tid:
+        publicados_alguma_conta = False
+
+        for acc in alvos:
+            media_ids = None
+            if THREAD_MODE:
+                media_ids = x_upload_media_if_any(acc, row, alt_text=alt)
+                # Tweet 1 (título + imagem)
+                resp1 = x_create_tweet(acc, titulo_1, media_ids=media_ids)
+                tweet1_id = None
+                if resp1:
+                    try:
+                        tweet1_id = (resp1.get("data") or {}).get("id") if isinstance(resp1, dict) else (resp1.data or {}).get("id")
+                    except Exception:
+                        tweet1_id = None
+                # Tweet 2 (resposta com detalhes)
+                if tweet1_id and texto_2:
+                    x_reply_tweet(acc, tweet1_id, texto_2)
+                resp = resp1
+            else:
+                media_ids = x_upload_media_if_any(acc, row, alt_text=titulo)
+                resp = x_create_tweet(acc, "\n".join([titulo, legenda]).strip(), media_ids=media_ids)
+
+            tweet_url = None
+            if resp and isinstance(resp, dict):
+                tid = (resp.get("data") or {}).get("id")
+                if tid and tid != "DRY_RUN":
                     tweet_url = f"https://x.com/i/web/status/{tid}"
-            except Exception:
-                tweet_url = None
+            elif resp is not None:
+                try:
+                    tid = (resp.data or {}).get("id")
+                    if tid:
+                        tweet_url = f"https://x.com/i/web/status/{tid}"
+                except Exception:
+                    tweet_url = None
 
-        if resp is not None:
+            if resp is not None:
+                publicados_alguma_conta = True
+                log_publicacao(sh, row, "X", tweet_url=tweet_url, status="OK")
+
+            time.sleep(PAUSA_ENTRE_POSTS)
+
+        # Se pelo menos uma conta postou, marca a linha como publicada
+        if publicados_alguma_conta:
             publicados += 1
             marcar_publicado(ws, rownum)
-            log_publicacao(sh, row, "X", tweet_url=tweet_url, status="OK")
-
-        time.sleep(PAUSA_ENTRE_POSTS)
 
     return publicados
 
@@ -579,7 +595,7 @@ def publicar_em_outras_redes(sh, ws, candidatos):
     return publicados
 
 def main():
-    _log(f"Implantando... Origem={BOT_ORIGEM} | DRY_RUN={DRY_RUN} | Rede={TARGET_NETWORK} | THREAD_MODE={THREAD_MODE}")
+    _log(f"Implantando... Origem={BOT_ORIGEM} | DRY_RUN={DRY_RUN} | Rede={TARGET_NETWORK} | THREAD_MODE={THREAD_MODE} | X_POST_IN_ALL_ACCOUNTS={X_POST_IN_ALL_ACCOUNTS}")
     keepalive_thread = None
     if ENABLE_KEEPALIVE:
         keepalive_thread = start_keepalive()
