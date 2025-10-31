@@ -43,9 +43,9 @@ jobs:
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           TWITTER_API_KEY_1:   ${{ secrets.TWITTER_API_KEY_1 }}
-          TWITTER_API_SECRET_1:${{ secrets.TWITTER_API_SECRET_1 }}
-          TWITTER_ACCESS_TOKEN_1:${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
-          TWITTER_ACCESS_SECRET_1:${{ secrets.TWITTER_ACCESS_SECRET_1 }}
+          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
+          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
         run: |
           python - <<'PY'
           import os, sys
@@ -75,7 +75,6 @@ jobs:
           # === PLANILHA ===
           GOOGLE_SHEET_ID: "16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI"
           SHEET_TAB: "ImportadosBlogger2"
-          LOG_SHEET_TAB: "LOG_Publicacoes"
 
           # === COMPORTAMENTO ===
           TARGET_NETWORK: "X"
@@ -85,15 +84,15 @@ jobs:
           DRY_RUN: "false"
 
           # === MODO THREAD + MULTI-CONTAS ===
-          THREAD_MODE: "true"                 # Tweet 1 (título+imagem) -> Reply (números+links)
-          X_POST_IN_ALL_ACCOUNTS: "true"      # Publica a mesma linha em TODAS as contas X
+          THREAD_MODE: "true"
+          X_POST_IN_ALL_ACCOUNTS: "true"
 
-          # === LINKS TELEGRAM (usados no reply) ===
+          # === LINKS TELEGRAM ===
           TELEGRAM_CANAL_1: "https://t.me/portalsimonsportsdicasesportivas"
           TELEGRAM_CANAL_2: "https://t.me/portalsimonsports"
 
           # === IMAGEM NO X ===
-          POST_X_WITH_IMAGE: "true"           # usa colunas 6 ou 7
+          POST_X_WITH_IMAGE: "true"
 
           # === NUNCA use keepalive no GitHub ===
           ENABLE_KEEPALIVE: "false"
