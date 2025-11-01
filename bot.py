@@ -1,52 +1,87 @@
 # bot.py — Portal SimonSports — Publicador Automático de Loterias no X (Twitter)
-# Rev: 2025-10-31 — FINAL | CARD ESTILO PRINT + KEEPALIVE SEGURO + ZERO ERROS
-# Inclui: Mega-Sena, Quina, Lotofácil, Lotomania, Timemania, Dupla Sena, Federal, Dia de Sorte, SUPER SETE, LOTECA
+# Rev: 2025-11-01 — IMAGEM 3D + LOGO por URL (coluna E) + multi-contas + keepalive opcional
+# Loterias: Mega-Sena, Quina, Lotofácil, Lotomania, Timemania, Dupla Sena, Federal, Dia de Sorte, Super Sete, Loteca
 
 import os
 import io
+import re
 import json
 import time
 import pytz
 import tweepy
 import requests
 import datetime as dt
+from urllib.parse import urlparse
 from threading import Thread
 from collections import defaultdict
 from dotenv import load_dotenv
+
+# Google Sheets
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+
+# Pillow
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
+# =========================
+# CONFIG / ENV
+# =========================
 load_dotenv()
 TZ = pytz.timezone("America/Sao_Paulo")
 
-# === CONFIGURAÇÕES ===
-SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "").strip()
+SHEET_ID  = os.getenv("GOOGLE_SHEET_ID", "").strip()
 SHEET_TAB = os.getenv("SHEET_TAB", "ImportadosBlogger2").strip()
-TARGET_NETWORK = os.getenv("TARGET_NETWORK", "X").strip().upper()
 
-BACKLOG_DAYS = int(os.getenv("BACKLOG_DAYS", "2"))
+TARGET_NETWORK = os.getenv("TARGET_NETWORK", "X").strip().upper()
+BACKLOG_DAYS   = int(os.getenv("BACKLOG_DAYS", "2"))
+
+# Publicar a MESMA linha em todas as contas X
 X_POST_IN_ALL_ACCOUNTS = os.getenv("X_POST_IN_ALL_ACCOUNTS", "true").strip().lower() == "true"
+
+# Anexar imagem gerada
 POST_X_WITH_IMAGE = os.getenv("POST_X_WITH_IMAGE", "true").strip().lower() == "true"
 
+# Keepalive opcional (para Replit/Render)
 ENABLE_KEEPALIVE = os.getenv("ENABLE_KEEPALIVE", "false").strip().lower() == "true"
-KEEPALIVE_PORT = int(os.getenv("KEEPALIVE_PORT", "8080"))
+KEEPALIVE_PORT   = int(os.getenv("KEEPALIVE_PORT", "8080"))
 
+# Limites
 MAX_PUBLICACOES_RODADA = int(os.getenv("MAX_PUBLICACOES_RODADA", "30"))
-PAUSA_ENTRE_POSTS = float(os.getenv("PAUSA_ENTRE_POSTS", "2.5"))
+PAUSA_ENTRE_POSTS      = float(os.getenv("PAUSA_ENTRE_POSTS", "2.0"))
 
-# === CANAIS DO TELEGRAM ===
+# Canais do Telegram (exibidos no texto e na imagem)
 TELEGRAM_CANAL_1 = os.getenv("TELEGRAM_CANAL_1", "https://t.me/portalsimonsportsdicasesportivas")
 TELEGRAM_CANAL_2 = os.getenv("TELEGRAM_CANAL_2", "https://t.me/portalsimonsports")
 
-# (Opcional) fundo fotográfico do card
-CARD_BG_URL = os.getenv("CARD_BG_URL", "").strip()
+def _detect_origem():
+    if os.getenv("BOT_ORIGEM"): return os.getenv("BOT_ORIGEM").strip()
+    if os.getenv("GITHUB_ACTIONS"): return "GitHub"
+    if os.getenv("REPL_ID") or os.getenv("REPLIT_DB_URL"): return "Replit"
+    if os.getenv("RENDER"): return "Render"
+    return "Local"
+BOT_ORIGEM = _detect_origem()
 
-# === LOTERIAS DA CAIXA ===
+# =========================
+# Planilha — colunas (1-based)
+# =========================
+COL_Loteria, COL_Concurso, COL_Data, COL_Numeros, COL_URL = 1, 2, 3, 4, 5
+COL_URL_Imagem, COL_Imagem = 6, 7           # opcionais
+COL_STATUS_REDES = {"X": 8}                  # H
+
+# =========================
+# Dicionários visuais
+# =========================
 CORES_LOTERIAS = {
-    "mega-sena": "#006400", "quina": "#4B0082", "lotofácil": "#DD4A91",
-    "lotomania": "#FF8C00", "timemania": "#00FF00", "dupla sena": "#000080",
-    "federal": "#8B4513", "dia de sorte": "#FFD700", "super sete": "#FF4500", "loteca": "#006400",
+    "mega-sena": "#006400",
+    "quina": "#4B0082",
+    "lotofácil": "#DD4A91",
+    "lotomania": "#FF8C00",
+    "timemania": "#00A650",
+    "dupla sena": "#8B0000",
+    "federal": "#8B4513",
+    "dia de sorte": "#FFD700",
+    "super sete": "#FF4500",
+    "loteca": "#006400",
 }
 
 LOGOS_LOTERIAS = {
@@ -68,31 +103,16 @@ NUMEROS_POR_LOTERIA = {
     "super sete": 7, "loteca": 14,
 }
 
-# === DETECÇÃO DE ORIGEM ===
-def _detect_origem():
-    if os.getenv("BOT_ORIGEM"): return os.getenv("BOT_ORIGEM").strip()
-    if os.getenv("GITHUB_ACTIONS"): return "GitHub"
-    if os.getenv("REPL_ID") or os.getenv("REPLIT_DB_URL"): return "Replit"
-    if os.getenv("RENDER"): return "Render"
-    return "Local"
-BOT_ORIGEM = _detect_origem()
-
-# === COLUNAS DA PLANILHA (1-based) ===
-COL_Loteria, COL_Concurso, COL_Data, COL_Numeros, COL_URL = 1, 2, 3, 4, 5
-COL_STATUS_REDES = {"X": 8}
-
-# === CONTAS DO X (TWITTER) ===
-TW1 = {k: os.getenv(f"TWITTER_{k}_1", "") for k in ["API_KEY", "API_SECRET", "ACCESS_TOKEN", "ACCESS_SECRET"]}
-TW2 = {k: os.getenv(f"TWITTER_{k}_2", "") for k in ["API_KEY", "API_SECRET", "ACCESS_TOKEN", "ACCESS_SECRET"]}
-
-# === FUNÇÕES AUXILIARES ===
+# =========================
+# Utilitários
+# =========================
 def _not_empty(v): return bool(str(v or "").strip())
 def _status_col_for_target(): return COL_STATUS_REDES.get(TARGET_NETWORK, 8)
 def _now(): return dt.datetime.now(TZ)
 def _ts(): return _now().strftime("%Y-%m-%d %H:%M:%S")
 def _ts_br(): return _now().strftime("%d/%m/%Y %H:%M")
 
-def _parse_date_br(s):
+def _parse_date_br(s: str):
     s = str(s or "").strip()
     try:
         d, m, y = s.split("/")
@@ -100,51 +120,74 @@ def _parse_date_br(s):
     except Exception:
         return None
 
-def _within_backlog(date_br, days):
-    if days <= 0: 
+def _within_backlog(date_br: str, days: int) -> bool:
+    if days <= 0:
         return True
     d = _parse_date_br(date_br)
     if not d:
-        # Se a data estiver vazia/indefinida, não bloqueia a publicação
         return True
     return (_now().date() - d).days <= days
 
 def _safe_len(row, idx): return len(row) >= idx
 def _log(*a): print(f"[{_ts()}]", *a, flush=True)
 
-# === GOOGLE SHEETS ===
+# =========================
+# Google Sheets
+# =========================
 def _gs_client():
     sa_json = os.getenv("GOOGLE_SERVICE_JSON", "").strip()
-    scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+    scopes = ['https://www.googleapis.com/auth/spreadsheets',
+              'https://www.googleapis.com/auth/drive']
     if sa_json:
         info = json.loads(sa_json)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scopes)
     else:
         if not os.path.exists("service_account.json"):
-            raise RuntimeError("Credencial Google ausente: service_account.json ou GOOGLE_SERVICE_JSON")
+            raise RuntimeError("Credencial Google ausente (defina GOOGLE_SERVICE_JSON ou service_account.json)")
         creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scopes)
     return gspread.authorize(creds)
 
 def _open_ws():
     if not SHEET_ID:
-        raise RuntimeError("GOOGLE_SHEET_ID não definido no .env")
+        raise RuntimeError("GOOGLE_SHEET_ID não definido.")
     sh = _gs_client().open_by_key(SHEET_ID)
     return sh.worksheet(SHEET_TAB)
 
-def marcar_publicado(ws, rownum):
+def marcar_publicado(ws, rownum, value=None):
     col = _status_col_for_target()
-    ws.update_cell(rownum, col, f"Publicado via {BOT_ORIGEM} em {_ts_br()}")
+    valor = value or f"Publicado via {BOT_ORIGEM} em {_ts_br()}"
+    ws.update_cell(rownum, col, valor)
 
-# === CONTAS DO X ===
+# =========================
+# X / Twitter — contas e anti-duplicados
+# =========================
+TW1 = {
+    "API_KEY":       os.getenv("TWITTER_API_KEY_1", ""),
+    "API_SECRET":    os.getenv("TWITTER_API_SECRET_1", ""),
+    "ACCESS_TOKEN":  os.getenv("TWITTER_ACCESS_TOKEN_1", ""),
+    "ACCESS_SECRET": os.getenv("TWITTER_ACCESS_SECRET_1", ""),
+}
+TW2 = {
+    "API_KEY":       os.getenv("TWITTER_API_KEY_2", ""),
+    "API_SECRET":    os.getenv("TWITTER_API_SECRET_2", ""),
+    "ACCESS_TOKEN":  os.getenv("TWITTER_ACCESS_TOKEN_2", ""),
+    "ACCESS_SECRET": os.getenv("TWITTER_ACCESS_SECRET_2", ""),
+}
+
 class XAccount:
     def __init__(self, label, api_key, api_secret, access_token, access_secret):
         self.label = label
+        # v2 (tweet)
         self.client_v2 = tweepy.Client(
-            consumer_key=api_key, consumer_secret=api_secret,
-            access_token=access_token, access_token_secret=access_secret
+            consumer_key=api_key,
+            consumer_secret=api_secret,
+            access_token=access_token,
+            access_token_secret=access_secret
         )
+        # v1.1 (mídia)
         auth = tweepy.OAuth1UserHandler(api_key, api_secret, access_token, access_secret)
         self.api_v1 = tweepy.API(auth)
+        # identidade
         try:
             me = self.client_v2.get_me()
             self.user_id = me.data.id if me and me.data else None
@@ -153,215 +196,298 @@ class XAccount:
             self.user_id = None
             self.handle = f"@{label}"
 
+    def __repr__(self):
+        return f"<XAccount {self.label} {self.handle} id={self.user_id}>"
+
 def build_x_accounts():
     accs = []
     if all(TW1.values()):
-        accs.append(XAccount("ACC1",
-            api_key=TW1["API_KEY"], api_secret=TW1["API_SECRET"],
-            access_token=TW1["ACCESS_TOKEN"], access_secret=TW1["ACCESS_SECRET"]))
+        accs.append(XAccount("ACC1", TW1["API_KEY"], TW1["API_SECRET"], TW1["ACCESS_TOKEN"], TW1["ACCESS_SECRET"]))
     if all(TW2.values()):
-        accs.append(XAccount("ACC2",
-            api_key=TW2["API_KEY"], api_secret=TW2["API_SECRET"],
-            access_token=TW2["ACCESS_TOKEN"], access_secret=TW2["ACCESS_SECRET"]))
+        accs.append(XAccount("ACC2", TW2["API_KEY"], TW2["API_SECRET"], TW2["ACCESS_TOKEN"], TW2["ACCESS_SECRET"]))
     if not accs:
-        raise RuntimeError("Nenhuma conta X configurada. Verifique as chaves no .env")
+        raise RuntimeError("Nenhuma conta X configurada (defina *_1 e/ou *_2).")
     return accs
 
-# === CACHE DE TWEETS ===
 _recent_tweets_cache = defaultdict(set)
 _postados_nesta_execucao = defaultdict(set)
 
-def x_load_recent_texts(acc, max_results=50):
+def x_load_recent_texts(acc: XAccount, max_results=50):
     try:
-        r = acc.client_v2.get_users_tweets(id=acc.user_id, max_results=min(max_results, 100), tweet_fields=["text"])
-        s = set()
-        if r and r.data:
-            for tw in r.data:
+        resp = acc.client_v2.get_users_tweets(
+            id=acc.user_id,
+            max_results=min(max_results, 100),
+            tweet_fields=["created_at", "text"]
+        )
+        out = set()
+        if resp and resp.data:
+            for tw in resp.data:
                 t = (tw.text or "").strip()
-                if t: s.add(t)
-        return s
-    except Exception:
+                if t:
+                    out.add(t)
+        return out
+    except Exception as e:
+        msg = str(e)
+        if "401" in msg or "Unauthorized" in msg:
+            _log(f"[{acc.handle}] aviso: ignorando restrição de leitura (401 Unauthorized).")
+            return set()
+        _log(f"[{acc.handle}] warn: falha ao carregar tweets recentes: {e}")
         return set()
 
-def x_is_dup(acc, text):
+def x_is_dup(acc: XAccount, text: str) -> bool:
     t = (text or "").strip()
-    return bool(t) and (t in _recent_tweets_cache[acc.label] or t in _postados_nesta_execucao[acc.label])
+    if not t:
+        return False
+    return (t in _recent_tweets_cache[acc.label]) or (t in _postados_nesta_execucao[acc.label])
 
-# === FONTES (fallback seguro) ===
-def _font(size, bold=False):
+# =========================
+# Inferência de LOGO a partir da coluna E (URL do post)
+# =========================
+def get_logo_from_url(url: str) -> str | None:
+    """Tenta inferir o logo da loteria a partir do path do URL do post."""
     try:
-        return ImageFont.truetype("arialbd.ttf" if bold else "arial.ttf", size)
+        if not url:
+            return None
+        p = urlparse(str(url))
+        path = (p.path or "").lower()  # e.g. '/2025/10/quina-6865.html'
+        # casa diretamente qualquer slug conhecido
+        for slug in LOGOS_LOTERIAS.keys():
+            slug_norm = slug.replace(' ', '-')
+            if slug_norm in path:
+                return LOGOS_LOTERIAS.get(slug)
+        # fallback: pega o último segmento, remove números finais
+        last = path.rstrip('/').split('/')[-1]
+        m = re.match(r'([a-z0-9\-]+)', last)
+        if m:
+            candidate = re.sub(r'-\d+$', '', m.group(1))
+            for slug in LOGOS_LOTERIAS.keys():
+                if slug.replace(' ', '-').lower() == candidate:
+                    return LOGOS_LOTERIAS.get(slug)
+        return None
+    except Exception:
+        return None
+
+# =========================
+# Fontes (fallback seguro)
+# =========================
+def _load_font(size, bold=False):
+    try:
+        path = "arialbd.ttf" if bold else "arial.ttf"
+        return ImageFont.truetype(path, size)
     except Exception:
         return ImageFont.load_default()
 
-# === GERAR CARD NO ESTILO DO PRINT ===
-def gerar_card_estilo(loteria, concurso, data_br, numeros_str, url_resultado):
-    """
-    Card 16:9 com:
-      - Título "<Loteria> — Concurso N (dd/mm/aaaa)"
-      - Logo oficial centralizado
-      - Bolhas com números (cor da loteria)
-      - website + URL do post
-      - Telegram Channel + links (direita)
-    """
-    W, H = 1200, 675  # bom para X
-    img = Image.new("RGB", (W, H), (24, 24, 28))
+# =========================
+# Geração de IMAGEM 3D PROFISSIONAL
+# =========================
+def gerar_imagem_3d(loteria, concurso, data_br, numeros_str, url_resultado, logo_override=None):
+    loteria_lower = (loteria or "").lower().strip()
+    cor_hex = CORES_LOTERIAS.get(loteria_lower, "#4B0082")
+
+    # Prioridade de logo:
+    # 1) logo_override
+    # 2) inferido pelo URL do resultado
+    # 3) dicionário pelo nome da loteria
+    logo_url = None
+    if logo_override and str(logo_override).strip():
+        logo_url = str(logo_override).strip()
+    else:
+        logo_url = get_logo_from_url(url_resultado) or LOGOS_LOTERIAS.get(loteria_lower)
+
+    # Números
+    max_numeros = NUMEROS_POR_LOTERIA.get(loteria_lower, 6)
+    numeros = [n.strip() for n in str(numeros_str).replace(',', ' ').split() if n.strip()]
+    if not numeros:
+        numeros = ["?"] * max_numeros
+    numeros = numeros[:max_numeros]
+
+    # Canvas
+    largura, altura = 880, 900
+    img = Image.new('RGB', (largura, altura), color='#ffffff')
     draw = ImageDraw.Draw(img)
 
-    # Fundo (foto opcional ou degradê + blur)
-    bg = None
-    if CARD_BG_URL:
-        try:
-            r = requests.get(CARD_BG_URL, timeout=10)
-            bg = Image.open(io.BytesIO(r.content)).convert("RGB")
-        except Exception:
-            bg = None
-    if bg:
-        bg = bg.resize((W, H), Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(6))
-        img.paste(bg, (0, 0))
-    else:
-        top, bot = (35, 39, 48), (16, 18, 22)
-        for y in range(H):
-            t = y / (H - 1)
-            c = tuple(int(top[i]*(1-t) + bot[i]*t) for i in range(3))
-            draw.line([(0, y), (W, y)], fill=c)
-        img = img.filter(ImageFilter.GaussianBlur(3))
-        draw = ImageDraw.Draw(img)
+    font_titulo = _load_font(56, bold=True)
+    font_sub    = _load_font(36, bold=False)
+    font_num    = _load_font(50, bold=True)
 
-    # overlay para contraste
-    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 90))
-    img.paste(overlay, (0, 0), overlay)
+    y = 40
 
-    # dados
-    loteria_key = str(loteria or "").strip().lower()
-    cor_hex = CORES_LOTERIAS.get(loteria_key, "#4B0082")
-    cor_rgb = tuple(int(cor_hex.lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
-    logo_url = LOGOS_LOTERIAS.get(loteria_key)
+    # Título e data
+    titulo = f"{loteria} — Concurso {concurso}"
+    draw.text((60, y), titulo, fill='#0f172a', font=font_titulo)
+    y += 80
+    draw.text((60, y), f"{data_br}", fill='#475569', font=font_sub)
+    y += 70
 
-    # fontes
-    FONT_BOLD = _font(60, True)
-    FONT_MED  = _font(44, True)
-    FONT_REG  = _font(36, False)
-
-    # título
-    titulo = f"{loteria} — Concurso {concurso} ({data_br})"
-    draw.text((60, 40), titulo, fill=(255, 255, 255), font=FONT_BOLD)
-
-    # logo central
-    y_logo = 120
+    # Logo (se disponível)
     if logo_url:
         try:
             r = requests.get(logo_url, timeout=10)
-            logo = Image.open(io.BytesIO(r.content)).convert("RGBA")
-            tgt_h = 120
-            ratio = logo.width / logo.height
-            logo = logo.resize((int(tgt_h*ratio), tgt_h), Image.Resampling.LANCZOS)
-            x_logo = (W - logo.width) // 2
-            img.paste(logo, (x_logo, y_logo), logo)
-        except Exception:
-            pass
+            r.raise_for_status()
+            logo_img = Image.open(io.BytesIO(r.content)).convert("RGBA")
+            ratio = logo_img.width / logo_img.height
+            h = 150
+            w = int(h * ratio)
+            if w > largura - 120:
+                w = largura - 120
+                h = int(w / ratio)
+            logo_img = logo_img.resize((w, h), Image.Resampling.LANCZOS)
+            x_logo = (largura - w) // 2
+            img.paste(logo_img, (x_logo, y), logo_img)
+            y += h + 40
+        except Exception as e:
+            _log(f"Logo falhou ({loteria}): {e}")
+            y += 20
+    else:
+        y += 20
 
-    # números (bolhas)
-    numeros = [n.strip() for n in str(numeros_str or "").replace(",", " ").split() if n.strip()]
-    if not numeros: numeros = ["?"] * NUMEROS_POR_LOTERIA.get(loteria_key, 6)
+    # Paleta
+    cor_rgb = tuple(int(cor_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+    raio = 64
+    espaco = 110
+    x_inicio = (largura - (len(numeros) * espaco - espaco//2)) // 2
 
-    bubble_d, gap = 90, 26
-    total_w = len(numeros)*bubble_d + (len(numeros)-1)*gap
-    x0 = (W - total_w)//2
-    y0 = 300
+    # Desenho das bolas 3D
+    for i, num in enumerate(numeros):
+        x = x_inicio + i * espaco
 
-    for i, n in enumerate(numeros):
-        x = x0 + i*(bubble_d + gap)
+        # base da bola
+        bola = Image.new('RGBA', (raio*2+36, raio*2+36), (0,0,0,0))
+        d = ImageDraw.Draw(bola)
+        for j in range(raio):
+            k = 1.0 - (j/raio)*0.6
+            fill = tuple(int(c*k) for c in cor_rgb) + (255,)
+            d.ellipse((j, j, raio*2+36 - j*2, raio*2+36 - j*2), fill=fill)
+
+        # brilho
+        brilho = Image.new('RGBA', (raio*2+36, raio*2+36), (0,0,0,0))
+        db = ImageDraw.Draw(brilho)
+        db.ellipse((24, 18, 58, 52), fill=(255,255,255,170))
+        bola = Image.alpha_composite(bola, brilho)
+
         # sombra
-        draw.ellipse([x+3, y0+3, x+bubble_d+3, y0+bubble_d+3], fill=(0,0,0,120))
-        # bolha
-        draw.ellipse([x, y0, x+bubble_d, y0+bubble_d], fill=(245,245,245), outline=cor_rgb, width=6)
-        # número
-        num_font = _font(40, True)
-        wtxt = draw.textlength(n, font=num_font)
-        draw.text((x + bubble_d/2 - wtxt/2, y0 + bubble_d/2 - 22), n, fill=cor_rgb, font=num_font)
+        sombra = bola.filter(ImageFilter.GaussianBlur(12))
+        img.paste((0,0,0,60), (x-12, y+18), sombra)
 
-    # website (esquerda)
-    y_txt = y0 + bubble_d + 40
-    draw.text((60, y_txt), "website:", fill=(220,220,220), font=FONT_REG)
+        # cola bola
+        img.paste(bola, (x-12, y-12), bola)
+
+        # número com leve sombra
+        txt_img = Image.new('RGBA', (160,160), (0,0,0,0))
+        txt_d = ImageDraw.Draw(txt_img)
+        txt_d.text((80, 58), str(num), font=font_num, fill=(0,0,0,210), anchor="mm")
+        txt_d.text((78, 56), str(num), font=font_num, fill=(255,255,255,255), anchor="mm")
+        img.paste(txt_img, (x-68, y-68), txt_img)
+
+    y += 170
+
+    # URL do resultado
     if url_resultado:
-        draw.text((60, y_txt + 38), url_resultado, fill=(160, 200, 255), font=FONT_REG)
+        draw.text((60, y), "Resultado completo:", fill='#0f172a', font=font_sub)
+        y += 42
+        draw.text((60, y), str(url_resultado), fill='#0ea5e9', font=font_sub)
+        y += 60
 
-    # telegram (direita)
-    right_x = W - 60
-    def draw_right(txt, yy, color=(220,220,220), font=FONT_REG):
-        w = draw.textlength(txt, font=font)
-        draw.text((right_x - w, yy), txt, fill=color, font=font)
+    # Canais Telegram
+    if TELEGRAM_CANAL_1 or TELEGRAM_CANAL_2:
+        draw.text((60, y), "Canais no Telegram:", fill='#0f172a', font=font_sub)
+        y += 42
+        if TELEGRAM_CANAL_1:
+            draw.text((80, y), TELEGRAM_CANAL_1, fill='#0284c7', font=font_sub); y += 38
+        if TELEGRAM_CANAL_2:
+            draw.text((80, y), TELEGRAM_CANAL_2, fill='#0284c7', font=font_sub)
 
-    draw_right("Telegram Channel:", y_txt, (220,220,220), FONT_REG)
-    if TELEGRAM_CANAL_1: draw_right(TELEGRAM_CANAL_1, y_txt + 38, (160, 200, 255), FONT_REG)
-    if TELEGRAM_CANAL_2: draw_right(TELEGRAM_CANAL_2, y_txt + 76, (160, 200, 255), FONT_REG)
+    # Exporta para buffer
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG", optimize=True)
+    buffer.seek(0)
+    return buffer
 
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    buf.seek(0)
-    return buf
-
-# === UPLOAD E TWEET ===
-def x_upload_media_if_any(acc, row):
+# =========================
+# Upload de mídia e tweet
+# =========================
+def x_upload_media_if_any(acc: XAccount, row):
     if not POST_X_WITH_IMAGE:
         return None
+
     loteria  = row[COL_Loteria-1]  if _safe_len(row, COL_Loteria)  else "Loteria"
     concurso = row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000"
     data_br  = row[COL_Data-1]     if _safe_len(row, COL_Data)     else _now().strftime("%d/%m/%Y")
     numeros  = row[COL_Numeros-1]  if _safe_len(row, COL_Numeros)  else ""
-    url      = row[COL_URL-1]      if _safe_len(row, COL_URL)      else ""
+    url_res  = row[COL_URL-1]      if _safe_len(row, COL_URL)      else ""
+
+    # Detecta logo por prioridade: col 6/7 → URL da coluna E → dicionário
+    logo_override = None
+    if _safe_len(row, COL_URL_Imagem) and str(row[COL_URL_Imagem-1]).strip():
+        logo_override = str(row[COL_URL_Imagem-1]).strip()
+    elif _safe_len(row, COL_Imagem) and str(row[COL_Imagem-1]).strip():
+        logo_override = str(row[COL_Imagem-1]).strip()
+    else:
+        logo_override = get_logo_from_url(url_res)
+
     try:
-        buffer = gerar_card_estilo(loteria, concurso, data_br, str(numeros), url)
+        buffer = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_res, logo_override=logo_override)
         media = acc.api_v1.media_upload(filename="resultado.png", file=buffer)
-        _log(f"[{acc.handle}] Card gerado: {loteria} {concurso}")
+        _log(f"[{acc.handle}] Imagem 3D gerada: {loteria}")
         return [media.media_id_string]
     except Exception as e:
-        _log(f"[{acc.handle}] Erro ao gerar imagem: {e}")
+        _log(f"[{acc.handle}] Erro ao gerar/anexar imagem: {e}")
         return None
 
-def x_tweet(acc, text, media_ids=None):
+def x_tweet(acc: XAccount, text: str, media_ids=None):
     t = (text or "").strip()
-    if not t or x_is_dup(acc, t):
+    if not t:
+        return None
+    if x_is_dup(acc, t):
+        _log(f"[{acc.handle}] SKIP duplicado (cache).")
         return None
     try:
-        r = acc.client_v2.create_tweet(text=t, media_ids=media_ids) if media_ids else acc.client_v2.create_tweet(text=t)
+        if media_ids:
+            resp = acc.client_v2.create_tweet(text=t, media_ids=media_ids)
+        else:
+            resp = acc.client_v2.create_tweet(text=t)
         _postados_nesta_execucao[acc.label].add(t)
         _recent_tweets_cache[acc.label].add(t)
-        _log(f"[{acc.handle}] Publicado com sucesso!")
-        return r
+        _log(f"[{acc.handle}] OK → {resp.data}")
+        return resp
+    except tweepy.Forbidden as e:
+        _log(f"[{acc.handle}] 403 Forbidden: {e}")
+        return None
     except Exception as e:
-        _log(f"[{acc.handle}] Erro ao publicar: {e}")
+        _log(f"[{acc.handle}] erro ao postar: {e}")
         return None
 
-# === TEXTO DO TWEET (um único tweet) ===
-def montar_corpo_unico(row):
-    loteria  = row[COL_Loteria-1]  if _safe_len(row, COL_Loteria)  else ""
-    concurso = row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else ""
-    data_br  = row[COL_Data-1]     if _safe_len(row, COL_Data)     else ""
-    numeros  = row[COL_Numeros-1]  if _safe_len(row, COL_Numeros)  else ""
-    url      = row[COL_URL-1]      if _safe_len(row, COL_URL)      else ""
+# =========================
+# Texto do tweet — post ÚNICO (título + números + link + telegram)
+# =========================
+def montar_corpo_unico(row) -> str:
+    loteria  = (row[COL_Loteria-1]  if _safe_len(row, COL_Loteria)  else "").strip()
+    concurso = (row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "").strip()
+    data_br  = (row[COL_Data-1]     if _safe_len(row, COL_Data)     else "").strip()
+    numeros  = (row[COL_Numeros-1]  if _safe_len(row, COL_Numeros)  else "").strip()
+    url      = (row[COL_URL-1]      if _safe_len(row, COL_URL)      else "").strip()
 
-    nums_lista = [n.strip() for n in str(numeros).replace(" ", "").split(",") if n.strip()]
-    nums_str = ", ".join(nums_lista)
+    # normaliza números
+    nums = [n.strip() for n in numeros.replace(';', ',').replace('  ', ' ').replace(' ', ',').split(',') if n.strip()]
+    nums_str = ", ".join(nums)
 
     linhas = [f"{loteria} — Concurso {concurso} — ({data_br})"]
     if nums_str:
         linhas.append(f"Números: {nums_str}")
     if url:
-        linhas.extend(["", url])
+        linhas += ["Confira o resultado completo aqui >>", url]
     if TELEGRAM_CANAL_1 or TELEGRAM_CANAL_2:
-        linhas.append("Canais no Telegram:")
+        linhas += [
+            "Inscreva-se nos canais do Telegram e receba as publicações em primeira mão — simples, grátis e divertido:",
+        ]
         if TELEGRAM_CANAL_1: linhas.append(TELEGRAM_CANAL_1)
         if TELEGRAM_CANAL_2: linhas.append(TELEGRAM_CANAL_2)
 
-    corpo = "\n".join([l for l in linhas if l]).strip()
-    # proteção de limite ~280
-    if len(corpo) > 274:
-        corpo = corpo[:271] + "..."
-    return corpo
+    return "\n".join(linhas).strip()
 
-# === COLETAR E PUBLICAR ===
+# =========================
+# Coleta de linhas candidatas
+# =========================
 def coletar_candidatos(ws):
     rows = ws.get_all_values()
     if not rows:
@@ -378,12 +504,15 @@ def coletar_candidatos(ws):
         cand.append((rindex, row))
     return cand
 
-def publicar_linha_em_conta(acc, row):
+# =========================
+# Publicação
+# =========================
+def publicar_linha_em_conta(acc: XAccount, row):
     if acc.label not in _recent_tweets_cache:
-        _recent_tweets_cache[acc.label] = x_load_recent_texts(acc, 50)
-    corpo = montar_corpo_unico(row)
+        _recent_tweets_cache[acc.label] = x_load_recent_texts(acc, max_results=50)
+    texto = montar_corpo_unico(row)
     media_ids = x_upload_media_if_any(acc, row)
-    resp = x_tweet(acc, corpo, media_ids=media_ids)
+    resp = x_tweet(acc, texto, media_ids=media_ids)
     return resp is not None
 
 def publicar_em_x(ws, candidatos):
@@ -391,6 +520,8 @@ def publicar_em_x(ws, candidatos):
     for acc in contas:
         _recent_tweets_cache[acc.label] = x_load_recent_texts(acc, 50)
         _log(f"Conta conectada: {acc.handle}")
+
+    publicados = 0
     acc_idx = 0
     limite = min(MAX_PUBLICACOES_RODADA, len(candidatos))
     for rownum, row in candidatos[:limite]:
@@ -404,57 +535,67 @@ def publicar_em_x(ws, candidatos):
             acc = contas[acc_idx % len(contas)]
             acc_idx += 1
             ok_any = publicar_linha_em_conta(acc, row)
+
         if ok_any:
             marcar_publicado(ws, rownum)
+            publicados += 1
+
         time.sleep(PAUSA_ENTRE_POSTS)
 
-# === KEEPALIVE (opcional) ===
+    _log(f"Resumo: publicados nesta rodada = {publicados}")
+    return publicados
+
+# =========================
+# Keepalive (opcional)
+# =========================
 def start_keepalive():
     try:
         from flask import Flask
-        app = Flask(__name__)
-
-        @app.route("/")
-        def root():
-            return "ok", 200
-
-        @app.route("/ping")
-        def ping():
-            return "ok", 200
-
-        def run():
-            port = int(os.getenv("PORT", KEEPALIVE_PORT))
-            app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
-        th = Thread(target=run, daemon=True)
-        th.start()
-        _log(f"Keepalive ativo na porta {os.getenv('PORT', KEEPALIVE_PORT)}")
-        return th
-
-    except ImportError:
-        _log("Flask não instalado. Keepalive desativado.")
-        return None
-    except Exception as e:
-        _log(f"Erro no keepalive: {e}")
+    except Exception:
+        _log("Flask não instalado; keepalive desativado.")
         return None
 
-# === MAIN ===
+    app = Flask(__name__)
+
+    @app.route("/")
+    def root():
+        return "ok", 200
+
+    @app.route("/ping")
+    def ping():
+        return "ok", 200
+
+    def run():
+        port = int(os.getenv("PORT", KEEPALIVE_PORT))
+        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
+    th = Thread(target=run, daemon=True)
+    th.start()
+    _log(f"Keepalive Flask ativo em 0.0.0.0:{os.getenv('PORT', KEEPALIVE_PORT)}")
+    return th
+
+# =========================
+# MAIN
+# =========================
 def main():
-    _log(f"Iniciando bot... Origem={BOT_ORIGEM}")
+    _log(f"Iniciando bot... Origem={BOT_ORIGEM} | Rede={TARGET_NETWORK}")
     keepalive_thread = start_keepalive() if ENABLE_KEEPALIVE else None
     try:
         ws = _open_ws()
         candidatos = coletar_candidatos(ws)
-        _log(f"Linhas candidatas: {len(candidatos)}")
+        _log(f"Candidatas: {len(candidatos)} (limite {MAX_PUBLICACOES_RODADA})")
         if not candidatos:
-            _log("Nenhuma linha para publicar.")
+            _log("Nenhuma linha candidata.")
             if ENABLE_KEEPALIVE:
-                _log("Keepalive: aguardando novas linhas a cada 10 minutos...")
+                _log("Mantendo vivo para pings...")
                 while True:
                     time.sleep(600)
             return
-        publicar_em_x(ws, candidatos)
-        _log("Publicação finalizada com sucesso.")
+        if TARGET_NETWORK == "X":
+            publicar_em_x(ws, candidatos)
+        else:
+            _log(f"Rede destino '{TARGET_NETWORK}' não implementada.")
+        _log("Concluído.")
     except Exception as e:
         _log(f"[FATAL] {e}")
         raise
