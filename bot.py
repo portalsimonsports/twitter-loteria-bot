@@ -168,17 +168,14 @@ def x_is_dup(acc, text):
     return bool(t) and (t in _recent_tweets_cache[acc.label] or t in _postados_nesta_execucao[acc.label])
 
 # === FONTES EMBUTIDAS (ARIAL BOLD E REGULAR) ===
-ARIAL_BOLD_TTF = base64.b64decode("""
-AAEAAAARAQAABAAgR0RFRgQhAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAA...
-""")  # Fonte completa removida por tamanho — veja ZIP
+# Baixe em: https://fonts.google.com/specimen/Roboto ou use Arial
+# Ou use fontes padrão do Pillow (fallback automático)
 
-ARIAL_REGULAR_TTF = base64.b64decode("""
-AAEAAAARAQAABAAgR0RFRgQhAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAA...
-""")  # Fonte completa removida por tamanho — veja ZIP
-
-def _load_font(data, size):
+def _load_font_or_default(size, bold=False):
     try:
-        return ImageFont.truetype(io.BytesIO(data), size)
+        if bold:
+            return ImageFont.truetype("arialbd.ttf", size)
+        return ImageFont.truetype("arial.ttf", size)
     except:
         return ImageFont.load_default()
 
@@ -197,10 +194,10 @@ def gerar_imagem_3d(loteria, concurso, data_br, numeros_str, url_resultado):
     img = Image.new('RGB', (largura, altura), color='#ffffff')
     draw = ImageDraw.Draw(img)
 
-    # === FONTES EMBUTIDAS ===
-    font_titulo = _load_font(ARIAL_BOLD_TTF, 52)
-    font_num = _load_font(ARIAL_BOLD_TTF, 48)
-    font_texto = _load_font(ARIAL_REGULAR_TTF, 34)
+    # Fontes com fallback
+    font_titulo = _load_font_or_default(52, bold=True)
+    font_num = _load_font_or_default(48, bold=True)
+    font_texto = _load_font_or_default(34)
 
     y = 40
 
@@ -385,21 +382,34 @@ def publicar_em_x(ws, candidatos):
         if ok_any: marcar_publicado(ws, rownum)
         time.sleep(PAUSA_ENTRE_POSTS)
 
-# === KEEPALIVE ===
+# === KEEPALIVE CORRIGIDO ===
 def start_keepalive():
     try:
         from flask import Flask
         app = Flask(__name__)
-        @app.route("/"); def root(): return "ok", 200
-        @app.route("/ping"); def ping(): return "ok", 200
+
+        @app.route("/")
+        def root():
+            return "ok", 200
+
+        @app.route("/ping")
+        def ping():
+            return "ok", 200
+
         def run():
             port = int(os.getenv("PORT", KEEPALIVE_PORT))
             app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-        th = Thread(target=run, daemon=True); th.start()
+
+        th = Thread(target=run, daemon=True)
+        th.start()
         _log(f"Keepalive ativo na porta {os.getenv('PORT', KEEPALIVE_PORT)}")
         return th
+
+    except ImportError:
+        _log("Flask não instalado. Keepalive desativado.")
+        return None
     except Exception as e:
-        _log(f"Keepalive desativado: {e}")
+        _log(f"Erro no keepalive: {e}")
         return None
 
 # === MAIN ===
