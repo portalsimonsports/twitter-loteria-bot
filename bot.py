@@ -158,17 +158,18 @@ def marcar_publicado(ws, rownum, value=None):
 # =========================
 # X / Twitter — contas e anti-duplicados
 # =========================
+# (Lendo de Secrets/.env; mapeado para nomes que o __init__ espera)
 TW1 = {
-    "API_KEY": os.getenv("TWITTER_API_KEY_1", ""),
-    "API_SECRET": os.getenv("TWITTER_API_SECRET_1", ""),
-    "ACCESS_TOKEN": os.getenv("TWITTER_ACCESS_TOKEN_1", ""),
-    "ACCESS_SECRET": os.getenv("TWITTER_ACCESS_SECRET_1", ""),
+    "api_key":       os.getenv("TWITTER_API_KEY_1", ""),
+    "api_secret":    os.getenv("TWITTER_API_SECRET_1", ""),
+    "access_token":  os.getenv("TWITTER_ACCESS_TOKEN_1", ""),
+    "access_secret": os.getenv("TWITTER_ACCESS_SECRET_1", ""),
 }
 TW2 = {
-    "API_KEY": os.getenv("TWITTER_API_KEY_2", ""),
-    "API_SECRET": os.getenv("TWITTER_API_SECRET_2", ""),
-    "ACCESS_TOKEN": os.getenv("TWITTER_ACCESS_TOKEN_2", ""),
-    "ACCESS_SECRET": os.getenv("TWITTER_ACCESS_SECRET_2", ""),
+    "api_key":       os.getenv("TWITTER_API_KEY_2", ""),
+    "api_secret":    os.getenv("TWITTER_API_SECRET_2", ""),
+    "access_token":  os.getenv("TWITTER_ACCESS_TOKEN_2", ""),
+    "access_secret": os.getenv("TWITTER_ACCESS_SECRET_2", ""),
 }
 
 class XAccount:
@@ -195,12 +196,21 @@ class XAccount:
 
 def build_x_accounts():
     accs = []
-    if all(TW1.values()):
+
+    def ok(d):
+        return all(d.get(k) for k in ("api_key", "api_secret", "access_token", "access_secret"))
+
+    if ok(TW1):
         accs.append(XAccount("ACC1", **TW1))
-    if all(TW2.values()):
+    else:
+        _log("Conta ACC1 incompleta nos Secrets — verifique *_1.")
+    if ok(TW2):
         accs.append(XAccount("ACC2", **TW2))
+    else:
+        _log("Conta ACC2 incompleta nos Secrets — verifique *_2.")
+
     if not accs:
-        raise RuntimeError("Nenhuma conta X configurada (defina *_1 e/ou *_2).")
+        raise RuntimeError("Nenhuma conta X configurada (confira os Secrets *_1 e/ou *_2).")
     return accs
 
 _recent_tweets_cache = defaultdict(set)
@@ -218,8 +228,7 @@ def x_load_recent_texts(acc: XAccount, max_results=50):
             for tw in resp.data:
                 t = (tw.text or "").strip()
                 if t: out.add(t)
-        # Manter apenas os últimos 50
-        _recent_tweets_cache[acc.label] = set(list(out)[-50:])
+        _recent_tweets_cache[acc.label] = set(list(out)[-50:])  # cache últimos 50
         return _recent_tweets_cache[acc.label]
     except tweepy.Unauthorized:
         _log(f"[{acc.handle}] aviso: sem permissão para ler tweets (401). Cache vazio.")
@@ -426,7 +435,7 @@ def x_tweet(acc: XAccount, text: str, media_ids=None):
         _recent_tweets_cache[acc.label].add(t)
         _log(f"[{acc.handle}] OK → {resp.data['id']}")
         return resp
-    except tweepy.TooManyRequests as e:
+    except tweepy.TooManyRequests:
         _log(f"[{acc.handle}] Rate limit. Pausando 15min...")
         time.sleep(900)
         return None
@@ -468,21 +477,35 @@ def montar_corpo_unico(row) -> str:
     return texto
 
 # =========================
-# Coleta de linhas candidatas
+# Coleta de linhas candidatas (com logs de diagnóstico)
 # =========================
 def coletar_candidatos(ws):
     rows = ws.get_all_values()
-    if len(rows) <= 1: return []
+    if len(rows) <= 1:
+        _log("Planilha sem dados (apenas cabeçalho).")
+        return []
     data = rows[1:]
     cand = []
     col_status = _status_col_for_target()
     for rindex, row in enumerate(data, start=2):
+        motivo_skip = None
+
+        # 1) já publicado?
         if len(row) >= col_status and _not_empty(row[col_status-1]):
+            motivo_skip = f"status na col {col_status} preenchido ({row[col_status-1][:25]})"
+
+        # 2) dentro do BACKLOG_DAYS?
+        if not motivo_skip:
+            data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else ""
+            if not _within_backlog(data_br, BACKLOG_DAYS):
+                motivo_skip = f"fora do backlog ({data_br})"
+
+        if motivo_skip:
+            _log(f"SKIP L{rindex}: {motivo_skip}")
             continue
-        data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else ""
-        if not _within_backlog(data_br, BACKLOG_DAYS):
-            continue
+
         cand.append((rindex, row))
+    _log(f"Total candidatas após filtros: {len(cand)}")
     return cand
 
 # =========================
@@ -515,6 +538,7 @@ def publicar_em_x(ws, candidatos):
             acc = contas[acc_idx % len(contas)]
             acc_idx += 1
             ok_any = publicar_linha_em_conta(acc, row)
+
         if ok_any and not DRY_RUN:
             marcar_publicado(ws, rownum)
             publicados += 1
@@ -563,7 +587,8 @@ def main():
             _log("Nenhuma linha candidata.")
             if ENABLE_KEEPALIVE:
                 _log("Mantendo vivo para pings...")
-                while True: time.sleep(600)
+                while True:
+                    time.sleep(600)
             return
 
         if TARGET_NETWORK == "X":
