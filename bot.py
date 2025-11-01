@@ -33,7 +33,7 @@ SHEET_ID  = os.getenv("GOOGLE_SHEET_ID", "").strip()
 SHEET_TAB = os.getenv("SHEET_TAB", "ImportadosBlogger2").strip()
 
 TARGET_NETWORK = os.getenv("TARGET_NETWORK", "X").strip().upper()
-BACKLOG_DAYS   = int(os.getenv("BACKLOG_DAYS", "2"))
+BACKLOG_DAYS   = int(os.getenv("BACKLOG_DAYS", "7"))
 
 # Publicar a MESMA linha em todas as contas X
 X_POST_IN_ALL_ACCOUNTS = os.getenv("X_POST_IN_ALL_ACCOUNTS", "true").strip().lower() == "true"
