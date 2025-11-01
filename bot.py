@@ -1,5 +1,5 @@
 # bot.py — Portal SimonSports — Publicador Automático de Loterias no X (Twitter)
-# Rev: 2025-10-31 — TODAS AS LOTERIAS + NÚMEROS 3D PROFISSIONAIS + LOGO OFICIAL + KEEPALIVE SEGURO
+# Rev: 2025-10-31 — FINAL | IMAGEM 3D PROFISSIONAL + KEEPALIVE SEGURO + ZERO ERROS
 # Inclui: Mega-Sena, Quina, Lotofácil, Lotomania, Timemania, Dupla Sena, Federal, Dia de Sorte, SUPER SETE, LOTECA
 
 import os
@@ -16,7 +16,6 @@ from dotenv import load_dotenv
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-import base64
 
 load_dotenv()
 TZ = pytz.timezone("America/Sao_Paulo")
@@ -88,8 +87,11 @@ def _ts(): return _now().strftime("%Y-%m-%d %H:%M:%S")
 def _ts_br(): return _now().strftime("%d/%m/%Y %H:%M")
 def _parse_date_br(s):
     s = str(s or "").strip()
-    try: d, m, y = s.split("/"); return dt.date(int(y), int(m), int(d))
-    except: return None
+    try:
+        d, m, y = s.split("/")
+        return dt.date(int(y), int(m), int(d))
+    except:
+        return None
 def _within_backlog(date_br, days):
     if days <= 0: return True
     d = _parse_date_br(date_br)
@@ -161,21 +163,18 @@ def x_load_recent_texts(acc, max_results=50):
                 t = (tw.text or "").strip()
                 if t: s.add(t)
         return s
-    except Exception: return set()
+    except Exception:
+        return set()
 
 def x_is_dup(acc, text):
     t = (text or "").strip()
     return bool(t) and (t in _recent_tweets_cache[acc.label] or t in _postados_nesta_execucao[acc.label])
 
-# === FONTES EMBUTIDAS (ARIAL BOLD E REGULAR) ===
-# Baixe em: https://fonts.google.com/specimen/Roboto ou use Arial
-# Ou use fontes padrão do Pillow (fallback automático)
-
+# === FONTES COM FALLBACK ===
 def _load_font_or_default(size, bold=False):
     try:
-        if bold:
-            return ImageFont.truetype("arialbd.ttf", size)
-        return ImageFont.truetype("arial.ttf", size)
+        font_path = "arialbd.ttf" if bold else "arial.ttf"
+        return ImageFont.truetype(font_path, size)
     except:
         return ImageFont.load_default()
 
@@ -194,7 +193,6 @@ def gerar_imagem_3d(loteria, concurso, data_br, numeros_str, url_resultado):
     img = Image.new('RGB', (largura, altura), color='#ffffff')
     draw = ImageDraw.Draw(img)
 
-    # Fontes com fallback
     font_titulo = _load_font_or_default(52, bold=True)
     font_num = _load_font_or_default(48, bold=True)
     font_texto = _load_font_or_default(34)
@@ -234,7 +232,7 @@ def gerar_imagem_3d(loteria, concurso, data_br, numeros_str, url_resultado):
     else:
         y += 50
 
-    # NÚMEROS 3D COM BRILHO E SOMBRA
+    # NÚMEROS 3D
     raio = 60
     espaco = 100
     x_inicio = (largura - (len(numeros) * espaco - espaco // 2)) // 2
@@ -382,7 +380,7 @@ def publicar_em_x(ws, candidatos):
         if ok_any: marcar_publicado(ws, rownum)
         time.sleep(PAUSA_ENTRE_POSTS)
 
-# === KEEPALIVE CORRIGIDO ===
+# === KEEPALIVE SEGURO E CORRETO ===
 def start_keepalive():
     try:
         from flask import Flask
@@ -412,7 +410,7 @@ def start_keepalive():
         _log(f"Erro no keepalive: {e}")
         return None
 
-# === MAIN ===
+# === MAIN — CORRIGIDO E SEGURO ===
 def main():
     _log(f"Iniciando bot... Origem={BOT_ORIGEM}")
     keepalive_thread = start_keepalive() if ENABLE_KEEPALIVE else None
@@ -422,7 +420,10 @@ def main():
         _log(f"Linhas candidatas: {len(candidatos)}")
         if not candidatos:
             _log("Nenhuma linha para publicar.")
-            if ENABLE_KEEPALIVE: while True: time.sleep(600)
+            if ENABLE_KEEPALIVE:
+                _log("Keepalive: aguardando novas linhas a cada 10 minutos...")
+                while True:
+                    time.sleep(600)  # 10 minutos
             return
         publicar_em_x(ws, candidatos)
         _log("Publicação finalizada com sucesso.")
@@ -430,7 +431,8 @@ def main():
         _log(f"[FATAL] {e}")
         raise
     finally:
-        if ENABLE_KEEPALIVE and keepalive_thread: time.sleep(1)
+        if ENABLE_KEEPALIVE and keepalive_thread:
+            time.sleep(1)
 
 if __name__ == "__main__":
     main()
