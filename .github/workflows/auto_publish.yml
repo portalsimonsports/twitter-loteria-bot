@@ -74,7 +74,7 @@ jobs:
           TWITTER_ACCESS_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
 
           # === PLANILHA ===
-          GOOGLE_SHEET_ID: 16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-1CBgA38TMszXCI
+          GOOGLE_SHEET_ID: 16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI
           SHEET_TAB: ImportadosBlogger2
 
           # === COMPORTAMENTO ===
