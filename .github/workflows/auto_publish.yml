@@ -3,7 +3,7 @@ name: Publicação Automática de Loterias
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/10 * * * *"  # roda a cada 10 minutos (UTC)
+    - cron: "*/10 * * * *"  # A cada 10 min (UTC)
 
 concurrency:
   group: publish-loterias
@@ -37,7 +37,7 @@ jobs:
       - name: Instalar dependências
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install -r requirements.txt --no-cache-dir
+          pip install --no-cache-dir -r requirements.txt
 
       - name: Verificar secrets obrigatórios
         env:
@@ -52,50 +52,48 @@ jobs:
           req = ["GOOGLE_SERVICE_JSON","TWITTER_API_KEY_1","TWITTER_API_SECRET_1","TWITTER_ACCESS_TOKEN_1","TWITTER_ACCESS_SECRET_1"]
           miss = [k for k in req if not os.getenv(k)]
           if miss:
-              print("❌ Faltam variáveis:", miss); sys.exit(1)
-          print("✅ Secrets OK")
+              print("Faltam variáveis:", miss)
+              sys.exit(1)
+          print("Secrets OK")
           PY
 
       - name: Executar o bot (ciclo único)
         env:
           # === OBRIGATÓRIOS ===
-          GOOGLE_SERVICE_JSON:           ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
 
-          # === CONTAS X ===
-          TWITTER_API_KEY_1:             ${{ secrets.TWITTER_API_KEY_1 }}
-          TWITTER_API_SECRET_1:          ${{ secrets.TWITTER_API_SECRET_1 }}
-          TWITTER_ACCESS_TOKEN_1:        ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
-          TWITTER_ACCESS_SECRET_1:       ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
+          # === CONTAS X (TWITTER) ===
+          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
+          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
+          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
 
-          TWITTER_API_KEY_2:             ${{ secrets.TWITTER_API_KEY_2 }}
-          TWITTER_API_SECRET_2:          ${{ secrets.TWITTER_API_SECRET_2 }}
-          TWITTER_ACCESS_TOKEN_2:        ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
-          TWITTER_ACCESS_SECRET_2:       ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
+          TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
+          TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
+          TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
+          TWITTER_ACCESS_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
 
           # === PLANILHA ===
-          GOOGLE_SHEET_ID: "16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI"
-          SHEET_TAB: "ImportadosBlogger2"
+          GOOGLE_SHEET_ID: 16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-1CBgA38TMszXCI
+          SHEET_TAB: ImportadosBlogger2
 
           # === COMPORTAMENTO ===
-          TARGET_NETWORK: "X"
-          BACKLOG_DAYS: "2"
-          MAX_PUBLICACOES_RODADA: "30"
-          PAUSA_ENTRE_POSTS: "2.5"
-          DRY_RUN: "false"
+          TARGET_NETWORK: X
+          BACKLOG_DAYS: 2
+          MAX_PUBLICACOES_RODADA: 30
+          PAUSA_ENTRE_POSTS: 2.5
+          X_POST_IN_ALL_ACCOUNTS: true
 
-          # === MODO THREAD + MULTI-CONTAS ===
-          THREAD_MODE: "true"
-          X_POST_IN_ALL_ACCOUNTS: "true"
-
-          # === LINKS TELEGRAM ===
-          TELEGRAM_CANAL_1: "https://t.me/portalsimonsportsdicasesportivas"
-          TELEGRAM_CANAL_2: "https://t.me/portalsimonsports"
+          # === CANAIS TELEGRAM ===
+          TELEGRAM_CANAL_1: https://t.me/portalsimonsportsdicasesportivas
+          TELEGRAM_CANAL_2: https://t.me/portalsimonsports
 
           # === IMAGEM NO X ===
-          POST_X_WITH_IMAGE: "true"
+          POST_X_WITH_IMAGE: true
 
-          # === NUNCA use keepalive no GitHub ===
-          ENABLE_KEEPALIVE: "false"
+          # === KEEPALIVE DESATIVADO (GitHub não precisa) ===
+          ENABLE_KEEPALIVE: false
+
         run: |
-          echo "🚀 Iniciando publicação automática no X (modo thread + imagem)"
+          echo "Iniciando publicação automática no X (com imagem 3D)"
           python bot.py
