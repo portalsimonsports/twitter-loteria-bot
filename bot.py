@@ -109,10 +109,18 @@ def _ts(): return _now().strftime("%Y-%m-%d %H:%M:%S")
 def _ts_br(): return _now().strftime("%d/%m/%Y %H:%M")
 
 def _parse_date_br(s: str):
+    """
+    Aceita 'dd/mm/aaaa' e ignora hora se vier junto (ex.: '31/10/2025 22:14').
+    Retorna date ou None.
+    """
     s = str(s or "").strip()
-    if not s: return None
+    if not s:
+        return None
+    m = re.match(r"(\d{2}/\d{2}/\d{4})", s)
+    if not m:
+        return None
     try:
-        return dt.datetime.strptime(s, "%d/%m/%Y").date()
+        return dt.datetime.strptime(m.group(1), "%d/%m/%Y").date()
     except ValueError:
         return None
 
@@ -477,35 +485,45 @@ def montar_corpo_unico(row) -> str:
     return texto
 
 # =========================
-# Coleta de linhas candidatas (com logs de diagnóstico)
+# Coleta de linhas candidatas (regra: data válida E status vazio) + logs
 # =========================
 def coletar_candidatos(ws):
     rows = ws.get_all_values()
     if len(rows) <= 1:
         _log("Planilha sem dados (apenas cabeçalho).")
         return []
+
     data = rows[1:]
     cand = []
     col_status = _status_col_for_target()
+
+    total = len(data)
+    vazias = 0
+    preenchidas = 0
+    fora_backlog = 0
+
     for rindex, row in enumerate(data, start=2):
-        motivo_skip = None
+        # status da rede-alvo (ex.: H para X)
+        status_val = row[col_status-1] if len(row) >= col_status else ""
+        tem_status = bool(str(status_val or "").strip())
 
-        # 1) já publicado?
-        if len(row) >= col_status and _not_empty(row[col_status-1]):
-            motivo_skip = f"status na col {col_status} preenchido ({row[col_status-1][:25]})"
+        # data dentro da janela
+        data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else ""
+        dentro = _within_backlog(data_br, BACKLOG_DAYS)
 
-        # 2) dentro do BACKLOG_DAYS?
-        if not motivo_skip:
-            data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else ""
-            if not _within_backlog(data_br, BACKLOG_DAYS):
-                motivo_skip = f"fora do backlog ({data_br})"
+        if dentro and not tem_status:
+            cand.append((rindex, row))
+            vazias += 1
+        else:
+            if tem_status:
+                preenchidas += 1
+                _log(f"SKIP L{rindex}: status col {col_status} preenchido ({str(status_val)[:25]})")
+            elif not dentro:
+                fora_backlog += 1
+                _log(f"SKIP L{rindex}: fora do backlog ({data_br})")
 
-        if motivo_skip:
-            _log(f"SKIP L{rindex}: {motivo_skip}")
-            continue
-
-        cand.append((rindex, row))
-    _log(f"Total candidatas após filtros: {len(cand)}")
+    _log(f"Resumo candidatos — total linhas: {total} | vazias (publicáveis): {vazias} | "
+         f"com status: {preenchidas} | fora do backlog: {fora_backlog}")
     return cand
 
 # =========================
