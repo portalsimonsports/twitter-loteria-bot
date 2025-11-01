@@ -50,8 +50,8 @@ CORES_LOTERIAS = {
     "dupla sena": "#000080",
     "federal": "#8B4513",
     "dia de sorte": "#FFD700",
-    "super sete": "#FF4500",   # Laranja
-    "loteca": "#006400",       # Verde
+    "super sete": "#FF4500",
+    "loteca": "#006400",
 }
 
 LOGOS_LOTERIAS = {
@@ -171,8 +171,11 @@ class XAccount:
 
 def build_x_accounts():
     accs = []
-    if all(TW1.values()): accs.append(XAccount("ACC1", **TW1))
-    if all(TW2.values()): accs.append(XAccount("ACC2", **TW2))
+    # >>> FIX 1: passar argumentos posicionais nos nomes esperados por XAccount
+    if all(TW1.values()):
+        accs.append(XAccount("ACC1", TW1["API_KEY"], TW1["API_SECRET"], TW1["ACCESS_TOKEN"], TW1["ACCESS_SECRET"]))
+    if all(TW2.values()):
+        accs.append(XAccount("ACC2", TW2["API_KEY"], TW2["API_SECRET"], TW2["ACCESS_TOKEN"], TW2["ACCESS_SECRET"]))
     if not accs:
         raise RuntimeError("Nenhuma conta X configurada. Verifique as chaves no .env")
     return accs
@@ -263,9 +266,10 @@ def gerar_imagem_3d(loteria, concurso, data_br, numeros_str, url_resultado):
             fill = tuple(int(c * intensidade) for c in cor_rgb) + (255,)
             d.ellipse((j, j, raio*2+30-j*2, raio*2+30-j*2), fill=fill)
 
-        # Sombra
+        # Sombra (blur da própria bola)
         sombra = bola.filter(ImageFilter.GaussianBlur(10))
-        img.paste((0,0,0,70), (x-8, y+12), sombra)
+        # >>> FIX 2: colar a sombra usando a própria imagem como máscara (sem cor RGBA)
+        img.paste(sombra, (x-8, y+12), sombra)
 
         # Colar bola
         img.paste(bola, (x-8, y-8), bola)
