@@ -13,6 +13,7 @@ import pytz
 import tweepy
 import requests
 import datetime as dt
+import unicodedata
 from urllib.parse import urlparse
 from threading import Thread
 from collections import defaultdict
@@ -152,6 +153,31 @@ def _within_backlog(date_br: str, days: int) -> bool:
     if not d: return True
     return (_now().date() - d).days <= days
 
+# ==== NOVOS UTILITÁRIOS ====
+def _norm_key_loteria(name: str) -> str:
+    """Normaliza variações: acentos, hifens, espaços e grafias (mega sena -> mega-sena)."""
+    n = unicodedata.normalize('NFD', str(name or '').strip().lower())
+    n = ''.join(c for c in n if unicodedata.category(c) != 'Mn')  # remove acento
+    n = n.replace('mega sena', 'mega-sena')
+    n = n.replace('lotofacil', 'lotofácil')  # sua chave usa acento
+    n = n.replace('duplasena', 'dupla sena')
+    n = n.replace('super sete', 'super sete')
+    n = n.replace('dia de sorte', 'dia de sorte')
+    n = re.sub(r'\s+', ' ', n).strip()
+    return n
+
+def _fetch_image_bytes(url: str, timeout=20):
+    """Baixa uma imagem (PNG/JPG) e retorna bytes, ou None se falhar."""
+    try:
+        if not url: return None
+        r = requests.get(url, timeout=timeout)
+        r.raise_for_status()
+        if r.content and len(r.content) > 1000:
+            return r.content
+    except Exception as e:
+        _log(f"[fetch_image] falha: {e}")
+    return None
+
 # =========================
 # Google Sheets
 # =========================
@@ -256,7 +282,7 @@ def x_is_dup(acc: XAccount, text: str) -> bool:
 # =========================
 # Inferência de LOGO a partir da URL (coluna E)
 # =========================
-def get_logo_from_url(url: str) -> str | None:
+def get_logo_from_url(url: str):
     try:
         if not url: return None
         p = urlparse(str(url))
@@ -289,15 +315,15 @@ def _load_font(size, bold=False):
 # Imagem 3D
 # =========================
 def gerar_imagem_3d(loteria, concurso, data_br, numeros_str, url_resultado, logo_override=None):
-    loteria_lower = (loteria or "").lower().strip()
-    cor_hex = CORES_LOTERIAS.get(loteria_lower, "#4B0082")
+    key = _norm_key_loteria(loteria)
+    cor_hex = CORES_LOTERIAS.get(key, "#4B0082")
     cor_rgb = tuple(int(cor_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
 
     logo_url = (str(logo_override).strip() or None) if logo_override else None
     if not logo_url:
-        logo_url = get_logo_from_url(url_resultado) or LOGOS_LOTERIAS.get(loteria_lower)
+        logo_url = get_logo_from_url(url_resultado) or LOGOS_LOTERIAS.get(key)
 
-    max_numeros = NUMEROS_POR_LOTERIA.get(loteria_lower, 6)
+    max_numeros = NUMEROS_POR_LOTERIA.get(key, 6)
     numeros = [n.strip() for n in str(numeros_str).replace(',', ' ').split() if n.strip()]
     if not numeros: numeros = ["?"] * max_numeros
     numeros = numeros[:max_numeros]
@@ -424,19 +450,32 @@ def coletar_candidatos_para(ws, rede: str):
 # =========================
 # --- X ---
 def x_upload_media_if_any(acc: XAccount, row):
-    if not POST_X_WITH_IMAGE or DRY_RUN: return None
+    if not POST_X_WITH_IMAGE or DRY_RUN:
+        return None
+
     loteria = row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "Loteria"
     concurso = row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000"
     data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y")
     numeros = row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else ""
     url_res = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
+
+    # 1) Se já houver URL IMAGEM (imagem pronta), usa ela
+    if _safe_len(row, COL_URL_Imagem):
+        url_img = str(row[COL_URL_Imagem-1] or "").strip()
+        if url_img:
+            pic = _fetch_image_bytes(url_img)
+            if pic:
+                buf = io.BytesIO(pic)
+                media = acc.api_v1.media_upload(filename="resultado.png", file=buf)
+                return [media.media_id_string]
+
+    # 2) Se não houver imagem pronta, gera 3D (com logo inferido pela URL)
     logo_override = None
-    if _safe_len(row, COL_URL_Imagem) and str(row[COL_URL_Imagem-1]).strip():
-        logo_override = str(row[COL_URL_Imagem-1]).strip()
-    elif _safe_len(row, COL_Imagem) and str(row[COL_Imagem-1]).strip():
+    if _safe_len(row, COL_Imagem) and str(row[COL_Imagem-1]).strip():
         logo_override = str(row[COL_Imagem-1]).strip()
     else:
         logo_override = get_logo_from_url(url_res)
+
     try:
         buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_res, logo_override=logo_override)
         with buf:
@@ -500,7 +539,7 @@ def publicar_em_x(ws, candidatos):
     return publicados
 
 # --- Facebook ---
-def _fb_post_text(page_id, page_token, message: str, link: str | None = None):
+def _fb_post_text(page_id, page_token, message: str, link: str = None):
     url = f"https://graph.facebook.com/v19.0/{page_id}/feed"
     data = {"message": message, "access_token": page_token}
     if link: data["link"] = link
@@ -525,10 +564,16 @@ def publicar_em_facebook(ws, candidatos):
         concurso = row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000"
         data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y")
         numeros = row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else ""
+
+        # Tenta usar imagem pronta (URL IMAGEM); se não, gera 3D
+        img_bytes = None
+        if _safe_len(row, COL_URL_Imagem):
+            url_img = str(row[COL_URL_Imagem-1] or "").strip()
+            if url_img:
+                img_bytes = _fetch_image_bytes(url_img)
+
         logo_override = None
-        if _safe_len(row, COL_URL_Imagem) and str(row[COL_URL_Imagem-1]).strip():
-            logo_override = str(row[COL_URL_Imagem-1]).strip()
-        elif _safe_len(row, COL_Imagem) and str(row[COL_Imagem-1]).strip():
+        if _safe_len(row, COL_Imagem) and str(row[COL_Imagem-1]).strip():
             logo_override = str(row[COL_Imagem-1]).strip()
         else:
             logo_override = get_logo_from_url(url_post)
@@ -540,8 +585,10 @@ def publicar_em_facebook(ws, candidatos):
                     _log(f"[Facebook][{pid}] DRY-RUN: {msg[:60]}..."); ok = True
                 else:
                     if POST_FB_WITH_IMAGE:
-                        buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_post, logo_override=logo_override)
-                        fb_id = _fb_post_photo(pid, ptoken, msg, buf.getvalue())
+                        if not img_bytes:
+                            buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_post, logo_override=logo_override)
+                            img_bytes = buf.getvalue()
+                        fb_id = _fb_post_photo(pid, ptoken, msg, img_bytes)
                     else:
                         fb_id = _fb_post_text(pid, ptoken, msg, link=url_post or None)
                     _log(f"[Facebook][{pid}] OK → {fb_id}"); ok = True
@@ -581,10 +628,16 @@ def publicar_em_telegram(ws, candidatos):
         concurso = row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000"
         data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y")
         numeros = row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else ""
+
+        # Preferir URL IMAGEM
+        img_bytes = None
+        if _safe_len(row, COL_URL_Imagem):
+            url_img = str(row[COL_URL_Imagem-1] or "").strip()
+            if url_img:
+                img_bytes = _fetch_image_bytes(url_img)
+
         logo_override = None
-        if _safe_len(row, COL_URL_Imagem) and str(row[COL_URL_Imagem-1]).strip():
-            logo_override = str(row[COL_URL_Imagem-1]).strip()
-        elif _safe_len(row, COL_Imagem) and str(row[COL_Imagem-1]).strip():
+        if _safe_len(row, COL_Imagem) and str(row[COL_Imagem-1]).strip():
             logo_override = str(row[COL_Imagem-1]).strip()
         else:
             logo_override = get_logo_from_url(url_post)
@@ -596,8 +649,10 @@ def publicar_em_telegram(ws, candidatos):
                     _log(f"[Telegram][{chat_id}] DRY-RUN: {msg[:60]}..."); ok = True
                 else:
                     if POST_TG_WITH_IMAGE:
-                        buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_post, logo_override=logo_override)
-                        msg_id = _tg_send_photo(TG_BOT_TOKEN, chat_id, msg, buf.getvalue())
+                        if not img_bytes:
+                            buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_post, logo_override=logo_override)
+                            img_bytes = buf.getvalue()
+                        msg_id = _tg_send_photo(TG_BOT_TOKEN, chat_id, msg, img_bytes)
                     else:
                         if url_post: msg = f"{msg}\n{url_post}"
                         msg_id = _tg_send_text(TG_BOT_TOKEN, chat_id, msg)
@@ -635,7 +690,18 @@ def publicar_em_discord(ws, candidatos):
         concurso = row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000"
         data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y")
         numeros = row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else ""
-        logo_override = get_logo_from_url(url_post)
+
+        # Preferir URL IMAGEM
+        img_bytes = None
+        if _safe_len(row, COL_URL_Imagem):
+            url_img = str(row[COL_URL_Imagem-1] or "").strip()
+            if url_img:
+                img_bytes = _fetch_image_bytes(url_img)
+        if not img_bytes:
+            logo_override = get_logo_from_url(url_post)
+            buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_post, logo_override=logo_override)
+            img_bytes = buf.getvalue()
+
         ok_any = False
         try:
             if DRY_RUN:
@@ -643,9 +709,8 @@ def publicar_em_discord(ws, candidatos):
                     _log(f"[Discord] DRY-RUN → {wh[-18:]}: {msg[:60]}...")
                 ok_any = True
             else:
-                buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_post, logo_override=logo_override)
                 for wh in DISCORD_WEBHOOKS:
-                    _discord_send(wh, content=f"{msg}\n{url_post}" if url_post else msg, image_bytes=buf.getvalue())
+                    _discord_send(wh, content=f"{msg}\n{url_post}" if url_post else msg, image_bytes=img_bytes)
                     _log(f"[Discord] OK → {wh[-18:]}")
                 ok_any = True
         except Exception as e:
@@ -689,18 +754,24 @@ def publicar_em_pinterest(ws, candidatos):
         url_post = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
         title = f"{loteria} — Concurso {concurso}"
         desc = montar_texto_base(row)
-        logo_override = get_logo_from_url(url_post)
+
+        # Preferir URL IMAGEM
+        img_bytes = None
+        if POST_PINTEREST_WITH_IMAGE:
+            if _safe_len(row, COL_URL_Imagem):
+                url_img = str(row[COL_URL_Imagem-1] or "").strip()
+                if url_img:
+                    img_bytes = _fetch_image_bytes(url_img)
+            if not img_bytes:
+                logo_override = get_logo_from_url(url_post)
+                buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_post, logo_override=logo_override)
+                img_bytes = buf.getvalue()
+            pin_id = _pinterest_create_pin(PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, title, desc, url_post, image_bytes=img_bytes)
+        else:
+            pin_id = _pinterest_create_pin(PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, title, desc, url_post, image_url=url_post or None)
 
         try:
-            if DRY_RUN:
-                _log(f"[Pinterest] DRY-RUN: {title}"); ok = True
-            else:
-                if POST_PINTEREST_WITH_IMAGE:
-                    buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_post, logo_override=logo_override)
-                    pin_id = _pinterest_create_pin(PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, title, desc, url_post, image_bytes=buf.getvalue())
-                else:
-                    pin_id = _pinterest_create_pin(PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, title, desc, url_post, image_url=url_post or None)
-                _log(f"[Pinterest] OK → {pin_id}"); ok = True
+            _log(f"[Pinterest] OK → {pin_id}"); ok = True
         except Exception as e:
             _log(f"[Pinterest] erro: {e}"); ok = False
 
