@@ -39,7 +39,7 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Verificar secrets obrigatórios
+      - name: Verificar secrets obrigatórios (Google + X conta 1)
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           TWITTER_API_KEY_1:   ${{ secrets.TWITTER_API_KEY_1 }}
@@ -53,18 +53,10 @@ jobs:
           miss = [k for k in req if not os.getenv(k)]
           if miss:
               print("Faltam variáveis:", miss); sys.exit(1)
-          # valida JSON do service account
-          try: json.loads(os.environ["GOOGLE_SERVICE_JSON"]); print("Secrets OK")
+          try: json.loads(os.environ["GOOGLE_SERVICE_JSON"])
           except Exception as e: print("GOOGLE_SERVICE_JSON inválido:", e); sys.exit(1)
+          print("Secrets OK")
           PY
-
-      - name: Gerar imagens (a partir da planilha)
-        env:
-          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
-          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
-          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
-        run: |
-          python -m app.main
 
       - name: Executar publicação (X + demais redes configuradas)
         env:
@@ -94,7 +86,7 @@ jobs:
           PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
           PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
 
-          # === Comportamento do bot ===
+          # === Comportamento do bot (mantém imagem gerada dentro do bot.py) ===
           TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS || 'X' }}   # "X" ou "X,FACEBOOK,TELEGRAM"
           BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS || '7' }}
           MAX_PUBLICACOES_RODADA: ${{ vars.MAX_PUBLICACOES_RODADA || '30' }}
@@ -110,4 +102,3 @@ jobs:
         run: |
           echo "Iniciando publicação automática…"
           python bot.py
-```0
