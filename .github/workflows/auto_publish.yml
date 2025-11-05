@@ -11,13 +11,11 @@ concurrency:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
-  build-pages:
+  run:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout do repositório
@@ -41,7 +39,7 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Verificar secrets obrigatórios (Google + X conta 1)
+      - name: Verificar secrets obrigatórios
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           TWITTER_API_KEY_1:   ${{ secrets.TWITTER_API_KEY_1 }}
@@ -50,102 +48,66 @@ jobs:
           TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
         run: |
           python - <<'PY'
-          import os, sys
+          import os, sys, json
           req = ["GOOGLE_SERVICE_JSON","TWITTER_API_KEY_1","TWITTER_API_SECRET_1","TWITTER_ACCESS_TOKEN_1","TWITTER_ACCESS_SECRET_1"]
           miss = [k for k in req if not os.getenv(k)]
           if miss:
-              print("Faltam variáveis:", miss)
-              sys.exit(1)
-          print("Secrets OK")
+              print("Faltam variáveis:", miss); sys.exit(1)
+          # valida JSON do service account
+          try: json.loads(os.environ["GOOGLE_SERVICE_JSON"]); print("Secrets OK")
+          except Exception as e: print("GOOGLE_SERVICE_JSON inválido:", e); sys.exit(1)
           PY
 
-      - name: Gerar imagens e escrever URL IMAGEM (coluna F)
+      - name: Gerar imagens (a partir da planilha)
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
-          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID }}
-          SHEET_TAB: ${{ vars.SHEET_TAB }}
-          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
-          BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
         run: |
-          mkdir -p public/img
-          python app/main.py
+          python -m app.main
 
-      - name: Upload artifact (GitHub Pages)
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-
-  deploy-pages:
-    needs: build-pages
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy para GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
-  run-bot:
-    needs: deploy-pages
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout do repositório
-        uses: actions/checkout@v4
-
-      - name: Configurar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Instalar dependências
-        run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install --no-cache-dir -r requirements.txt
-
-      - name: Executar o bot (publica nas redes)
+      - name: Executar publicação (X + demais redes configuradas)
         env:
-          # === OBRIGATÓRIOS ===
+          # === Google ===
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
 
-          # === CONTAS X (TWITTER) ===
+          # === X (Twitter) — Conta 1 (obrigatória)
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
           TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
 
+          # === X (Twitter) — Conta 2 (opcional)
           TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
           TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
           TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
           TWITTER_ACCESS_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
 
-          # === PLANILHA ===
-          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID }}
-          SHEET_TAB: ${{ vars.SHEET_TAB }}
-
-          # === COMPORTAMENTO ===
-          TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS }}
-          BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS }}
-          MAX_PUBLICACOES_RODADA: ${{ vars.MAX_PUBLICACOES_RODADA }}
-          PAUSA_ENTRE_POSTS: ${{ vars.PAUSA_ENTRE_POSTS }}
-          X_POST_IN_ALL_ACCOUNTS: ${{ vars.X_POST_IN_ALL_ACCOUNTS }}
-          POST_X_WITH_IMAGE: ${{ vars.POST_X_WITH_IMAGE }}
-          DRY_RUN: ${{ vars.DRY_RUN }}
-
-          # === OUTRAS REDES (opcionais via Secrets/Vars)
+          # === Outras redes (opcionais)
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_IDS: ${{ vars.TG_CHAT_IDS }}
-          DISCORD_WEBHOOKS: ${{ secrets.DISCORD_WEBHOOKS }}
+          TG_CHAT_IDS: ${{ secrets.TG_CHAT_IDS }}           # ex: -100111,-100222
+          DISCORD_WEBHOOKS: ${{ secrets.DISCORD_WEBHOOKS }} # ex: url1,url2
+          FB_PAGE_IDS: ${{ secrets.FB_PAGE_IDS }}           # ex: 123,456
+          FB_PAGE_TOKENS: ${{ secrets.FB_PAGE_TOKENS }}     # ex: token1,token2
           PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
-          PINTEREST_BOARD_ID: ${{ vars.PINTEREST_BOARD_ID }}
-          FB_PAGE_IDS: ${{ vars.FB_PAGE_IDS }}
-          FB_PAGE_TOKENS: ${{ secrets.FB_PAGE_TOKENS }}
+          PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
 
+          # === Comportamento do bot ===
+          TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS || 'X' }}   # "X" ou "X,FACEBOOK,TELEGRAM"
+          BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS || '7' }}
+          MAX_PUBLICACOES_RODADA: ${{ vars.MAX_PUBLICACOES_RODADA || '30' }}
+          PAUSA_ENTRE_POSTS: ${{ vars.PAUSA_ENTRE_POSTS || '2.5' }}
+          POST_X_WITH_IMAGE: ${{ vars.POST_X_WITH_IMAGE || 'true' }}
+          X_POST_IN_ALL_ACCOUNTS: ${{ vars.X_POST_IN_ALL_ACCOUNTS || 'true' }}
+          POST_TG_WITH_IMAGE: ${{ vars.POST_TG_WITH_IMAGE || 'true' }}
+          POST_PINTEREST_WITH_IMAGE: ${{ vars.POST_PINTEREST_WITH_IMAGE || 'true' }}
+          POST_FB_WITH_IMAGE: ${{ vars.POST_FB_WITH_IMAGE || 'true' }}
+
+          # === Keepalive desativado no GitHub ===
+          ENABLE_KEEPALIVE: "false"
         run: |
-          echo "Iniciando publicação automática (pós-deploy Pages) ..."
+          echo "Iniciando publicação automática…"
           python bot.py
+```0
