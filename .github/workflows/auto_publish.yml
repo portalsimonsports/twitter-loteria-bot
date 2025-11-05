@@ -9,8 +9,11 @@ concurrency:
   group: publish-loterias
   cancel-in-progress: true
 
+# ↑ Mantive seu fluxo. Abaixo só acrescentei perms para Pages (caso queira publicar imagens).
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 jobs:
   run:
@@ -38,6 +41,42 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
+
+      #######################################################################
+      # NOVO: Gerar imagens (planilha → public/images) no padrão aprovado   #
+      #######################################################################
+      - name: Gerar imagens a partir da planilha
+        env:
+          # compat: seu secret atual
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: 16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI
+          SHEET_TAB: ImportadosBlogger2
+          # opcional: informe o URL do Pages para gravar na coluna "URL IMAGEM"
+          PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          sys.path.append('app')
+          # compat: o gerador usa GOOGLE_SERVICE_ACCOUNT_JSON; mapeia do seu secret
+          if not os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") and os.getenv("GOOGLE_SERVICE_JSON"):
+              os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"] = os.getenv("GOOGLE_SERVICE_JSON")
+          from main import main
+          main()
+          PY
+
+      #######################################################################
+      # OPCIONAL: Publicar a pasta public/ no GitHub Pages (imagens online) #
+      #######################################################################
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./public
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      # ================== SEU FLUXO ORIGINAL (permanece igual) ==================
 
       - name: Verificar secrets obrigatórios
         env:
