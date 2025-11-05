@@ -9,14 +9,13 @@ concurrency:
   group: publish-loterias
   cancel-in-progress: true
 
-# ↑ Mantive seu fluxo. Abaixo só acrescentei perms para Pages (caso queira publicar imagens).
 permissions:
   contents: read
   pages: write
   id-token: write
 
 jobs:
-  run:
+  build-pages:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -42,43 +41,7 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      #######################################################################
-      # NOVO: Gerar imagens (planilha → public/images) no padrão aprovado   #
-      #######################################################################
-      - name: Gerar imagens a partir da planilha
-        env:
-          # compat: seu secret atual
-          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
-          GOOGLE_SHEET_ID: 16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI
-          SHEET_TAB: ImportadosBlogger2
-          # opcional: informe o URL do Pages para gravar na coluna "URL IMAGEM"
-          PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
-        run: |
-          python - <<'PY'
-          import os, sys
-          sys.path.append('app')
-          # compat: o gerador usa GOOGLE_SERVICE_ACCOUNT_JSON; mapeia do seu secret
-          if not os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") and os.getenv("GOOGLE_SERVICE_JSON"):
-              os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"] = os.getenv("GOOGLE_SERVICE_JSON")
-          from main import main
-          main()
-          PY
-
-      #######################################################################
-      # OPCIONAL: Publicar a pasta public/ no GitHub Pages (imagens online) #
-      #######################################################################
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./public
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
-      # ================== SEU FLUXO ORIGINAL (permanece igual) ==================
-
-      - name: Verificar secrets obrigatórios
+      - name: Verificar secrets obrigatórios (Google + X conta 1)
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           TWITTER_API_KEY_1:   ${{ secrets.TWITTER_API_KEY_1 }}
@@ -96,7 +59,56 @@ jobs:
           print("Secrets OK")
           PY
 
-      - name: Executar o bot (ciclo único)
+      - name: Gerar imagens e escrever URL IMAGEM (coluna F)
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID }}
+          SHEET_TAB: ${{ vars.SHEET_TAB }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS }}
+        run: |
+          mkdir -p public/img
+          python app/main.py
+
+      - name: Upload artifact (GitHub Pages)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy-pages:
+    needs: build-pages
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy para GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  run-bot:
+    needs: deploy-pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Executar o bot (publica nas redes)
         env:
           # === OBRIGATÓRIOS ===
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
@@ -113,26 +125,27 @@ jobs:
           TWITTER_ACCESS_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
 
           # === PLANILHA ===
-          GOOGLE_SHEET_ID: 16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI
-          SHEET_TAB: ImportadosBlogger2
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID }}
+          SHEET_TAB: ${{ vars.SHEET_TAB }}
 
           # === COMPORTAMENTO ===
-          TARGET_NETWORK: X
-          BACKLOG_DAYS: 2
-          MAX_PUBLICACOES_RODADA: 30
-          PAUSA_ENTRE_POSTS: 2.5
-          X_POST_IN_ALL_ACCOUNTS: true
+          TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS }}
+          BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS }}
+          MAX_PUBLICACOES_RODADA: ${{ vars.MAX_PUBLICACOES_RODADA }}
+          PAUSA_ENTRE_POSTS: ${{ vars.PAUSA_ENTRE_POSTS }}
+          X_POST_IN_ALL_ACCOUNTS: ${{ vars.X_POST_IN_ALL_ACCOUNTS }}
+          POST_X_WITH_IMAGE: ${{ vars.POST_X_WITH_IMAGE }}
+          DRY_RUN: ${{ vars.DRY_RUN }}
 
-          # === CANAIS TELEGRAM ===
-          TELEGRAM_CANAL_1: https://t.me/portalsimonsportsdicasesportivas
-          TELEGRAM_CANAL_2: https://t.me/portalsimonsports
-
-          # === IMAGEM NO X ===
-          POST_X_WITH_IMAGE: true
-
-          # === KEEPALIVE DESATIVADO (GitHub não precisa) ===
-          ENABLE_KEEPALIVE: false
+          # === OUTRAS REDES (opcionais via Secrets/Vars)
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_IDS: ${{ vars.TG_CHAT_IDS }}
+          DISCORD_WEBHOOKS: ${{ secrets.DISCORD_WEBHOOKS }}
+          PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
+          PINTEREST_BOARD_ID: ${{ vars.PINTEREST_BOARD_ID }}
+          FB_PAGE_IDS: ${{ vars.FB_PAGE_IDS }}
+          FB_PAGE_TOKENS: ${{ secrets.FB_PAGE_TOKENS }}
 
         run: |
-          echo "Iniciando publicação automática no X (com imagem 3D)"
+          echo "Iniciando publicação automática (pós-deploy Pages) ..."
           python bot.py
