@@ -86,7 +86,7 @@ jobs:
           PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
           PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
 
-          # === Comportamento do bot (mantém imagem gerada dentro do bot.py) ===
+          # === Comportamento do bot (imagem gerada dentro do bot.py) ===
           TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS || 'X' }}   # "X" ou "X,FACEBOOK,TELEGRAM"
           BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS || '7' }}
           MAX_PUBLICACOES_RODADA: ${{ vars.MAX_PUBLICACOES_RODADA || '30' }}
