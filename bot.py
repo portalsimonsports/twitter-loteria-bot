@@ -1,6 +1,6 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-01 — multi-redes + multi-contas + imagem 3D + status por rede + backlog por data
-# Planilha: ImportadosBlogger2  |  Colunas principais: A=Loteria B=Concurso C=Data D=Números E=URL
+# Rev: 2025-11-05 — usa app/imaging.py como fonte única da imagem 3D + multi-redes + backlog por data
+# Planilha: ImportadosBlogger2 | Colunas: A=Loteria B=Concurso C=Data D=Números E=URL
 # Status por rede (padrões): H=8 (X), M=13 (Discord), N=14 (Pinterest), O=15 (Facebook), J=10 (Telegram)
 
 import os
@@ -13,8 +13,6 @@ import pytz
 import tweepy
 import requests
 import datetime as dt
-import unicodedata
-from urllib.parse import urlparse
 from threading import Thread
 from collections import defaultdict
 from dotenv import load_dotenv
@@ -23,8 +21,8 @@ from dotenv import load_dotenv
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Pillow
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+# === Imagem oficial (padrão aprovado) ===
+from app.imaging import gerar_imagem_loteria
 
 # =========================
 # CONFIG / ENV
@@ -88,42 +86,14 @@ BOT_ORIGEM = _detect_origem()
 # Planilha — colunas (1-based)
 # =========================
 COL_Loteria, COL_Concurso, COL_Data, COL_Numeros, COL_URL = 1, 2, 3, 4, 5
-COL_URL_Imagem, COL_Imagem = 6, 7  # opcionais
+COL_URL_Imagem, COL_Imagem = 6, 7  # opcionais (não obrigatórios)
 
 COL_STATUS_REDES = {
-    "X": COL_STATUS_X,               # H
-    "FACEBOOK": COL_STATUS_FACEBOOK, # O
-    "TELEGRAM": COL_STATUS_TELEGRAM, # J
-    "DISCORD": COL_STATUS_DISCORD,   # M
-    "PINTEREST": COL_STATUS_PINTEREST, # N
-}
-
-# =========================
-# Dicionários visuais
-# =========================
-CORES_LOTERIAS = {
-    "mega-sena": "#006400", "quina": "#4B0082", "lotofácil": "#DD4A91", "lotomania": "#FF8C00",
-    "timemania": "#00A650", "dupla sena": "#8B0000", "federal": "#8B4513", "dia de sorte": "#FFD700",
-    "super sete": "#FF4500", "loteca": "#006400",
-}
-
-LOGOS_LOTERIAS = {
-    "mega-sena": "https://loterias.caixa.gov.br/Site/Imagens/loterias/megasena.png",
-    "quina": "https://loterias.caixa.gov.br/Site/Imagens/loterias/quina.png",
-    "lotofácil": "https://loterias.caixa.gov.br/Site/Imagens/loterias/lotofacil.png",
-    "lotomania": "https://loterias.caixa.gov.br/Site/Imagens/loterias/lotomania.png",
-    "timemania": "https://loterias.caixa.gov.br/Site/Imagens/loterias/timemania.png",
-    "dupla sena": "https://loterias.caixa.gov.br/Site/Imagens/loterias/duplasena.png",
-    "federal": "https://loterias.caixa.gov.br/Site/Imagens/loterias/federal.png",
-    "dia de sorte": "https://loterias.caixa.gov.br/Site/Imagens/loterias/diadesorte.png",
-    "super sete": "https://loterias.caixa.gov.br/Site/Imagens/loterias/supersete.png",
-    "loteca": "https://loterias.caixa.gov.br/Site/Imagens/loterias/loteca.png",
-}
-
-NUMEROS_POR_LOTERIA = {
-    "mega-sena": 6, "quina": 5, "lotofácil": 15, "lotomania": 20,
-    "timemania": 10, "dupla sena": 6, "federal": 5, "dia de sorte": 7,
-    "super sete": 7, "loteca": 14,
+    "X": COL_STATUS_X,                    # H
+    "FACEBOOK": COL_STATUS_FACEBOOK,      # O
+    "TELEGRAM": COL_STATUS_TELEGRAM,      # J
+    "DISCORD": COL_STATUS_DISCORD,        # M
+    "PINTEREST": COL_STATUS_PINTEREST,    # N
 }
 
 # =========================
@@ -152,31 +122,6 @@ def _within_backlog(date_br: str, days: int) -> bool:
     d = _parse_date_br(date_br)
     if not d: return True
     return (_now().date() - d).days <= days
-
-# ==== NOVOS UTILITÁRIOS ====
-def _norm_key_loteria(name: str) -> str:
-    """Normaliza variações: acentos, hifens, espaços e grafias (mega sena -> mega-sena)."""
-    n = unicodedata.normalize('NFD', str(name or '').strip().lower())
-    n = ''.join(c for c in n if unicodedata.category(c) != 'Mn')  # remove acento
-    n = n.replace('mega sena', 'mega-sena')
-    n = n.replace('lotofacil', 'lotofácil')  # sua chave usa acento
-    n = n.replace('duplasena', 'dupla sena')
-    n = n.replace('super sete', 'super sete')
-    n = n.replace('dia de sorte', 'dia de sorte')
-    n = re.sub(r'\s+', ' ', n).strip()
-    return n
-
-def _fetch_image_bytes(url: str, timeout=20):
-    """Baixa uma imagem (PNG/JPG) e retorna bytes, ou None se falhar."""
-    try:
-        if not url: return None
-        r = requests.get(url, timeout=timeout)
-        r.raise_for_status()
-        if r.content and len(r.content) > 1000:
-            return r.content
-    except Exception as e:
-        _log(f"[fetch_image] falha: {e}")
-    return None
 
 # =========================
 # Google Sheets
@@ -280,113 +225,16 @@ def x_is_dup(acc: XAccount, text: str) -> bool:
     return (t in _recent_tweets_cache[acc.label]) or (t in _postados_nesta_execucao[acc.label])
 
 # =========================
-# Inferência de LOGO a partir da URL (coluna E)
+# IMAGEM OFICIAL (usa app/imaging.py)
 # =========================
-def get_logo_from_url(url: str):
-    try:
-        if not url: return None
-        p = urlparse(str(url))
-        path = (p.path or "").lower()
-        for slug in LOGOS_LOTERIAS:
-            if slug.replace(' ', '-') in path:
-                return LOGOS_LOTERIAS.get(slug)
-        last = path.rstrip('/').split('/')[-1]
-        m = re.match(r'([a-z0-9\-]+)', last)
-        if m:
-            candidate = re.sub(r'-\d+$', '', m.group(1))
-            for slug in LOGOS_LOTERIAS:
-                if slug.replace(' ', '-').lower() == candidate:
-                    return LOGOS_LOTERIAS.get(slug)
-        return None
-    except Exception:
-        return None
-
-# =========================
-# Fontes (fallback)
-# =========================
-def _load_font(size, bold=False):
-    try:
-        path = "arialbd.ttf" if bold else "arial.ttf"
-        return ImageFont.truetype(path, size)
-    except Exception:
-        return ImageFont.load_default()
-
-# =========================
-# Imagem 3D
-# =========================
-def gerar_imagem_3d(loteria, concurso, data_br, numeros_str, url_resultado, logo_override=None):
-    key = _norm_key_loteria(loteria)
-    cor_hex = CORES_LOTERIAS.get(key, "#4B0082")
-    cor_rgb = tuple(int(cor_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-
-    logo_url = (str(logo_override).strip() or None) if logo_override else None
-    if not logo_url:
-        logo_url = get_logo_from_url(url_resultado) or LOGOS_LOTERIAS.get(key)
-
-    max_numeros = NUMEROS_POR_LOTERIA.get(key, 6)
-    numeros = [n.strip() for n in str(numeros_str).replace(',', ' ').split() if n.strip()]
-    if not numeros: numeros = ["?"] * max_numeros
-    numeros = numeros[:max_numeros]
-
-    largura, altura = 880, 900
-    img = Image.new('RGB', (largura, altura), color='#ffffff')
-    draw = ImageDraw.Draw(img)
-    font_titulo = _load_font(56, bold=True)
-    font_sub = _load_font(36, bold=False)
-    y = 40
-
-    titulo = f"{loteria} — Concurso {concurso}"
-    draw.text((60, y), titulo, fill='#0f172a', font=font_titulo); y += 80
-    draw.text((60, y), f"{data_br}", fill='#475569', font=font_sub); y += 70
-
-    if logo_url:
-        try:
-            r = requests.get(logo_url, timeout=10); r.raise_for_status()
-            logo_img = Image.open(io.BytesIO(r.content)).convert("RGBA")
-            ratio = logo_img.width / logo_img.height
-            h = min(150, int(largura * 0.3)); w = int(h * ratio)
-            if w > largura - 120: w = largura - 120; h = int(w / ratio)
-            logo_img = logo_img.resize((w, h), Image.Resampling.LANCZOS)
-            x_logo = (largura - w) // 2
-            img.paste(logo_img, (x_logo, y), logo_img); y += h + 40
-        except Exception as e:
-            _log(f"Logo falhou ({loteria}): {e}"); y += 20
-    else:
-        y += 20
-
-    raio = 64; espaco = 110
-    x_inicio = (largura - (len(numeros) * espaco - espaco//2)) // 2
-    for i, num in enumerate(numeros):
-        x = x_inicio + i * espaco
-        bola = Image.new('RGBA', (raio*2+36, raio*2+36), (0,0,0,0))
-        d = ImageDraw.Draw(bola)
-        for j in range(raio):
-            k = 1.0 - (j/raio)*0.6
-            fill = tuple(int(c*k) for c in cor_rgb) + (255,)
-            d.ellipse((j, j, raio*2+36 - j*2, raio*2+36 - j*2), fill=fill)
-        brilho = Image.new('RGBA', (raio*2+36, raio*2+36), (0,0,0,0))
-        ImageDraw.Draw(brilho).ellipse((24, 18, 58, 52), fill=(255,255,255,170))
-        bola = Image.alpha_composite(bola, brilho)
-        sombra = bola.filter(ImageFilter.GaussianBlur(12))
-        img.paste((0,0,0,60), (x-12, y+18), sombra)
-        img.paste(bola, (x-12, y-12), bola)
-        font_size = 50 if len(num) <= 2 else 42
-        font_num = _load_font(font_size, bold=True)
-        txt_img = Image.new('RGBA', (160,160), (0,0,0,0))
-        td = ImageDraw.Draw(txt_img)
-        td.text((80, 58), str(num), font=font_num, fill=(0,0,0,210), anchor="mm")
-        td.text((78, 56), str(num), font=font_num, fill=(255,255,255,255), anchor="mm")
-        img.paste(txt_img, (x-68, y-68), txt_img)
-
-    y += 170
-    if url_resultado:
-        draw.text((60, y), "Resultado completo:", fill='#0f172a', font=font_sub); y += 42
-        draw.text((60, y), str(url_resultado), fill='#0ea5e9', font=font_sub); y += 60
-
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG", optimize=True)
-    buffer.seek(0)
-    return buffer
+def _build_image_from_row(row):
+    """Gera a imagem 3D no padrão aprovado (app/imaging.py). Retorna BytesIO."""
+    loteria = (row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "Loteria")
+    concurso = (row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000")
+    data_br = (row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y"))
+    numeros = (row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else "")
+    url_res = (row[COL_URL-1] if _safe_len(row, COL_URL) else "")
+    return gerar_imagem_loteria(str(loteria), str(concurso), str(data_br), str(numeros), str(url_res))
 
 # =========================
 # Texto (tweet/post/caption)
@@ -450,36 +298,10 @@ def coletar_candidatos_para(ws, rede: str):
 # =========================
 # --- X ---
 def x_upload_media_if_any(acc: XAccount, row):
-    if not POST_X_WITH_IMAGE or DRY_RUN:
-        return None
-
-    loteria = row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "Loteria"
-    concurso = row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000"
-    data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y")
-    numeros = row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else ""
-    url_res = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
-
-    # 1) Se já houver URL IMAGEM (imagem pronta), usa ela
-    if _safe_len(row, COL_URL_Imagem):
-        url_img = str(row[COL_URL_Imagem-1] or "").strip()
-        if url_img:
-            pic = _fetch_image_bytes(url_img)
-            if pic:
-                buf = io.BytesIO(pic)
-                media = acc.api_v1.media_upload(filename="resultado.png", file=buf)
-                return [media.media_id_string]
-
-    # 2) Se não houver imagem pronta, gera 3D (com logo inferido pela URL)
-    logo_override = None
-    if _safe_len(row, COL_Imagem) and str(row[COL_Imagem-1]).strip():
-        logo_override = str(row[COL_Imagem-1]).strip()
-    else:
-        logo_override = get_logo_from_url(url_res)
-
+    if not POST_X_WITH_IMAGE or DRY_RUN: return None
     try:
-        buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_res, logo_override=logo_override)
-        with buf:
-            media = acc.api_v1.media_upload(filename="resultado.png", file=buf)
+        buf = _build_image_from_row(row)  # padrão aprovado
+        media = acc.api_v1.media_upload(filename="resultado.png", file=buf)
         return [media.media_id_string]
     except Exception as e:
         _log(f"[{acc.handle}] Erro imagem: {e}")
@@ -539,7 +361,7 @@ def publicar_em_x(ws, candidatos):
     return publicados
 
 # --- Facebook ---
-def _fb_post_text(page_id, page_token, message: str, link: str = None):
+def _fb_post_text(page_id, page_token, message: str, link: str | None = None):
     url = f"https://graph.facebook.com/v19.0/{page_id}/feed"
     data = {"message": message, "access_token": page_token}
     if link: data["link"] = link
@@ -559,25 +381,6 @@ def publicar_em_facebook(ws, candidatos):
     publicados = 0; limite = min(MAX_PUBLICACOES_RODADA, len(candidatos))
     for rownum, row in candidatos[:limite]:
         msg = montar_texto_base(row)
-        url_post = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
-        loteria = row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "Loteria"
-        concurso = row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000"
-        data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y")
-        numeros = row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else ""
-
-        # Tenta usar imagem pronta (URL IMAGEM); se não, gera 3D
-        img_bytes = None
-        if _safe_len(row, COL_URL_Imagem):
-            url_img = str(row[COL_URL_Imagem-1] or "").strip()
-            if url_img:
-                img_bytes = _fetch_image_bytes(url_img)
-
-        logo_override = None
-        if _safe_len(row, COL_Imagem) and str(row[COL_Imagem-1]).strip():
-            logo_override = str(row[COL_Imagem-1]).strip()
-        else:
-            logo_override = get_logo_from_url(url_post)
-
         ok_any = False
         for pid, ptoken in zip(FB_PAGE_IDS, FB_PAGE_TOKENS):
             try:
@@ -585,18 +388,16 @@ def publicar_em_facebook(ws, candidatos):
                     _log(f"[Facebook][{pid}] DRY-RUN: {msg[:60]}..."); ok = True
                 else:
                     if POST_FB_WITH_IMAGE:
-                        if not img_bytes:
-                            buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_post, logo_override=logo_override)
-                            img_bytes = buf.getvalue()
-                        fb_id = _fb_post_photo(pid, ptoken, msg, img_bytes)
+                        buf = _build_image_from_row(row)
+                        fb_id = _fb_post_photo(pid, ptoken, msg, buf.getvalue())
                     else:
+                        url_post = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
                         fb_id = _fb_post_text(pid, ptoken, msg, link=url_post or None)
                     _log(f"[Facebook][{pid}] OK → {fb_id}"); ok = True
             except Exception as e:
                 _log(f"[Facebook][{pid}] erro: {e}"); ok = False
             ok_any = ok_any or ok
             time.sleep(0.7)
-
         if ok_any and not DRY_RUN:
             marcar_publicado(ws, rownum, "FACEBOOK"); publicados += 1
         time.sleep(PAUSA_ENTRE_POSTS)
@@ -623,25 +424,6 @@ def publicar_em_telegram(ws, candidatos):
     publicados = 0; limite = min(MAX_PUBLICACOES_RODADA, len(candidatos))
     for rownum, row in candidatos[:limite]:
         msg = montar_texto_base(row, incluir_telegram=True)
-        url_post = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
-        loteria = row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "Loteria"
-        concurso = row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000"
-        data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y")
-        numeros = row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else ""
-
-        # Preferir URL IMAGEM
-        img_bytes = None
-        if _safe_len(row, COL_URL_Imagem):
-            url_img = str(row[COL_URL_Imagem-1] or "").strip()
-            if url_img:
-                img_bytes = _fetch_image_bytes(url_img)
-
-        logo_override = None
-        if _safe_len(row, COL_Imagem) and str(row[COL_Imagem-1]).strip():
-            logo_override = str(row[COL_Imagem-1]).strip()
-        else:
-            logo_override = get_logo_from_url(url_post)
-
         ok_any = False
         for chat_id in TG_CHAT_IDS:
             try:
@@ -649,11 +431,10 @@ def publicar_em_telegram(ws, candidatos):
                     _log(f"[Telegram][{chat_id}] DRY-RUN: {msg[:60]}..."); ok = True
                 else:
                     if POST_TG_WITH_IMAGE:
-                        if not img_bytes:
-                            buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_post, logo_override=logo_override)
-                            img_bytes = buf.getvalue()
-                        msg_id = _tg_send_photo(TG_BOT_TOKEN, chat_id, msg, img_bytes)
+                        buf = _build_image_from_row(row)
+                        msg_id = _tg_send_photo(TG_BOT_TOKEN, chat_id, msg, buf.getvalue())
                     else:
+                        url_post = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
                         if url_post: msg = f"{msg}\n{url_post}"
                         msg_id = _tg_send_text(TG_BOT_TOKEN, chat_id, msg)
                     _log(f"[Telegram][{chat_id}] OK → {msg_id}"); ok = True
@@ -661,7 +442,6 @@ def publicar_em_telegram(ws, candidatos):
                 _log(f"[Telegram][{chat_id}] erro: {e}"); ok = False
             ok_any = ok_any or ok
             time.sleep(0.5)
-
         if ok_any and not DRY_RUN:
             marcar_publicado(ws, rownum, "TELEGRAM"); publicados += 1
         time.sleep(PAUSA_ENTRE_POSTS)
@@ -685,23 +465,6 @@ def publicar_em_discord(ws, candidatos):
     limite = min(MAX_PUBLICACOES_RODADA, len(candidatos))
     for rownum, row in candidatos[:limite]:
         msg = montar_texto_base(row)
-        url_post = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
-        loteria = row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "Loteria"
-        concurso = row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000"
-        data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y")
-        numeros = row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else ""
-
-        # Preferir URL IMAGEM
-        img_bytes = None
-        if _safe_len(row, COL_URL_Imagem):
-            url_img = str(row[COL_URL_Imagem-1] or "").strip()
-            if url_img:
-                img_bytes = _fetch_image_bytes(url_img)
-        if not img_bytes:
-            logo_override = get_logo_from_url(url_post)
-            buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_post, logo_override=logo_override)
-            img_bytes = buf.getvalue()
-
         ok_any = False
         try:
             if DRY_RUN:
@@ -709,8 +472,10 @@ def publicar_em_discord(ws, candidatos):
                     _log(f"[Discord] DRY-RUN → {wh[-18:]}: {msg[:60]}...")
                 ok_any = True
             else:
+                buf = _build_image_from_row(row)
                 for wh in DISCORD_WEBHOOKS:
-                    _discord_send(wh, content=f"{msg}\n{url_post}" if url_post else msg, image_bytes=img_bytes)
+                    url_post = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
+                    _discord_send(wh, content=f"{msg}\n{url_post}" if url_post else msg, image_bytes=buf.getvalue())
                     _log(f"[Discord] OK → {wh[-18:]}")
                 ok_any = True
         except Exception as e:
@@ -749,32 +514,21 @@ def publicar_em_pinterest(ws, candidatos):
     for rownum, row in candidatos[:limite]:
         loteria = row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "Loteria"
         concurso = row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000"
-        data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y")
-        numeros = row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else ""
-        url_post = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
         title = f"{loteria} — Concurso {concurso}"
         desc = montar_texto_base(row)
-
-        # Preferir URL IMAGEM
-        img_bytes = None
-        if POST_PINTEREST_WITH_IMAGE:
-            if _safe_len(row, COL_URL_Imagem):
-                url_img = str(row[COL_URL_Imagem-1] or "").strip()
-                if url_img:
-                    img_bytes = _fetch_image_bytes(url_img)
-            if not img_bytes:
-                logo_override = get_logo_from_url(url_post)
-                buf = gerar_imagem_3d(loteria, concurso, data_br, str(numeros), url_post, logo_override=logo_override)
-                img_bytes = buf.getvalue()
-            pin_id = _pinterest_create_pin(PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, title, desc, url_post, image_bytes=img_bytes)
-        else:
-            pin_id = _pinterest_create_pin(PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, title, desc, url_post, image_url=url_post or None)
-
+        url_post = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
         try:
-            _log(f"[Pinterest] OK → {pin_id}"); ok = True
+            if DRY_RUN:
+                _log(f"[Pinterest] DRY-RUN: {title}"); ok = True
+            else:
+                if POST_PINTEREST_WITH_IMAGE:
+                    buf = _build_image_from_row(row)
+                    pin_id = _pinterest_create_pin(PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, title, desc, url_post, image_bytes=buf.getvalue())
+                else:
+                    pin_id = _pinterest_create_pin(PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, title, desc, url_post, image_url=url_post or None)
+                _log(f"[Pinterest] OK → {pin_id}"); ok = True
         except Exception as e:
             _log(f"[Pinterest] erro: {e}"); ok = False
-
         if ok and not DRY_RUN:
             marcar_publicado(ws, rownum, "PINTEREST"); publicados += 1
         time.sleep(PAUSA_ENTRE_POSTS)
