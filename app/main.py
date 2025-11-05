@@ -1,47 +1,91 @@
+# -*- coding: utf-8 -*-
+"""
+Gerador opcional de imagens a partir da planilha.
+- Lê: Loteria | Concurso | Data | Números | URL
+- Gera PNGs em ./imagens_geradas
+- NÃO publica nada (quem publica é o bot.py)
+- Seguro para usar em runner do GitHub Actions ou local
+"""
+
 import os
 import json
-import datetime
+import datetime as dt
 import pytz
-from .sheets import conectar_planilha, buscar_linhas_para_publicar
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from .imaging import gerar_imagem_loteria
 
+TZ = pytz.timezone("America/Sao_Paulo")
+
+# --------- Google Sheets ----------
+def _google_client():
+    sa_raw = os.getenv("GOOGLE_SERVICE_JSON", "").strip()
+    if not sa_raw:
+        raise RuntimeError("GOOGLE_SERVICE_JSON ausente.")
+    try:
+        info = json.loads(sa_raw)
+    except Exception as e:
+        raise RuntimeError(f"GOOGLE_SERVICE_JSON inválido: {e}")
+    scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly", "https://www.googleapis.com/auth/drive.readonly"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scopes)
+    return gspread.authorize(creds)
+
+def _open_ws():
+    sheet_id = os.getenv("GOOGLE_SHEET_ID", "").strip()
+    sheet_tab = os.getenv("SHEET_TAB", "ImportadosBlogger2").strip()
+    if not sheet_id:
+        raise RuntimeError("GOOGLE_SHEET_ID ausente.")
+    sh = _google_client().open_by_key(sheet_id)
+    return sh.worksheet(sheet_tab)
+
+def _log(msg):
+    print(f"[{dt.datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+
+# --------- Execução ----------
 def gerar_imagens_automaticamente():
-    tz = pytz.timezone("America/Sao_Paulo")
-    agora = datetime.datetime.now(tz)
-    print(f"[{agora.strftime('%H:%M:%S')}] Iniciando geração de imagens...")
+    ws = _open_ws()
+    rows = ws.get_all_records()  # usa cabeçalhos da primeira linha
+    out_dir = os.getenv("IMAGES_OUT_DIR", "imagens_geradas")
+    os.makedirs(out_dir, exist_ok=True)
 
-    google_json_str = os.getenv("GOOGLE_SERVICE_JSON")
-    if not google_json_str:
-        raise ValueError("GOOGLE_SERVICE_JSON não definido.")
+    geradas = 0
+    for i, row in enumerate(rows, start=2):
+        try:
+            loteria = str(row.get("Loteria", "")).strip()
+            concurso = str(row.get("Concurso", "")).strip()
+            data_br = str(row.get("Data", "")).strip()
+            numeros = str(row.get("Números", "")).strip() or str(row.get("Numeros", "")).strip()
+            url = str(row.get("URL", "")).strip()
 
-    google_json = json.loads(google_json_str)
-    sheet_id = os.getenv("GOOGLE_SHEET_ID")
-    sheet_tab = os.getenv("SHEET_TAB", "ImportadosBlogger2")
+            if not loteria or not numeros:
+                continue
 
-    aba = conectar_planilha(google_json, sheet_id, sheet_tab)
-    linhas = buscar_linhas_para_publicar(aba)
+            _log(f"Gerando imagem L{i}: {loteria} {concurso} ({data_br})")
+            buf = gerar_imagem_loteria(loteria, concurso, data_br, numeros, url)
 
-    pasta_saida = "imagens_geradas"
-    os.makedirs(pasta_saida, exist_ok=True)
+            # nome amigável
+            loteria_slug = (
+                loteria.lower()
+                .replace(" ", "-")
+                .replace("ç", "c")
+                .replace("á", "a")
+                .replace("é", "e")
+                .replace("í", "i")
+                .replace("ó", "o")
+                .replace("ú", "u")
+                .replace("ã", "a")
+                .replace("õ", "o")
+            )
+            fname = f"{loteria_slug}_{concurso or i}.png"
+            path = os.path.join(out_dir, fname)
+            with open(path, "wb") as f:
+                f.write(buf.read())
+            geradas += 1
+            _log(f"✅ salva: {path}")
+        except Exception as e:
+            _log(f"ERRO na linha {i}: {e}")
 
-    for linha in linhas:
-        loteria = linha.get("Loteria")
-        concurso = linha.get("Concurso")
-        data = linha.get("Data")
-        numeros = linha.get("Números")
-        url = linha.get("URL")
-
-        if not loteria or not numeros:
-            continue
-
-        print(f"Gerando imagem: {loteria} {concurso} ({data})")
-        buffer = gerar_imagem_loteria(loteria, concurso, data, numeros, url)
-
-        caminho = os.path.join(pasta_saida, f"{loteria}_{concurso}.png")
-        with open(caminho, "wb") as f:
-            f.write(buffer.read())
-
-        print(f"✅ Imagem salva: {caminho}")
+    _log(f"Concluído. Imagens geradas: {geradas}")
 
 if __name__ == "__main__":
     gerar_imagens_automaticamente()
