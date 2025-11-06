@@ -1,180 +1,173 @@
-# -*- coding: utf-8 -*-
-"""
-Geração de imagem 3D de resultados de loterias
-- Logo central (se disponível)
-- Título, data, números em bolas 3D e link
-- Paleta e logos vêm de app/palette.py
-"""
+# imaging.py — Estilo Portal SimonSports (quadrado 1080x1080)
+# Fundo em degradê por loteria, título grande, bolas brancas com sombra,
+# linha "Ver resultado completo..." e rodapé PORTAL SIMONSPORTS.
+#
+# Uso:
+#   from app.imaging import gerar_imagem_loteria
+#   buf = gerar_imagem_loteria("Quina", "6870", "04/11/2025", "18,19,20,42,46", "https://...")
+#   # buf é um BytesIO (PNG) pronto para upload
 
-import io
-import math
-import requests
+from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-from .palette import CORES_LOTERIAS, LOGOS_LOTERIAS, NUMEROS_POR_LOTERIA, norm_key
+import textwrap
 
-# --------- util: fontes robustas ----------
-def _font(path: str, size: int):
+# Paleta oficial (tons base)
+CORES = {
+    "mega-sena":  ("#209869", "#155f42"),
+    "quina":      ("#6c2aa6", "#4a1d73"),  # roxo
+    "lotofácil":  ("#dd4a91", "#9a2f60"),
+    "lotomania":  ("#ff8c00", "#c96c00"),
+    "timemania":  ("#00a650", "#04753a"),
+    "dupla sena": ("#8b0000", "#5d0000"),
+    "federal":    ("#8b4513", "#5e2f0d"),
+    "dia de sorte": ("#ffd700", "#c7a600"),
+    "super sete": ("#ff4500", "#b53100"),
+    "loteca":     ("#38761d", "#245212"),
+}
+
+# Quantidade de bolas por loteria (para truncar caso venham a mais)
+NUM_QTD = {
+    "mega-sena": 6, "quina": 5, "lotofácil": 15, "lotomania": 20,
+    "timemania": 10, "dupla sena": 6, "federal": 5, "dia de sorte": 7,
+    "super sete": 7, "loteca": 14,
+}
+
+def _hex_to_rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+def _font(size, bold=False):
+    # Tenta Arial; volta pro default se não tiver na runner
     try:
+        path = "arialbd.ttf" if bold else "arial.ttf"
         return ImageFont.truetype(path, size)
-    except Exception:
-        # fallback seguro para runners do GitHub
-        try:
-            return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size)
-        except Exception:
-            return ImageFont.load_default()
+    except:
+        return ImageFont.load_default()
 
-def _font_bold(size: int):
-    for p in (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/Library/Fonts/Arial Bold.ttf",
-        "arialbd.ttf",
-    ):
-        try:
-            return ImageFont.truetype(p, size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
+def _draw_gradient(draw, w, h, c1, c2):
+    r1,g1,b1 = _hex_to_rgb(c1); r2,g2,b2 = _hex_to_rgb(c2)
+    for y in range(h):
+        t = y / max(h-1, 1)
+        r = int(r1*(1-t) + r2*t)
+        g = int(g1*(1-t) + g2*t)
+        b = int(b1*(1-t) + b2*t)
+        draw.line([(0,y),(w,y)], fill=(r,g,b))
 
-# --------- util: download de logo ----------
-def _download_logo(url: str, timeout=10):
-    if not url:
-        return None
-    try:
-        r = requests.get(
-            url,
-            timeout=timeout,
-            headers={"User-Agent": "Mozilla/5.0 (Twitter-Loterias Bot)"},
-        )
-        r.raise_for_status()
-        return Image.open(io.BytesIO(r.content)).convert("RGBA")
-    except Exception:
-        return None
+def _shadow_rounded_rect(canvas, box, radius=28, blur=18, opacity=140):
+    x0,y0,x1,y1 = box
+    w, h = x1-x0, y1-y0
+    tmp = Image.new("RGBA", (w+blur*2, h+blur*2), (0,0,0,0))
+    d = ImageDraw.Draw(tmp)
+    d.rounded_rectangle((blur,blur,blur+w,blur+h), radius=radius, fill=(0,0,0,opacity))
+    tmp = tmp.filter(ImageFilter.GaussianBlur(blur))
+    canvas.alpha_composite(tmp, (x0-blur, y0-blur))
 
-# --------- render da bola 3D ----------
-def _bola_3d(cor_rgb, raio=64):
-    w = h = raio * 2 + 36
-    bola = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(bola)
+def _ball(draw, img, cx, cy, r, color_rgb, number: str):
+    # Sombra inferior
+    sh = Image.new("RGBA", (r*4, r*2), (0,0,0,0))
+    sd = ImageDraw.Draw(sh)
+    sd.ellipse((0, r*0.2, r*4, r*1.6), fill=(0,0,0,120))
+    sh = sh.filter(ImageFilter.GaussianBlur(10))
+    img.alpha_composite(sh, (int(cx-2*r), int(cy+r-10)))
 
-    # gradiente radial fake
-    for j in range(raio):
-        k = 1.0 - (j / raio) * 0.55
-        fill = tuple(int(c * k) for c in cor_rgb) + (255,)
-        d.ellipse((j, j, w - j - 1, h - j - 1), fill=fill)
-
+    # Bola (branca com leve gradiente)
+    ball = Image.new("RGBA", (r*2, r*2), (0,0,0,0))
+    bd = ImageDraw.Draw(ball)
+    bd.ellipse((0,0,2*r,2*r), fill=(255,255,255,255))
     # brilho
-    brilho = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    ImageDraw.Draw(brilho).ellipse((24, 18, 58, 52), fill=(255, 255, 255, 170))
-    bola = Image.alpha_composite(bola, brilho)
+    bd.ellipse((int(0.32*r), int(0.3*r), int(1.3*r), int(1.1*r)), fill=(255,255,255,255))
+    ball = ball.filter(ImageFilter.GaussianBlur(0.5))
+    img.alpha_composite(ball, (int(cx-r), int(cy-r)))
 
-    # sombra
-    sombra = bola.filter(ImageFilter.GaussianBlur(12))
-    return bola, sombra
+    # Número (na cor da loteria)
+    f = _font(56 if len(number)<=2 else 48, bold=True)
+    w,h = draw.textbbox((0,0), number, font=f)[2:]
+    draw.text((cx-w/2, cy-h/2-2), number, font=f, fill=color_rgb)
 
-def gerar_imagem_loteria(
-    loteria: str,
-    concurso: str,
-    data_br: str,
-    numeros_str: str,
-    url_resultado: str = "",
-    largura: int = 1080,
-    altura: int = 1080,
-):
-    """Retorna um BytesIO PNG com a imagem do resultado."""
+def _draw_quina_icon(draw, x, y, size, fill):  # trevo estilizado
+    r = size//2
+    for dx,dy in ((-r,0),(r,0),(0,-r),(0,r)):
+        draw.ellipse((x+dx-r//1.3, y+dy-r//1.3, x+dx+r//1.3, y+dy+r//1.3), fill=fill)
+    draw.rectangle((x-6, y-6, x+6, y+6), fill=fill)
 
-    loteria_norm = norm_key(loteria)
-    cor_hex = CORES_LOTERIAS.get(loteria_norm, "#4B0082")
-    cor_rgb = tuple(int(cor_hex.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4))
-    logo_url = LOGOS_LOTERIAS.get(loteria_norm)
+def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url):
+    lot = (loteria or "").strip()
+    key = lot.lower()
 
-    # Canvas base
-    img = Image.new("RGB", (largura, altura), color=cor_hex)
+    # Cores da loteria (gradiente)
+    c1,c2 = CORES.get(key, ("#4b0082","#2b004a"))
+    color_rgb = _hex_to_rgb(c1)
+
+    # Canvas
+    W = H = 1080
+    img = Image.new("RGBA", (W, H), (0,0,0,0))
     draw = ImageDraw.Draw(img)
+    _draw_gradient(draw, W, H, c1, c2)
 
-    # Cartão central com sombra
-    card = Image.new("RGBA", (largura - 120, altura - 120), (255, 255, 255, 255))
-    sombra = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    sd = ImageDraw.Draw(sombra)
-    rect = (60, 60, largura - 60, altura - 60)
-    sd.rounded_rectangle(rect, radius=28, fill=(0, 0, 0, 110))
-    sombra = sombra.filter(ImageFilter.GaussianBlur(12))
-    img = Image.alpha_composite(img.convert("RGBA"), sombra).convert("RGB")
-    img.paste(card, (60, 60))
+    # Header com logo/título
+    title_y = 90
+    # Ícone da Quina (trevo); para outras, só texto por enquanto
+    if key == "quina":
+        _draw_quina_icon(draw, 140, title_y+18, 84, (255,255,255,255))
+    f_brand = _font(88, bold=True)
+    draw.text((230 if key=="quina" else 80, title_y), lot.upper(), font=f_brand, fill=(255,255,255,255))
 
-    # Logo (opcional)
-    y = 90
-    logo = _download_logo(logo_url)
-    if logo:
-        # limitar tamanho
-        logo.thumbnail((440, 200), Image.Resampling.LANCZOS)
-        x_logo = (largura - logo.width) // 2
-        img.paste(logo, (x_logo, y), logo)
-        y += logo.height + 16
-    else:
-        y += 20
+    # Bloco central com título do concurso e data
+    bloc_top = 210
+    _shadow_rounded_rect(img, (80, bloc_top-10, W-80, bloc_top+210), radius=28, blur=30, opacity=110)
+    box = Image.new("RGBA", (W-160, 210), (255,255,255,10))
+    box_draw = ImageDraw.Draw(box)
+    f_title = _font(72, bold=True)
+    f_mid   = _font(54, bold=False)
+    text1 = f"{lot.upper()} – CONCURSO"
+    text2 = str(concurso)
+    text3 = f"Sorteio: {data_br}"
+    box_draw.text((60, 18), text1, font=f_title, fill=(255,255,255,235))
+    # centralizar o número do concurso
+    w2,_ = box_draw.textbbox((0,0), text2, font=f_title)[2:]
+    box_draw.text(((W-160-w2)/2, 18+72+6), text2, font=f_title, fill=(255,255,255,235))
+    box_draw.text((60, 18+72+6+72+8), text3, font=f_mid, fill=(235,235,245,220))
+    img.alpha_composite(box, (80, bloc_top-10))
 
-    # Títulos
-    fonte_titulo = _font_bold(68)
-    fonte_sub = _font("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 44)
-    cx = largura // 2
-    draw = ImageDraw.Draw(img)
-    draw.text((cx, y), f"{loteria.upper()} — CONCURSO {concurso}", fill="#0f172a", font=fonte_titulo, anchor="ma")
-    y += 86
-    draw.text((cx, y), f"{data_br}", fill="#475569", font=fonte_sub, anchor="ma")
-    y += 60
+    # Números (bolas)
+    raw = (str(numeros_str or "").replace(";", ",").replace(" ", ","))
+    nums = [n for n in (x.strip() for x in raw.split(",")) if n]
+    maxn = NUM_QTD.get(key, 6)
+    nums = nums[:maxn] if nums else ["?"]*maxn
 
-    # Números
-    max_nums = NUMEROS_POR_LOTERIA.get(loteria_norm, 6)
-    numeros = [n.strip() for n in str(numeros_str).replace(";", ",").replace(" ", ",").split(",") if n.strip()]
-    if not numeros:
-        numeros = ["?"] * max_nums
+    n = len(nums)
+    row_y = 520
+    r = 70
+    spacing = 24
+    total_w = n*(2*r) + (n-1)*spacing
+    start_x = (W - total_w)//2 + r
 
-    # Quebra automática em linhas (até 7 por linha para caber lotofácil)
-    por_linha = 7 if len(numeros) > 10 else min(len(numeros), 6)
-    linhas = math.ceil(len(numeros) / por_linha)
+    for i, num in enumerate(nums):
+        cx = start_x + i*(2*r + spacing)
+        _ball(draw, img, cx, row_y, r, color_rgb, num)
 
-    raio = 58
-    esp = 120
-    fonte_num = _font_bold(54)
+    # Linha do link "Ver resultado completo…"
+    if url:
+        f_link = _font(40, bold=False)
+        link_text = "Ver resultado completo no Portal SimonSports"
+        # ícone de corrente simples
+        ix,iy = 110, 650
+        draw.arc((ix,iy,ix+34,iy+34), start=200, end=340, fill=(230,230,240,230), width=5)
+        draw.arc((ix+26,iy,ix+60,iy+34), start=20, end=160, fill=(230,230,240,230), width=5)
+        draw.line((ix+18,iy+26, ix+42,iy+8), fill=(230,230,240,230), width=5)
+        draw.text((ix+72, iy+2), link_text, font=f_link, fill=(245,245,255,235))
 
-    for li in range(linhas):
-        start = li * por_linha
-        fim = min(len(numeros), (li + 1) * por_linha)
-        linha = numeros[start:fim]
-        total_w = len(linha) * esp
-        x_ini = (largura - total_w) // 2 + esp // 2
-        y_linha = y + li * 160 + 10
+    # Rodapé com barra
+    footer_h = 120
+    footer = Image.new("RGBA", (W, footer_h), _hex_to_rgb(c2) + (255,))
+    img.alpha_composite(footer, (0, H-footer_h))
+    f_foot = _font(64, bold=True)
+    text_footer = "PORTAL SIMONSPORTS"
+    wft, hft = draw.textbbox((0,0), text_footer, font=f_foot)[2:]
+    draw.text(((W-wft)/2, H-footer_h + (footer_h-hft)/2), text_footer, font=f_foot, fill=(255,255,255,255))
 
-        for i, num in enumerate(linha):
-            x = x_ini + i * esp
-            bola, sombra_bola = _bola_3d(cor_rgb, raio)
-            img.paste((0, 0, 0, 60), (x - 18, y_linha + 12), sombra_bola)
-            img.paste(bola, (x - (raio + 18), y_linha - (raio + 18)), bola)
-
-            # número com leve "stroke" branco
-            txt_img = Image.new("RGBA", (160, 160), (0, 0, 0, 0))
-            td = ImageDraw.Draw(txt_img)
-            td.text((80, 74), str(num), font=fonte_num, fill=(0, 0, 0, 210), anchor="mm")
-            td.text((78, 72), str(num), font=fonte_num, fill=(255, 255, 255, 255), anchor="mm")
-            img.paste(txt_img, (x - 80, y_linha - 80), txt_img)
-
-    y += linhas * 160 + 10
-
-    # Link
-    if url_resultado:
-        y += 6
-        draw.text((cx, y), "Resultado completo", fill="#0f172a", font=fonte_sub, anchor="ma")
-        y += 48
-        fonte_link = _font("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 36)
-        draw.text((cx, y), url_resultado, fill="#0ea5e9", font=fonte_link, anchor="ma")
-
-    # Assinatura
-    draw.text((largura - 78, altura - 70), "Portal SimonSports", fill="#0f172a", font=_font_bold(28), anchor="ra")
-
-    # Pequena suavização
-    out = img.filter(ImageFilter.GaussianBlur(0.2))
-    buf = io.BytesIO()
-    out.save(buf, format="PNG", optimize=True)
-    buf.seek(0)
-    return buf
+    # Saída
+    out = BytesIO()
+    img.convert("RGB").save(out, format="PNG", optimize=True)
+    out.seek(0)
+    return out
