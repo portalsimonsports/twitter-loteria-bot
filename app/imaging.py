@@ -1,433 +1,292 @@
-# imaging.py — Estilo Portal SimonSports (1080x1080)
-# Rev: 2025-11-09e
-# - Regras de linhas:
-#   • Máx. 7/linha (padrão)
-#   • Lotofácil = 5+5+5
-#   • Lotomania = 5+5+5+5
-#   • Timemania = 5+5 (+ extra "time" em pill)
-#   • Dupla Sena = 6 + 6 com títulos
-#   • Dia de Sorte = 7 (+ extra "mês" em pill)
-#   • Loteca = Tabela 14 jogos (# | Mandante | Placar/1X2 | Visitante)
-#     - Destaque #38761d no vencedor (nome do time) ou, em empate, na coluna Placar/1X2
-
-from io import BytesIO
+# app/imaging.py — Portal SimonSports
+# Rev: 2025-11-09 — Estilo “site”: título único, data, grade de números, logo no topo,
+# CTA no rodapé; quebras por loteria; suporte básico Loteca (14 linhas – 1X2)
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-import os, re
+import io, os, re, math
+from datetime import datetime
 
-# Paleta oficial
+# ====== Caminhos de ativos (ajuste se precisar) ======
+ASSETS_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")
+LOGOS_DIR  = os.path.join(ASSETS_DIR, "logos")
+
+# ====== Tamanho base (quadrado p/ socials) ======
+W, H = 1080, 1080
+SAFE_LR = 72   # margem esquerda/direita
+SAFE_T  = 90   # margem superior
+SAFE_B  = 120  # margem inferior
+
+# ====== Fontes (fallbacks de sistema) ======
+def _try_fonts(cands, size):
+    for p in cands:
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size)
+            except: 
+                pass
+    # fallback básico
+    return ImageFont.load_default()
+
+FONT_SERIF = lambda s: _try_fonts([
+    "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+], s)
+
+FONT_SANS  = lambda s: _try_fonts([
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+], s)
+
+FONT_SANS_B = lambda s: _try_fonts([
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+], s)
+
+# ====== Cores por loteria (oficiais/consistentes) ======
 CORES = {
-    "mega-sena":   ("#209869", "#155F42"),
-    "quina":       ("#6C2AA6", "#4A1D73"),
-    "lotofacil":   ("#DD4A91", "#9A2F60"),
-    "lotomania":   ("#F39200", "#C96C00"),
-    "timemania":   ("#00A650", "#04753A"),
-    "dupla-sena":  ("#8B0000", "#5D0000"),
-    "federal":     ("#8B4513", "#5E2F0D"),
-    "dia-de-sorte":("#FFD700", "#C7A600"),
-    "super-sete":  ("#FF4500", "#B53100"),
-    "loteca":      ("#38761D", "#245212"),
+    "mega-sena":    (32,152,105),
+    "quina":        (64, 40, 94),
+    "lotofacil":    (149, 55, 148),
+    "lotomania":    (243,112, 33),
+    "timemania":    (39,127, 66),
+    "dupla-sena":   (149, 32, 49),
+    "federal":      (  0, 76,153),
+    "dia-de-sorte": (184,134, 11),
+    "super-sete":   ( 37, 62,116),
+    "loteca":       (56,118, 29),  # #38761d
 }
+def slug(s):
+    s = (s or "").lower()
+    s = s.replace("ç","c")
+    s = re.sub(r"[áàâãä]", "a", s)
+    s = re.sub(r"[éèêë]", "e", s)
+    s = re.sub(r"[íìîï]", "i", s)
+    s = re.sub(r"[óòôõö]", "o", s)
+    s = re.sub(r"[úùûü]", "u", s)
+    s = re.sub(r"[^a-z0-9\- ]+","", s).strip()
+    s = re.sub(r"\s+","-", s)
+    m = {
+        "lotofácil":"lotofacil",
+        "dupla sena":"dupla-sena",
+        "dia de sorte":"dia-de-sorte",
+        "super sete":"super-sete",
+    }
+    return m.get(s, s)
 
-# Quantidades oficiais (para truncar se vier excedente)
-NUM_QTD = {
-    "mega-sena": 6, "quina": 5, "lotofacil": 15, "lotomania": 20,
-    "timemania": 10, "dupla-sena": 12, "federal": 5, "dia-de-sorte": 7,
-    "super-sete": 7, "loteca": 14,
-}
+def cor_loteria(name):
+    return CORES.get(slug(name), (30,30,30))
 
-# -------------- utils básicos --------------
-def _norm_key(lot):
-    s = (lot or "").lower()
-    for a,b in (("á","a"),("à","a"),("â","a"),("ã","a"),("é","e"),("ê","e"),
-                ("í","i"),("ó","o"),("ô","o"),("õ","o"),("ú","u"),("ç","c")):
-        s = s.replace(a,b)
-    return s.replace(" ", "-")
+# ====== Fundos ======
+def fundo_gradient(base_rgb):
+    # leve vinheta + gradiente radial discreto
+    img = Image.new("RGB", (W,H), (20,18,22))
+    draw = ImageDraw.Draw(img)
+    cx, cy = W//2, H//2
+    max_r = int(math.hypot(cx, cy))
+    br, bg, bb = base_rgb
+    for r in range(max_r, 0, -12):
+        alpha = r / max_r
+        col = tuple(int( (1-alpha)*x + alpha*br ) for x in (15,15,15))
+        draw.ellipse((cx-r, cy-r, cx+r, cy+r), fill=col)
+    # suaviza
+    return img.filter(ImageFilter.GaussianBlur(12))
 
-def _hex_to_rgb(h): h=h.lstrip("#"); return tuple(int(h[i:i+2],16) for i in (0,2,4))
-def _font(size, bold=False):
-    try: return ImageFont.truetype("arialbd.ttf" if bold else "arial.ttf", size)
-    except: return ImageFont.load_default()
-
-def _draw_gradient(draw, w, h, c1, c2):
-    r1,g1,b1 = _hex_to_rgb(c1); r2,g2,b2 = _hex_to_rgb(c2)
-    for y in range(h):
-        t = y/max(h-1,1)
-        draw.line([(0,y),(w,y)],
-                  fill=(int(r1*(1-t)+r2*t), int(g1*(1-t)+g2*t), int(b1*(1-t)+b2*t)))
-
-def _shadow(canvas, box, radius=28, blur=24, opacity=110):
-    x0,y0,x1,y1 = box; w,h=x1-x0,y1-y0
-    tmp = Image.new("RGBA", (w+blur*2, h+blur*2), (0,0,0,0))
-    d = ImageDraw.Draw(tmp)
-    d.rounded_rectangle((blur,blur,blur+w,blur+h), radius=radius, fill=(0,0,0,opacity))
-    tmp = tmp.filter(ImageFilter.GaussianBlur(blur))
-    canvas.alpha_composite(tmp, (x0-blur, y0-blur))
-
-def _text_fit(draw, text, max_w, start, bold=False, min_size=22):
-    s = start
-    while s >= min_size:
-        f = _font(s, bold)
-        w = draw.textbbox((0,0), text, font=f)[2]
-        if w <= max_w: return f
-        s -= 2
-    return _font(min_size, bold)
-
-def _ball(draw, img, cx, cy, r, color_rgb, number):
-    # sombra
-    sh = Image.new("RGBA", (r*4, r*2), (0,0,0,0))
-    sd = ImageDraw.Draw(sh)
-    sd.ellipse((0, r*0.28, r*4, r*1.7), fill=(0,0,0,120))
-    sh = sh.filter(ImageFilter.GaussianBlur(10))
-    img.alpha_composite(sh, (int(cx-2*r), int(cy+r-12)))
-    # bola
-    ball = Image.new("RGBA", (r*2, r*2), (0,0,0,0))
-    bd = ImageDraw.Draw(ball)
-    bd.ellipse((0,0,2*r,2*r), fill=(255,255,255,255))
-    bd.ellipse((int(0.35*r), int(0.32*r), int(1.25*r), int(1.05*r)), fill=(255,255,255,255))
-    ball = ball.filter(ImageFilter.GaussianBlur(0.4))
-    img.alpha_composite(ball, (int(cx-r), int(cy-r)))
-    # número
-    txt = str(number)
-    f = _text_fit(draw, txt, int(r*1.55), 56 if len(txt)<=2 else 48, bold=True, min_size=34)
-    w,h = draw.textbbox((0,0), txt, font=f)[2:]
-    draw.text((cx-w/2, cy-h/2-1), txt, font=f, fill=color_rgb)
-
-def _try_logo(slug):
-    p = os.path.join("assets","logos", f"{slug}.png")
+# ====== Util ======
+def load_logo(name):
+    p = os.path.join(LOGOS_DIR, f"{slug(name)}.png")
     if os.path.exists(p):
-        try: return Image.open(p).convert("RGBA")
-        except: pass
+        try:
+            return Image.open(p).convert("RGBA")
+        except: 
+            return None
     return None
 
-# ------------- parsing -------------
-def _split_tokens_numbers_and_extras(numeros_str):
-    raw = (str(numeros_str or "").replace(";", ",").replace(" ", ","))
-    tokens = [x.strip() for x in raw.split(",") if x.strip()]
-    nums, extras = [], []
-    for t in tokens:
-        if re.fullmatch(r"\d{1,2}", t):
-            nums.append(t)
-        else:
-            x = t.strip("-_/., ")
-            if x: extras.append(x)
-    return nums, extras
+def draw_text(draw, xy, text, font, fill=(255,255,255), anchor="la"):
+    draw.text(xy, text, font=font, fill=fill, anchor=anchor)
 
-def _split_loteca_lines(numeros_str):
-    s = str(numeros_str or "").strip()
-    if not s: return []
-    # divide por quebras comuns
-    for sep in ("\n", ";", "|"):
-        if sep in s:
-            parts = [p.strip() for p in s.split(sep) if p.strip()]
-            if len(parts) >= 10:  # geralmente 14
-                return parts[:14]
-    # fallback por vírgula (pode vir agrupado por linha)
+def circle(draw, cx, cy, r, fill, outline=None, ow=0):
+    draw.ellipse((cx-r, cy-r, cx+r, cy+r), fill=fill, outline=outline, width=ow)
+
+# ====== Regras de quebra por loteria ======
+def split_numeros(loteria, numeros_str):
+    """Retorna dict com linhas (lista de listas de textos) e metadados especiais."""
+    s = (numeros_str or "").strip()
+
+    # Achar itens “extras” (Time do Coração, mês, trevo, etc.) no final após hífen/; ou texto
+    extra = None
+    # se houver “ - algo ” no fim:
+    m = re.search(r"(?:-|;)\s*([A-Za-zÀ-ÿ0-9/ \.\-]+)$", s)
+    if m and slug(loteria) in ("timemania","dia-de-sorte"):
+        extra = m.group(1).strip()
+        s = s[:m.start()].strip(",; -")
+
+    # normaliza separadores
+    s = re.sub(r"[;| ]+", ",", s)
     parts = [p.strip() for p in s.split(",") if p.strip()]
-    # junta de 3 em 3 quando possível (#heurística)
-    if len(parts) >= 30:
-        out = []
-        chunk, acc = [], []
-        for p in parts:
-            acc.append(p)
-            if len(acc) >= 3:
-                out.append(" ".join(acc)); acc = []
-            if len(out) == 14: break
-        return out
-    return parts[:14]
 
-# ------------- regras de linhas -------------
-def _rows_default_max7(qtd):
-    rows = []
-    i = 0
-    while i < qtd:
-        take = min(7, qtd - i)
-        rows.append(take)
-        i += take
-    return rows
+    L = slug(loteria)
+    lines = []
 
-def _layout_rows(slug, nums):
-    n = len(nums)
-    if slug == "lotofacil" and n >= 15:   return [5,5,5]
-    if slug == "lotomania" and n >= 20:  return [5,5,5,5]
-    if slug == "timemania" and n >= 10:  return [5,5]
-    if slug == "dupla-sena" and n >= 12: return [6,6]
-    return _rows_default_max7(n)
+    def chunk(lst, n):
+        return [lst[i:i+n] for i in range(0, len(lst), n)]
 
-# ----------- Loteca: tabela 14 jogos -----------
-def _parse_game_line(text):
-    """Tenta separar Mandante, placar/1X2, Visitante e determinar vencedor."""
-    t = re.sub(r"\s+", " ", str(text or "").strip())
-    # Formato com placar: TimeA 2-1 TimeB ou 2x1 / 2:1
-    m = re.match(r"^(.*?)[\s\-–—]{1,3}(\d+)\s*([xX\-–:])\s*(\d+)[\s\-–—]{1,3}(.*)$", t)
-    if m:
-        home, g1, sep, g2, away = [x.strip(" -–—") for x in m.groups()]
-        try:
-            a, b = int(g1), int(g2)
-            if a > b: winner = "home"
-            elif b > a: winner = "away"
-            else: winner = "draw"
-        except:
-            winner = "draw" if sep.lower()=="x" else None
-        placar = f"{g1}{sep}{g2}"
-        return home, placar, away, winner
-    # Formato 1X2: TimeA X TimeB
-    m2 = re.match(r"^(.*?)[\s\-–—]{1,3}[xX]{1}[\s\-–—]{1,3}(.*)$", t)
-    if m2:
-        home, away = [x.strip(" -–—") for x in m2.groups()]
-        return home, "X", away, "draw"
-    # fallback: tudo no meio
-    return "", t, "", None
-
-def _render_loteca_table(img, draw, slug, loteria, concurso, data_br, lines, c1, c2):
-    W, H = img.size
-    pad = 80
-    # header
-    titulo = loteria.upper().strip()
-    ftitle = _text_fit(draw, titulo, W - pad*2 - 260, 96, bold=True, min_size=58)
-    draw.text((pad, 92), titulo, font=ftitle, fill=(255,255,255,255))
-    lg = _try_logo(slug)
-    if lg:
-        lh = 96
-        lw = int(lg.width*(lh/lg.height))
-        img.alpha_composite(lg.resize((lw,lh), Image.LANCZOS), (W - pad - lw, 88))
-
-    # painel concurso
-    box_h = 160; top = 210
-    _shadow(img, (pad, top-10, W-pad, top-10+box_h), radius=28, blur=30, opacity=110)
-    box = Image.new("RGBA", (W-pad*2, box_h), (255,255,255,12))
-    bd = ImageDraw.Draw(box)
-    f1 = _text_fit(bd, f"Concurso {concurso}", W - pad*2 - 120, 74, bold=True, min_size=46)
-    f2 = _text_fit(bd, f"Sorteio: {data_br}", W - pad*2 - 120, 52, bold=False, min_size=30)
-    bd.text((60, 20), f"Concurso {concurso}", font=f1, fill=(255,255,255,235))
-    bd.text((60, 20+70), f"Sorteio: {data_br}", font=f2, fill=(235,235,245,220))
-    img.alpha_composite(box, (pad, top-10))
-
-    # tabela
-    y0 = top + box_h + 16
-    header_h = 48
-    row_h = 42
-    gap = 10
-    col_w = {
-        "idx": 66,
-        "home": 370,
-        "res":  160,
-        "away": 370
-    }
-    total_w = sum(col_w.values())
-    start_x = pad + (W - pad*2 - total_w)//2
-
-    # header row
-    _shadow(img, (start_x, y0, start_x+total_w, y0+header_h), radius=10, blur=16, opacity=80)
-    draw.rounded_rectangle((start_x, y0, start_x+total_w, y0+header_h),
-                           radius=10, fill=(0,0,0,80))
-    fh = _font(28, bold=True)
-    draw.text((start_x+16, y0+10), "#", font=fh, fill=(255,255,255,230))
-    draw.text((start_x+col_w["idx"]+16, y0+10), "Mandante", font=fh, fill=(255,255,255,230))
-    draw.text((start_x+col_w["idx"]+col_w["home"]+16, y0+10), "Placar/1X2", font=fh, fill=(255,255,255,230))
-    draw.text((start_x+col_w["idx"]+col_w["home"]+col_w["res"]+16, y0+10), "Visitante", font=fh, fill=(255,255,255,230))
-
-    # linhas
-    y = y0 + header_h + gap
-    hi_bg = _hex_to_rgb(CORES["loteca"][0])
-    for i in range(14):
-        line = lines[i] if i < len(lines) else ""
-        home, res, away, winner = _parse_game_line(line)
-
-        # faixa da linha
-        draw.rounded_rectangle((start_x, y, start_x+total_w, y+row_h),
-                               radius=10, fill=(255,255,255,14))
-
-        # áreas das colunas
-        x_idx = start_x
-        x_home = x_idx + col_w["idx"]
-        x_res  = x_home + col_w["home"]
-        x_away = x_res  + col_w["res"]
-
-        # textos
-        fidx  = _font(26, bold=True)
-        fteam = _font(28, bold=True)
-        fres  = _font(28, bold=True)
-
-        # destaque
-        def hi(rect):
-            draw.rounded_rectangle(rect, radius=8, fill=hi_bg + (255,))
-        def txt(x, yy, t, f, col=(255,255,255,245)):
-            draw.text((x, yy), t, font=f, fill=col)
-
-        # idx
-        txt(x_idx+16, y+8, f"#{i+1}", fidx)
-
-        # home / res / away (com possíveis destaques)
-        if winner == "home":
-            hi((x_home+8, y+6, x_res-8, y+row_h-6))
-            txt(x_home+18, y+8, home or "-", fteam, (255,255,255,255))
-            txt(x_res+18,  y+8, res  or "-", fres)
-            txt(x_away+18, y+8, away or "-", fteam)
-        elif winner == "away":
-            hi((x_away+8, y+6, start_x+total_w-8, y+row_h-6))
-            txt(x_home+18, y+8, home or "-", fteam)
-            txt(x_res+18,  y+8, res  or "-", fres)
-            txt(x_away+18, y+8, away or "-", fteam, (255,255,255,255))
-        elif winner == "draw":
-            hi((x_res+8, y+6, x_away-8, y+row_h-6))
-            txt(x_home+18, y+8, home or "-", fteam)
-            txt(x_res+18,  y+8, res  or "X", fres, (255,255,255,255))
-            txt(x_away+18, y+8, away or "-", fteam)
+    if L == "lotofacil":
+        # 15 → 3 linhas de 5
+        parts = [p.zfill(2) if p.isdigit() else p for p in parts]
+        lines = chunk(parts, 5)
+    elif L == "lotomania":
+        # 20 → 4x5
+        parts = [p.zfill(2) if p.isdigit() else p for p in parts]
+        lines = chunk(parts, 5)
+    elif L == "timemania":
+        # 10 números? padrão imagem: 2 linhas de 5 (você aprovou)
+        parts = [p.zfill(2) if p.isdigit() else p for p in parts]
+        # garante duas linhas, completa com vazio se faltar
+        while len(parts) < 10: parts.append("")
+        lines = [parts[:5], parts[5:10]]
+    elif L == "dupla-sena":
+        # dois sorteios de 6: se vier 12 números, quebra 6+6
+        parts = [p.zfill(2) if p.isdigit() else p for p in parts]
+        if len(parts) >= 12:
+            lines = [parts[:6], parts[6:12]]
         else:
-            txt(x_home+18, y+8, home or "-", fteam)
-            txt(x_res+18,  y+8, res  or "-", fres)
-            txt(x_away+18, y+8, away or "-", fteam)
+            lines = chunk(parts, 6)
+    elif L == "loteca":
+        # números devem ser “1X2” por jogo (14 linhas)
+        # aceita lista com 14 tokens; se menos, preenche com vazio
+        items = parts[:14]
+        while len(items) < 14: items.append("")
+        lines = [[items[i]] for i in range(14)]  # 14 linhas, 1 coluna (1X2)
+    else:
+        # Regra global: máx 7 por linha
+        parts = [p.zfill(2) if p.isdigit() else p for p in parts]
+        lines = chunk(parts, 7)
 
-        y += row_h + gap
+    return {"lines": lines, "extra": extra}
 
-    # rodapé
-    footer_h = 110
-    _shadow(img, (0, H-footer_h-8, W, H), radius=0, blur=24, opacity=90)
-    footer = Image.new("RGBA", (W, footer_h), _hex_to_rgb(CORES["loteca"][1])+(255,))
-    img.alpha_composite(footer, (0, H-footer_h))
-    brand = "PORTAL SIMONSPORTS"
-    fb = _text_fit(draw, brand, W - pad*2, 64, bold=True, min_size=42)
-    bw,bh = draw.textbbox((0,0), brand, font=fb)[2:]
-    draw.text(((W-bw)/2, H-footer_h + (footer_h-bh)/2), brand, font=fb, fill=(255,255,255,255))
+# ====== Render grade de números ======
+def draw_grade_numeros(draw, area, loteria, numeros_str, color):
+    """Desenha círculos/textos no retângulo area=(x0,y0,x1,y1)"""
+    x0,y0,x1,y1 = area
+    Wd, Hd = x1-x0, y1-y0
+    spec = split_numeros(loteria, numeros_str)
+    lines = spec["lines"]
+    extra = spec["extra"]
 
-# --------- Demais renderizações ----------
-def _render_dupla_sena(img, draw, slug, c1, pad, W, nums, extras, color_rgb):
-    y = 470
-    for title, arr in (("1º SORTEIO", nums[:6]), ("2º SORTEIO", nums[6:12] if len(nums)>6 else [])):
-        if not arr: continue
-        fb = _font(54, bold=True)
-        tw,_ = draw.textbbox((0,0), title, font=fb)[2:]
-        draw.text(((W-tw)/2, y-58), title, font=fb, fill=(255,255,255,240))
-        r = 70; spacing = 24
-        while len(arr)*(2*r)+(len(arr)-1)*spacing > (W - pad*2) and r > 46:
-            r -= 2; spacing = max(16, spacing-1)
-        total_w = len(arr)*(2*r) + (len(arr)-1)*spacing
-        start_x = pad + (W - pad*2 - total_w)//2 + r
-        cy = y
-        for j, num in enumerate(arr):
-            cx = start_x + j*(2*r + spacing)
-            _ball(draw, img, cx, cy, r, color_rgb, num)
-        y += 2*r + 110
-    if extras:
-        extra_text = " • ".join([e.upper() for e in extras])
-        fextra = _text_fit(draw, extra_text, W - pad*2, 46, bold=True, min_size=28)
-        tw,th = draw.textbbox((0,0), extra_text, font=fextra)[2:]
-        px = pad + (W - pad*2 - tw)//2
-        py = y - 20
-        draw.text((px, py), extra_text, font=fextra, fill=(255,255,255,235))
+    # Loteca: tabela 14 linhas 1X2
+    if slug(loteria) == "loteca":
+        # header
+        title_f = FONT_SANS_B(38)
+        cell_f  = FONT_SANS_B(36)
+        draw_text(draw, (x0, y0), "#", title_f, (255,255,255), "la")
+        draw_text(draw, (x0+70, y0), "1X2", title_f, (255,255,255), "la")
+        yy = y0 + 54
+        for i, row in enumerate(lines, start=1):
+            token = (row[0] or "").upper()
+            # cor especial em empate (X) e vitórias
+            bg = None
+            if token in ("1","X","2"):
+                if token == "X": bg = (56,118,29)  # empate (seu padrão)
+                else:             bg = (20,20,20)
+            if bg:
+                draw.rectangle((x0+60, yy-6, x0+200, yy+38), fill=bg)
+                draw_text(draw, (x0+70, yy), token, cell_f, (255,255,255), "la")
+            else:
+                draw_text(draw, (x0+70, yy), token or "-", cell_f, (230,230,230), "la")
+            draw_text(draw, (x0, yy), f"{i:02d}", cell_f, (200,200,200), "la")
+            yy += 46
+        return y0
 
-# ---------------- principal ----------------
-def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url):
-    slug = _norm_key(loteria)
-    if "dupla" in slug and "sena" in slug: slug = "dupla-sena"
-    if "dia" in slug and "sorte" in slug: slug = "dia-de-sorte"
-    if "lotofac" in slug: slug = "lotofacil"
+    # Demais: círculos
+    rows = len(lines)
+    if rows == 0: return y0
+    # altura por linha
+    r = 38  # raio do círculo
+    gap_y = 28
+    line_h = 2*r + gap_y
+    total_h = rows*line_h - gap_y
+    start_y = y0 + (Hd - total_h)//2
 
-    c1,c2 = CORES.get(slug, ("#4B0082","#2B004A"))
-    color_rgb = _hex_to_rgb(c1)
+    num_f = FONT_SANS_B(36)
+    bg_circle = (250,250,250)
+    fg_circle = (0,0,0)
 
-    W = H = 1080
-    img = Image.new("RGBA", (W,H), (0,0,0,0))
+    for ridx, row in enumerate(lines):
+        ncols = len(row)
+        # largura ocupada: cada bolinha 2r + gap_x
+        gap_x = 22
+        row_w = ncols*(2*r + gap_x) - gap_x
+        cur_x = x0 + (Wd - row_w)//2 + r
+        cy = start_y + ridx*(2*r + gap_y) + r
+
+        for item in row:
+            if not item:
+                cur_x += 2*r + gap_x
+                continue
+            circle(draw, int(cur_x), int(cy), r, bg_circle)
+            # número central
+            tw, th = draw.textlength(item, font=num_f), num_f.size
+            draw_text(draw, (cur_x - tw/2, cy - th/2 - 4), item, num_f, fg_circle, "la")
+            cur_x += 2*r + gap_x
+
+    # extra (Timemania/Dia de Sorte) embaixo
+    if extra:
+        ext_f = FONT_SANS_B(38)
+        draw_text(draw, (x0 + Wd/2, y1 - 10), str(extra).strip(), ext_f, (240,240,240), "ms")
+
+# ====== CTA rodapé ======
+def draw_cta(img, texto="Ver resultado completo no Portal SimonSports"):
     draw = ImageDraw.Draw(img)
-    _draw_gradient(draw, W, H, c1, c2)
+    pad = 20
+    btn_h = 66
+    x0, x1 = SAFE_LR, W - SAFE_LR
+    y0 = H - SAFE_B + 18
+    # barra translúcida
+    draw.rounded_rectangle((x0, y0, x1, y0+btn_h), radius=16, fill=(0,0,0,140))
+    f = FONT_SANS_B(30)
+    draw_text(draw, ((x0+x1)//2, y0+btn_h//2), texto, f, (255,255,255), "mm")
 
-    pad = 80
+# ====== Render principal ======
+def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url=""):
+    base = cor_loteria(loteria)
+    img = fundo_gradient(base)
+    draw = ImageDraw.Draw(img)
 
-    # header
-    titulo = (loteria or "").upper().strip()
-    f_title = _text_fit(draw, titulo, W - pad*2 - 260, 96, bold=True, min_size=58)
-    draw.text((pad, 92), titulo, font=f_title, fill=(255,255,255,255))
-    lg = _try_logo(slug)
-    if lg:
-        lh = 96; lw = int(lg.width*(lh/lg.height))
-        img.alpha_composite(lg.resize((lw,lh), Image.LANCZOS), (W - pad - lw, 88))
+    # Título (único) + data
+    title = f"{loteria} {concurso}".strip()
+    tf = FONT_SERIF(86)
+    df = FONT_SANS_B(40)
+    draw_text(draw, (SAFE_LR, SAFE_T), title, tf, (255,255,255), "la")
+    draw_text(draw, (SAFE_LR, SAFE_T+82), data_br, df, (230,230,230), "la")
 
-    # painel concurso (não para Loteca, que usa tabela abaixo — mas mantemos para uniformidade)
-    if slug != "loteca":
-        box_h = 180; top = 210
-        _shadow(img, (pad, top-10, W-pad, top-10+box_h), radius=28, blur=30, opacity=110)
-        box = Image.new("RGBA", (W-pad*2, box_h), (255,255,255,12))
-        bd = ImageDraw.Draw(box)
-        f1 = _text_fit(bd, f"Concurso {concurso}", W - pad*2 - 120, 72, bold=True, min_size=48)
-        f2 = _text_fit(bd, f"Sorteio: {data_br}", W - pad*2 - 120, 54, bold=False, min_size=30)
-        bd.text((60, 20), f"Concurso {concurso}", font=f1, fill=(255,255,255,235))
-        bd.text((60, 20+70), f"Sorteio: {data_br}", font=f2, fill=(235,235,245,220))
-        img.alpha_composite(box, (pad, top-10))
-        top = 210
-    else:
-        top = 210  # usado na tabela
+    # Logo no topo-direito
+    logo = load_logo(loteria)
+    if logo:
+        # redimensiona logo para caber ~160px largura
+        max_w = 180
+        scale = min(1.0, max_w / max(1, logo.width))
+        lw = int(logo.width * scale)
+        lh = int(logo.height * scale)
+        lg = logo.resize((lw, lh), Image.LANCZOS)
+        img.paste(lg, (W - SAFE_LR - lw, SAFE_T - 6), lg)
 
-    # ——— LOTECA ———
-    if slug == "loteca":
-        lines = _split_loteca_lines(numeros_str)
-        _render_loteca_table(img, draw, slug, loteria, concurso, data_br, lines, c1, c2)
-    else:
-        # tokens numéricos + extras
-        nums_all, extras = _split_tokens_numbers_and_extras(numeros_str)
-        maxn = NUM_QTD.get(slug, 6)
-        nums = nums_all[:maxn] if nums_all else []
+    # Área central para grade
+    area = (SAFE_LR, SAFE_T + 150, W - SAFE_LR, H - SAFE_B - 120)
+    draw_grade_numeros(draw, area, loteria, numeros_str, base)
 
-        if slug == "dupla-sena":
-            _render_dupla_sena(img, draw, slug, c1, pad, W, nums, extras, color_rgb)
-        else:
-            # layout (máx 7/linha + casos especiais)
-            rows_cfg = _layout_rows(slug, nums if nums else ["?"])
-            avail_w = W - pad*2
-            total_rows = len(rows_cfg)
-            vgap = 120
-            r = 70
-            spacing = 24
-            qmax = max(rows_cfg) if rows_cfg else 1
-            while qmax*(2*r)+(qmax-1)*spacing > avail_w and r > 46:
-                r -= 2
-                spacing = max(16, spacing-1)
-            block_h = total_rows*(2*r) + (total_rows-1)*vgap
-            start_y = 480 - block_h//2 + r
-            centers_y = [start_y + i*(2*r + vgap) for i in range(total_rows)]
-            idx = 0
-            for ri, q in enumerate(rows_cfg):
-                line = (nums or ["?"]*q)[idx:idx+q]; idx += q
-                total_w = q*(2*r) + (q-1)*spacing
-                start_x = pad + (avail_w - total_w)//2 + r
-                cy = centers_y[ri]
-                for j, num in enumerate(line):
-                    cx = start_x + j*(2*r + spacing)
-                    _ball(draw, img, cx, cy, r, color_rgb, num)
+    # CTA no rodapé
+    draw_cta(img)
 
-            # extras (dia de sorte mês / timemania time)
-            if extras:
-                extra_text = " • ".join([e.upper() for e in extras])
-                fextra = _text_fit(draw, extra_text, avail_w, 46, bold=True, min_size=28)
-                tw,th = draw.textbbox((0,0), extra_text, font=fextra)[2:]
-                pill_pad_x, pill_pad_y = 22, 10
-                px0 = pad + (avail_w - (tw+pill_pad_x*2))//2
-                py0 = centers_y[-1] + r + 26
-                px1 = px0 + tw + pill_pad_x*2
-                py1 = py0 + th + pill_pad_y*2
-                draw.rounded_rectangle((px0,py0,px1,py1), radius=18, fill=(0,0,0,90))
-                draw.text((px0+pill_pad_x, py0+pill_pad_y), extra_text, font=fextra, fill=(255,255,255,230))
+    # bordas suaves
+    vign = Image.new("L", (W,H), 0)
+    vd = ImageDraw.Draw(vign)
+    vd.rectangle((40,40,W-40,H-40), fill=255)
+    vign = vign.filter(ImageFilter.GaussianBlur(30))
+    img.putalpha(vign)
+    bg = Image.new("RGB", (W,H), (0,0,0))
+    bg.paste(img, mask=img.split()[-1])
 
-    # link “Ver resultado…”
-    if url:
-        label = "Ver resultado completo no Portal SimonSports"
-        f3 = _text_fit(draw, label, W - pad*2 - 92, 42, bold=False, min_size=28)
-        ix = pad; iy = 860
-        draw.arc((ix,iy,ix+34,iy+34), start=200, end=340, fill=(230,230,240,230), width=5)
-        draw.arc((ix+26,iy,ix+60,iy+34), start=20, end=160, fill=(230,230,240,230), width=5)
-        draw.line((ix+18,iy+26, ix+42,iy+8), fill=(230,230,240,230), width=5)
-        draw.text((ix+72, iy+2), label, font=f3, fill=(245,245,255,235))
-
-    # rodapé
-    footer_h = 110
-    _shadow(img, (0, H-footer_h-8, W, H), radius=0, blur=24, opacity=90)
-    footer = Image.new("RGBA", (W, footer_h), _hex_to_rgb(c2)+(255,))
-    img.alpha_composite(footer, (0, H-footer_h))
-    brand = "PORTAL SIMONSPORTS"
-    fb = _text_fit(draw, brand, W - pad*2, 64, bold=True, min_size=42)
-    bw,bh = draw.textbbox((0,0), brand, font=fb)[2:]
-    draw.text(((W-bw)/2, H-footer_h + (footer_h-bh)/2), brand, font=fb, fill=(255,255,255,255))
-
-    out = BytesIO()
-    img.convert("RGB").save(out, format="PNG", optimize=True)
-    out.seek(0)
-    return out
+    # Salva em memória (PNG)
+    buf = io.BytesIO()
+    bg.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
