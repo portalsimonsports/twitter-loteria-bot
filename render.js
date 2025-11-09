@@ -7,12 +7,12 @@ import fs from 'fs';
 import path from 'path';
 import puppeteer from 'puppeteer';
 
-const ROOT         = process.cwd();
-const OUT_DIR      = path.join(ROOT, 'output');
-const DATA_FILE    = path.join(ROOT, 'data', 'to_publish.json');
-const TEMPLATE_FILE= path.join(ROOT, 'templates', 'post-instagram.html');
+const ROOT          = process.cwd();
+const OUT_DIR       = path.join(ROOT, 'output');
+const DATA_FILE     = path.join(ROOT, 'data', 'to_publish.json');
+const TEMPLATE_FILE = path.join(ROOT, 'templates', 'post-instagram.html');
 
-// ===== Utils =====
+/* ================= Utils ================= */
 function ensureDir(p){ if(!fs.existsSync(p)) fs.mkdirSync(p, { recursive:true }); }
 function safe(v){ return (v===undefined || v===null) ? '' : String(v); }
 function isHttp(u){ return /^https?:\/\//i.test(String(u||'')); }
@@ -75,6 +75,7 @@ function normalizeNumeros(raw){
   return norm.join(', ');
 }
 
+/* =============== Build fields =============== */
 function buildFields(item){
   // Esperado (vindo do GAS): Produto/Loteria, Concurso, Data, Números, URL, TelegramC1, TelegramC2
   const loteria  = safe(item.Loteria || item.Produto);
@@ -103,9 +104,20 @@ function buildFields(item){
   const produto   = concurso ? `${loteria} • Concurso ${concurso}` : loteria;
   const descricao = numeros ? `Números: ${numeros}` : '';
 
-  // Nome do arquivo final (usa id, se existir, senão usa slug + concurso/data)
-  const tagBase = safe(item.id) || (concurso || data || '');
-  const filename = tagBase ? `${slug}-${slugify(tagBase)}.jpg` : `${slug}.jpg`;
+  // ===== Nome do arquivo final (elimina repetições) =====
+  // Preferimos 'id' quando existir (ex.: "lotomania-2846").
+  // Se o 'id' já contiver o slug, não repetimos.
+  const tagRaw = safe(item.id) || (concurso || data || '');
+  const tag = slugify(tagRaw);
+  let filename;
+  if (!tag) {
+    filename = `${slug}.jpg`;
+  } else if (tag.startsWith(`${slug}-`)) {
+    // id já contém o slug: "mega-sena-2938" → mega-sena-2938.jpg
+    filename = `${tag}.jpg`;
+  } else {
+    filename = `${slug}-${tag}.jpg`;
+  }
 
   return { slug, produto, data, descricao, url, tg1, tg2, fundo, logo, filename };
 }
@@ -122,7 +134,7 @@ function applyTemplate(html, f){
     .replace(/{{TelegramC2}}/g,  f.tg2);
 }
 
-// ===== MAIN =====
+/* ================= MAIN ================= */
 async function main(){
   ensureDir(OUT_DIR);
 
@@ -177,3 +189,4 @@ main().catch(err => {
   console.error('❌ Erro no render:', err);
   process.exit(1);
 });
+```0
