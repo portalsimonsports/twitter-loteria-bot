@@ -1,5 +1,5 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-05 — usa app/imaging.py como fonte única da imagem 3D + multi-redes + backlog por data
+# Rev: 2025-11-09 — PRIORIDADE: imagem do kit em /output (fallback imaging.py) + multi-redes + backlog por data
 # Planilha: ImportadosBlogger2 | Colunas: A=Loteria B=Concurso C=Data D=Números E=URL
 # Status por rede (padrões): H=8 (X), M=13 (Discord), N=14 (Pinterest), O=15 (Facebook), J=10 (Telegram)
 
@@ -12,7 +12,9 @@ import base64
 import pytz
 import tweepy
 import requests
+import unicodedata
 import datetime as dt
+from pathlib import Path
 from threading import Thread
 from collections import defaultdict
 from dotenv import load_dotenv
@@ -37,6 +39,9 @@ TARGET_NETWORKS = [s.strip().upper() for s in os.getenv("TARGET_NETWORKS", "X").
 
 BACKLOG_DAYS = int(os.getenv("BACKLOG_DAYS", "7"))
 DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
+
+# Priorizar arte do KIT (pasta /output) antes do imaging.py
+USE_KIT_IMAGE_FIRST = os.getenv("USE_KIT_IMAGE_FIRST", "true").strip().lower() == "true"
 
 # ===== X (Twitter)
 X_POST_IN_ALL_ACCOUNTS = os.getenv("X_POST_IN_ALL_ACCOUNTS", "true").strip().lower() == "true"
@@ -122,6 +127,28 @@ def _within_backlog(date_br: str, days: int) -> bool:
     d = _parse_date_br(date_br)
     if not d: return True
     return (_now().date() - d).days <= days
+
+def _slug(s: str) -> str:
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"[^a-zA-Z0-9\s\-]", "", s).lower().strip()
+    s = re.sub(r"\s+", " ", s)
+    return s.replace(" ", "-")
+
+def _kit_output_path(loteria: str, concurso: str) -> Path | None:
+    """
+    Tenta achar o arquivo renderizado pelo kit HTML/CSS em /output.
+    Nome preferido: output/<slug>-<concurso>.png  (ex.: mega-sena-2938.png)
+    Fallback: PNG mais recente que comece com <slug>-*.png
+    """
+    out_dir = Path("output")
+    if not out_dir.exists():
+        return None
+    slug = _slug(loteria)
+    p1 = out_dir / f"{slug}-{str(concurso).strip()}.png"
+    if p1.exists():
+        return p1
+    candidates = sorted(out_dir.glob(f"{slug}-*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
 
 # =========================
 # Google Sheets
@@ -225,15 +252,26 @@ def x_is_dup(acc: XAccount, text: str) -> bool:
     return (t in _recent_tweets_cache[acc.label]) or (t in _postados_nesta_execucao[acc.label])
 
 # =========================
-# IMAGEM OFICIAL (usa app/imaging.py)
+# IMAGEM (prioriza KIT; fallback imaging.py)
 # =========================
 def _build_image_from_row(row):
-    """Gera a imagem 3D no padrão aprovado (app/imaging.py). Retorna BytesIO."""
+    """
+    1) Se USE_KIT_IMAGE_FIRST=True e existir imagem do kit em /output, usa ela.
+    2) Caso contrário, gera com app/imaging.py (padrão aprovado).
+    Retorna BytesIO.
+    """
     loteria = (row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "Loteria")
     concurso = (row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000")
     data_br = (row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y"))
     numeros = (row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else "")
     url_res = (row[COL_URL-1] if _safe_len(row, COL_URL) else "")
+
+    if USE_KIT_IMAGE_FIRST:
+        p = _kit_output_path(str(loteria), str(concurso))
+        if p and p.exists():
+            with open(p, "rb") as f:
+                return io.BytesIO(f.read())
+
     return gerar_imagem_loteria(str(loteria), str(concurso), str(data_br), str(numeros), str(url_res))
 
 # =========================
@@ -300,7 +338,7 @@ def coletar_candidatos_para(ws, rede: str):
 def x_upload_media_if_any(acc: XAccount, row):
     if not POST_X_WITH_IMAGE or DRY_RUN: return None
     try:
-        buf = _build_image_from_row(row)  # padrão aprovado
+        buf = _build_image_from_row(row)
         media = acc.api_v1.media_upload(filename="resultado.png", file=buf)
         return [media.media_id_string]
     except Exception as e:
