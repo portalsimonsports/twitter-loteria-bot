@@ -22,3 +22,22 @@ Suporta:
 
 ## 🗂️ Estrutura
 
+twitter-loteria-bot/
+├── app/
+│   └── imaging.py                 # Fallback de imagem (Pillow)
+├── assets/
+│   ├── fundos/                    # fundos/<slug>.jpg  (ex.: mega-sena.jpg)
+│   └── logos/                     # logos/<slug>.png   (ex.: mega-sena.png)
+├── data/
+│   └── to_publish.json            # Fila (gerada pelo GAS)
+├── output/                        # Artes finais (geradas pelo render)
+├── templates/
+│   └── post-instagram.html        # Template HTML/CSS (Opção B 3D)
+├── bot.py                         # Publicador (X/Telegram/Discord/Facebook/Pinterest)
+├── render.js                      # Gera imagens 1080×1080 com Puppeteer
+├── requirements.txt               # Dependências do bot.py
+├── package.json                   # Dependências/scripts do render.js
+├── .env.exemple                   # Modelo de variáveis
+└── .github/
+    └── workflows/
+        └── publish.yml            # CI: gera imagens e publica
