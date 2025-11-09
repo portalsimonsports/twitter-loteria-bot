@@ -1,7 +1,18 @@
 {
   "name": "twitter-loteria-bot",
   "version": "1.0.0",
+  "description": "Portal SimonSports — Gerador de artes 1080x1080 (Opção B 3D) a partir de data/to_publish.json usando Puppeteer + template HTML/CSS.",
   "type": "module",
+  "license": "MIT",
+  "author": "Portal SimonSports",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "render": "node render.js",
+    "render:ci": "node render.js",
+    "start": "node render.js"
+  },
   "dependencies": {
     "puppeteer": "^22.7.1"
   }
