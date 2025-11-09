@@ -1,11 +1,46 @@
+# ===============================================================
+# Portal SimonSports — Publicador Automático de Loterias
+# Arquivo: requirements.txt
+# Revisão: 2025-11-09
+# ---------------------------------------------------------------
+# Contém todas as dependências necessárias para:
+# - Publicação automática (X, Facebook, Telegram, Discord, Pinterest)
+# - Leitura/escrita na planilha Google (Sheets API)
+# - Geração de imagens 3D e arte HTML/CSS via Pillow
+# - Servidor Flask Keepalive para Render/Replit
+# ===============================================================
+
+# ------------------------------
+# Google Sheets / Drive API
+# ------------------------------
 gspread>=6.1.4
 oauth2client>=4.1.3
-tweepy>=4.14.0
-python-dotenv>=1.0.1
-requests>=2.28.0
 google-auth>=2.15.0
 google-api-python-client>=2.100.0
-pytz>=2023.3
+
+# ------------------------------
+# Redes sociais / comunicação
+# ------------------------------
+tweepy>=4.14.0           # X (Twitter)
+requests>=2.28.0         # HTTP base para Facebook, Telegram, Discord, Pinterest
+
+# ------------------------------
+# Utilitários e ambiente
+# ------------------------------
+python-dotenv>=1.0.1     # Leitura de variáveis .env
+pytz>=2023.3             # Timezone America/Sao_Paulo
+
+# ------------------------------
+# Servidor opcional KeepAlive
+# ------------------------------
 Flask>=2.3.0
 gunicorn>=21.2.0
-Pillow>=10.4.0
+
+# ------------------------------
+# Imagem / Geração visual
+# ------------------------------
+Pillow>=10.4.0           # Renderização e manipulação de imagens
+
+# ===============================================================
+# Fim do arquivo
+# ===============================================================
