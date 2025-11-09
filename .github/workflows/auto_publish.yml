@@ -9,7 +9,7 @@ concurrency:
   group: publish-loterias
   cancel-in-progress: true
 
-# PRECISA ser write para commitar imagens em /output
+# Necessário para commitar imagens em /output
 permissions:
   contents: write
 
@@ -28,12 +28,19 @@ jobs:
       - name: Mostrar matriz de arquivos e vars
         run: |
           echo "Branch: $GITHUB_REF"
-          echo "Arquivos no repo:"
-          ls -la
-          echo "Subpastas:"
-          find . -maxdepth 2 -type d -print | sort
+          echo "Arquivos no repo:" && ls -la
+          echo "Subpastas:" && find . -maxdepth 2 -type d -print | sort
           echo "Existe data/to_publish.json?"
           test -f data/to_publish.json && cat data/to_publish.json || echo "NÃO ENCONTRADO"
+
+      # =========================
+      # GARANTIR output/ no repo
+      # =========================
+      - name: Garantir pasta output/ + .gitkeep
+        run: |
+          mkdir -p output
+          [ -f output/.gitkeep ] || echo "" > output/.gitkeep
+          echo "Pasta output preparada."
 
       # =========================
       # RENDER (Node + Puppeteer)
@@ -45,15 +52,18 @@ jobs:
 
       - name: Instalar deps do render
         run: |
-          npm init -y >/dev/null 2>&1 || true
-          npm i puppeteer@22.13.1 --silent
-          # se usar font externa, garanta que o template a inclua (Google Fonts)
+          if [ -f package.json ]; then
+            npm i --silent
+          else
+            npm init -y >/dev/null 2>&1
+            npm i puppeteer@22.13.1 --silent
+          fi
 
       - name: Validar template e assets
         run: |
           test -f templates/post-instagram.html || (echo "templates/post-instagram.html não existe" && exit 1)
-          test -d assets/fundos || (echo "assets/fundos ausente (ok se usa outro caminho). Criando..." && mkdir -p assets/fundos)
-          test -d assets/logos  || (echo "assets/logos ausente (ok se usa outro caminho). Criando..." && mkdir -p assets/logos)
+          test -d assets/fundos || (echo "assets/fundos ausente. Criando..." && mkdir -p assets/fundos)
+          test -d assets/logos  || (echo "assets/logos ausente. Criando..." && mkdir -p assets/logos)
 
       - name: Conferir se há itens na fila
         id: fila
