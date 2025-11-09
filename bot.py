@@ -1,5 +1,5 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-09 — PRIORIDADE: imagem do kit em /output (fallback imaging.py) + multi-redes + backlog por data
+# Rev: 2025-11-09 — X_TEXT_MODE (IMAGE_ONLY | TEXT_AND_IMAGE | TEXT_ONLY) + imagem oficial app/imaging.py
 # Planilha: ImportadosBlogger2 | Colunas: A=Loteria B=Concurso C=Data D=Números E=URL
 # Status por rede (padrões): H=8 (X), M=13 (Discord), N=14 (Pinterest), O=15 (Facebook), J=10 (Telegram)
 
@@ -12,9 +12,7 @@ import base64
 import pytz
 import tweepy
 import requests
-import unicodedata
 import datetime as dt
-from pathlib import Path
 from threading import Thread
 from collections import defaultdict
 from dotenv import load_dotenv
@@ -40,13 +38,13 @@ TARGET_NETWORKS = [s.strip().upper() for s in os.getenv("TARGET_NETWORKS", "X").
 BACKLOG_DAYS = int(os.getenv("BACKLOG_DAYS", "7"))
 DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
 
-# Priorizar arte do KIT (pasta /output) antes do imaging.py
-USE_KIT_IMAGE_FIRST = os.getenv("USE_KIT_IMAGE_FIRST", "true").strip().lower() == "true"
-
 # ===== X (Twitter)
 X_POST_IN_ALL_ACCOUNTS = os.getenv("X_POST_IN_ALL_ACCOUNTS", "true").strip().lower() == "true"
 POST_X_WITH_IMAGE = os.getenv("POST_X_WITH_IMAGE", "true").strip().lower() == "true"
 COL_STATUS_X = int(os.getenv("COL_STATUS_X", "8"))
+# Novo: modo de texto para X
+X_TEXT_MODE = os.getenv("X_TEXT_MODE", "TEXT_AND_IMAGE").strip().upper()
+# valores aceitos: IMAGE_ONLY | TEXT_AND_IMAGE | TEXT_ONLY
 
 # ===== Facebook (Páginas)
 POST_FB_WITH_IMAGE = os.getenv("POST_FB_WITH_IMAGE", "true").strip().lower() == "true"
@@ -112,7 +110,6 @@ def _safe_len(row, idx): return len(row) >= idx
 def _log(*a): print(f"[{_ts()}]", *a, flush=True)
 
 def _parse_date_br(s: str):
-    """Aceita 'dd/mm/aaaa' e ignora hora se houver."""
     s = str(s or "").strip()
     if not s: return None
     m = re.match(r"(\d{2}/\d{2}/\d{4})", s)
@@ -127,28 +124,6 @@ def _within_backlog(date_br: str, days: int) -> bool:
     d = _parse_date_br(date_br)
     if not d: return True
     return (_now().date() - d).days <= days
-
-def _slug(s: str) -> str:
-    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
-    s = re.sub(r"[^a-zA-Z0-9\s\-]", "", s).lower().strip()
-    s = re.sub(r"\s+", " ", s)
-    return s.replace(" ", "-")
-
-def _kit_output_path(loteria: str, concurso: str) -> Path | None:
-    """
-    Tenta achar o arquivo renderizado pelo kit HTML/CSS em /output.
-    Nome preferido: output/<slug>-<concurso>.png  (ex.: mega-sena-2938.png)
-    Fallback: PNG mais recente que comece com <slug>-*.png
-    """
-    out_dir = Path("output")
-    if not out_dir.exists():
-        return None
-    slug = _slug(loteria)
-    p1 = out_dir / f"{slug}-{str(concurso).strip()}.png"
-    if p1.exists():
-        return p1
-    candidates = sorted(out_dir.glob(f"{slug}-*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0] if candidates else None
 
 # =========================
 # Google Sheets
@@ -252,26 +227,14 @@ def x_is_dup(acc: XAccount, text: str) -> bool:
     return (t in _recent_tweets_cache[acc.label]) or (t in _postados_nesta_execucao[acc.label])
 
 # =========================
-# IMAGEM (prioriza KIT; fallback imaging.py)
+# IMAGEM OFICIAL (usa app/imaging.py)
 # =========================
 def _build_image_from_row(row):
-    """
-    1) Se USE_KIT_IMAGE_FIRST=True e existir imagem do kit em /output, usa ela.
-    2) Caso contrário, gera com app/imaging.py (padrão aprovado).
-    Retorna BytesIO.
-    """
     loteria = (row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "Loteria")
     concurso = (row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000")
     data_br = (row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y"))
     numeros = (row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else "")
     url_res = (row[COL_URL-1] if _safe_len(row, COL_URL) else "")
-
-    if USE_KIT_IMAGE_FIRST:
-        p = _kit_output_path(str(loteria), str(concurso))
-        if p and p.exists():
-            with open(p, "rb") as f:
-                return io.BytesIO(f.read())
-
     return gerar_imagem_loteria(str(loteria), str(concurso), str(data_br), str(numeros), str(url_res))
 
 # =========================
@@ -338,7 +301,7 @@ def coletar_candidatos_para(ws, rede: str):
 def x_upload_media_if_any(acc: XAccount, row):
     if not POST_X_WITH_IMAGE or DRY_RUN: return None
     try:
-        buf = _build_image_from_row(row)
+        buf = _build_image_from_row(row)  # padrão aprovado
         media = acc.api_v1.media_upload(filename="resultado.png", file=buf)
         return [media.media_id_string]
     except Exception as e:
@@ -356,20 +319,34 @@ def publicar_em_x(ws, candidatos):
     for rownum, row in candidatos[:limite]:
         texto = montar_texto_base(row)
         ok_any = False
+
+        # Define o texto conforme X_TEXT_MODE
+        if X_TEXT_MODE == "IMAGE_ONLY":
+            texto_para_postar = ""          # sem texto
+        elif X_TEXT_MODE == "TEXT_ONLY":
+            texto_para_postar = texto
+        else:  # TEXT_AND_IMAGE (default)
+            texto_para_postar = texto
+
         if X_POST_IN_ALL_ACCOUNTS:
             for acc in contas:
                 media_ids = x_upload_media_if_any(acc, row)
                 try:
                     if DRY_RUN:
-                        _log(f"[X][{acc.handle}] DRY-RUN: {texto[:60]}...")
+                        _log(f"[X][{acc.handle}] DRY-RUN")
                         ok = True
                     else:
-                        if x_is_dup(acc, texto):
+                        # Duplicidade só faz sentido quando há texto
+                        if texto_para_postar and x_is_dup(acc, texto_para_postar):
                             _log(f"[X][{acc.handle}] SKIP duplicado."); ok = False
                         else:
-                            resp = acc.client_v2.create_tweet(text=texto, media_ids=media_ids)
-                            _postados_nesta_execucao[acc.label].add(texto)
-                            _recent_tweets_cache[acc.label].add(texto)
+                            resp = acc.client_v2.create_tweet(
+                                text=texto_para_postar if X_TEXT_MODE != "IMAGE_ONLY" else None,
+                                media_ids=media_ids if POST_X_WITH_IMAGE else None
+                            )
+                            if texto_para_postar:
+                                _postados_nesta_execucao[acc.label].add(texto_para_postar)
+                                _recent_tweets_cache[acc.label].add(texto_para_postar)
                             _log(f"[X][{acc.handle}] OK → {resp.data['id']}"); ok = True
                 except Exception as e:
                     _log(f"[X][{acc.handle}] erro: {e}"); ok = False
@@ -380,14 +357,18 @@ def publicar_em_x(ws, candidatos):
             media_ids = x_upload_media_if_any(acc, row)
             try:
                 if DRY_RUN:
-                    _log(f"[X][{acc.handle}] DRY-RUN: {texto[:60]}..."); ok_any = True
+                    _log(f"[X][{acc.handle}] DRY-RUN"); ok_any = True
                 else:
-                    if x_is_dup(acc, texto):
+                    if texto_para_postar and x_is_dup(acc, texto_para_postar):
                         _log(f"[X][{acc.handle}] SKIP duplicado."); ok_any = False
                     else:
-                        resp = acc.client_v2.create_tweet(text=texto, media_ids=media_ids)
-                        _postados_nesta_execucao[acc.label].add(texto)
-                        _recent_tweets_cache[acc.label].add(texto)
+                        resp = acc.client_v2.create_tweet(
+                            text=texto_para_postar if X_TEXT_MODE != "IMAGE_ONLY" else None,
+                            media_ids=media_ids if POST_X_WITH_IMAGE else None
+                        )
+                        if texto_para_postar:
+                            _postados_nesta_execucao[acc.label].add(texto_para_postar)
+                            _recent_tweets_cache[acc.label].add(texto_para_postar)
                         _log(f"[X][{acc.handle}] OK → {resp.data['id']}"); ok_any = True
             except Exception as e:
                 _log(f"[X][{acc.handle}] erro: {e}"); ok_any = False
@@ -600,7 +581,7 @@ def start_keepalive():
 # MAIN
 # =========================
 def main():
-    _log(f"Iniciando bot... Origem={BOT_ORIGEM} | Redes={','.join(TARGET_NETWORKS)} | DRY_RUN={DRY_RUN}")
+    _log(f"Iniciando bot... Origem={BOT_ORIGEM} | Redes={','.join(TARGET_NETWORKS)} | DRY_RUN={DRY_RUN} | X_TEXT_MODE={X_TEXT_MODE}")
     keepalive_thread = start_keepalive() if ENABLE_KEEPALIVE else None
     try:
         ws = _open_ws()
