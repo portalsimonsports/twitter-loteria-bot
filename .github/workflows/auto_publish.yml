@@ -2,18 +2,16 @@ name: Publicação Automática de Loterias
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'data/to_publish.json'      # dispara quando o GAS atualizar o JSON
   schedule:
-    - cron: "*/10 * * * *"          # a cada 10 min (UTC)
+    - cron: "*/10 * * * *"  # a cada 10 min (UTC)
 
 concurrency:
   group: publish-loterias
   cancel-in-progress: true
 
+# PRECISA ser write para commitar imagens em /output
 permissions:
-  contents: write                   # precisa escrever commits (output/)
+  contents: write
 
 jobs:
   run:
@@ -24,146 +22,136 @@ jobs:
       - name: Checkout do repositório
         uses: actions/checkout@v4
 
-      # ----------------- NODE (render.js) -----------------
+      # =========================
+      # DIAGNÓSTICOS INICIAIS
+      # =========================
+      - name: Mostrar matriz de arquivos e vars
+        run: |
+          echo "Branch: $GITHUB_REF"
+          echo "Arquivos no repo:"
+          ls -la
+          echo "Subpastas:"
+          find . -maxdepth 2 -type d -print | sort
+          echo "Existe data/to_publish.json?"
+          test -f data/to_publish.json && cat data/to_publish.json || echo "NÃO ENCONTRADO"
+
+      # =========================
+      # RENDER (Node + Puppeteer)
+      # =========================
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
-      - name: Criar package.json (se não existir)
+      - name: Instalar deps do render
         run: |
-          if [ ! -f package.json ]; then
-            cat > package.json <<'JSON'
-            {
-              "name": "twitter-loteria-bot",
-              "version": "1.0.0",
-              "type": "module",
-              "dependencies": {
-                "puppeteer": "^22.7.1"
-              },
-              "scripts": {
-                "build": "node render.js"
-              }
-            }
-            JSON
+          npm init -y >/dev/null 2>&1 || true
+          npm i puppeteer@22.13.1 --silent
+          # se usar font externa, garanta que o template a inclua (Google Fonts)
+
+      - name: Validar template e assets
+        run: |
+          test -f templates/post-instagram.html || (echo "templates/post-instagram.html não existe" && exit 1)
+          test -d assets/fundos || (echo "assets/fundos ausente (ok se usa outro caminho). Criando..." && mkdir -p assets/fundos)
+          test -d assets/logos  || (echo "assets/logos ausente (ok se usa outro caminho). Criando..." && mkdir -p assets/logos)
+
+      - name: Conferir se há itens na fila
+        id: fila
+        run: |
+          if [ -f data/to_publish.json ]; then
+            N=$(jq 'length' data/to_publish.json || echo 0)
+          else
+            N=0
           fi
+          echo "itens=$N" >> $GITHUB_OUTPUT
+          echo "Itens na fila: $N"
 
-      - name: Instalar dependências Node
-        run: npm install
-
-      - name: Instalar fontes (melhor render PT-BR)
+      - name: Renderizar imagens (se houver itens)
+        if: steps.fila.outputs.itens != '0'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y fonts-dejavu fonts-liberation
+          node render.js
+          echo "Arquivos gerados em /output:"
+          ls -la output || true
 
-      - name: Renderizar imagens (HTML → JPG)
-        run: npm run build
-
-      - name: Commitar imagens geradas (output/)
+      - name: Commitar /output (se gerado)
+        if: steps.fila.outputs.itens != '0'
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add output/*.jpg || echo "Sem imagens novas"
-          git commit -m "chore: imagens geradas" || echo "Nada para commit"
+          git add output || true
+          git commit -m "chore: adiciona imagens geradas (${GITHUB_RUN_NUMBER})" || echo "Nada para commitar"
           git push
 
-      # ----------- (OPCIONAL) Instagram via Graph API -----------
-      # Requer Secrets: IG_USER_ID e FB_ACCESS_TOKEN
-      - name: Publicar no Instagram
-        if: ${{ secrets.IG_USER_ID && secrets.FB_ACCESS_TOKEN }}
-        env:
-          IG_USER_ID: ${{ secrets.IG_USER_ID }}
-          ACCESS_TOKEN: ${{ secrets.FB_ACCESS_TOKEN }}
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          sudo apt-get install -y jq
-          shopt -s nullglob
-          for img in output/*.jpg; do
-            RAW_URL="https://raw.githubusercontent.com/${REPO}/${BRANCH}/${img}"
-            echo "Publicando $img via $RAW_URL"
-
-            container=$(curl -s -X POST "https://graph.facebook.com/v20.0/${IG_USER_ID}/media" \
-              -F "image_url=${RAW_URL}" \
-              -F "caption=Resultado: ${img##*/}" \
-              -F "access_token=${ACCESS_TOKEN}")
-
-            creation_id=$(echo "$container" | jq -r '.id')
-            if [ "$creation_id" != "null" ] && [ -n "$creation_id" ]; then
-              curl -s -X POST "https://graph.facebook.com/v20.0/${IG_USER_ID}/media_publish" \
-                -F "creation_id=$creation_id" \
-                -F "access_token=${ACCESS_TOKEN}"
-              echo "$img publicado no Instagram!"
-            else
-              echo "Falha ao criar container: $container"
-            fi
-            sleep 6
-          done
-
-      # ----------------- PYTHON (bot.py) -----------------
+      # =========================
+      # PUBLICAÇÃO (Python bot.py)
+      # =========================
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: 'pip'
 
-      - name: Instalar dependências Python
+      - name: Cache do pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Instalar dependências
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          if [ -f requirements.txt ]; then
-            pip install --no-cache-dir -r requirements.txt
-          fi
+          pip install --no-cache-dir -r requirements.txt
 
-      - name: Verificar secrets obrigatórios (Google + X conta 1)
+      - name: Verificar secrets mínimos (Google + X conta 1)
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
-          TWITTER_API_KEY_1:   ${{ secrets.TWITTER_API_KEY_1 }}
+          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
           TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
         run: |
           python - <<'PY'
           import os, sys, json
-          req = ["GOOGLE_SERVICE_JSON","TWITTER_API_KEY_1","TWITTER_API_SECRET_1","TWITTER_ACCESS_TOKEN_1","TWITTER_ACCESS_SECRET_1"]
-          miss = [k for k in req if not os.getenv(k)]
+          need = ["GOOGLE_SERVICE_JSON","TWITTER_API_KEY_1","TWITTER_API_SECRET_1","TWITTER_ACCESS_TOKEN_1","TWITTER_ACCESS_SECRET_1"]
+          miss = [k for k in need if not os.getenv(k)]
           if miss:
-              print("Faltam variáveis:", miss); sys.exit(1)
+            print("FALTAM SECRETS:", miss); sys.exit(1)
           try: json.loads(os.environ["GOOGLE_SERVICE_JSON"])
           except Exception as e: print("GOOGLE_SERVICE_JSON inválido:", e); sys.exit(1)
-          print("Secrets OK")
+          print("Secrets mínimos OK")
           PY
 
-      - name: Executar publicação (X + demais redes configuradas)
+      - name: Executar bot.py (X/Telegram/Discord/FB/Pinterest conforme vars)
         env:
-          # === Google ===
+          # Google
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
           SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
 
-          # === X (Twitter) — Conta 1 (obrigatória)
+          # X (obrigatória conta 1)
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
           TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
 
-          # === X (Twitter) — Conta 2 (opcional)
+          # X conta 2 (opcional)
           TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
           TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
           TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
           TWITTER_ACCESS_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
 
-          # === Outras redes (opcionais)
+          # Outras redes (opcionais)
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_IDS: ${{ secrets.TG_CHAT_IDS }}           # ex: -100111,-100222
-          DISCORD_WEBHOOKS: ${{ secrets.DISCORD_WEBHOOKS }} # ex: url1,url2
-          FB_PAGE_IDS: ${{ secrets.FB_PAGE_IDS }}           # ex: 123,456
-          FB_PAGE_TOKENS: ${{ secrets.FB_PAGE_TOKENS }}     # ex: token1,token2
+          TG_CHAT_IDS: ${{ secrets.TG_CHAT_IDS }}
+          DISCORD_WEBHOOKS: ${{ secrets.DISCORD_WEBHOOKS }}
+          FB_PAGE_IDS: ${{ secrets.FB_PAGE_IDS }}
+          FB_PAGE_TOKENS: ${{ secrets.FB_PAGE_TOKENS }}
           PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
           PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
 
-          # === Comportamento do bot (imagem gerada dentro do bot.py ou já em output/)
-          TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS || 'X' }}   # "X" ou "X,FACEBOOK,TELEGRAM"
+          # Comportamento
+          TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS || 'X' }}
           BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS || '7' }}
           MAX_PUBLICACOES_RODADA: ${{ vars.MAX_PUBLICACOES_RODADA || '30' }}
           PAUSA_ENTRE_POSTS: ${{ vars.PAUSA_ENTRE_POSTS || '2.5' }}
@@ -175,5 +163,6 @@ jobs:
 
           ENABLE_KEEPALIVE: "false"
         run: |
-          echo "Iniciando publicação automática…"
+          echo "==== Iniciando bot.py ===="
           python bot.py
+          echo "==== Fim do bot.py ===="
