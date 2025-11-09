@@ -1,4 +1,4 @@
-// render.js — Portal SimonSports — Loterias -> Imagem 1080x1080 (Opção B 3D)
+// render.js — Portal SimonSports — Loterias → Imagem 1080x1080 (Opção B 3D)
 // Lê data/to_publish.json, aplica templates/post-instagram.html,
 // usa fundos em assets/fundos/<slug>.jpg e logos em assets/logos/<slug>.png,
 // e salva as imagens finais em output/<arquivo>.jpg
@@ -7,14 +7,17 @@ import fs from 'fs';
 import path from 'path';
 import puppeteer from 'puppeteer';
 
-const ROOT = process.cwd();
-const OUT_DIR = path.join(ROOT, 'output');
-const DATA_FILE = path.join(ROOT, 'data', 'to_publish.json');
-const TEMPLATE_FILE = path.join(ROOT, 'templates', 'post-instagram.html');
+const ROOT         = process.cwd();
+const OUT_DIR      = path.join(ROOT, 'output');
+const DATA_FILE    = path.join(ROOT, 'data', 'to_publish.json');
+const TEMPLATE_FILE= path.join(ROOT, 'templates', 'post-instagram.html');
 
-// -------------------- utils --------------------
+// ===== Utils =====
 function ensureDir(p){ if(!fs.existsSync(p)) fs.mkdirSync(p, { recursive:true }); }
 function safe(v){ return (v===undefined || v===null) ? '' : String(v); }
+function isHttp(u){ return /^https?:\/\//i.test(String(u||'')); }
+function fileUrl(absPath){ return `file://${absPath}`; }
+
 function slugify(s){
   return String(s||'')
     .toLowerCase()
@@ -38,8 +41,9 @@ const LOTERIA_SLUGS = {
   'dia-de-sorte':'dia-de-sorte',
   'super sete':'super-sete',
   'super-sete':'super-sete',
-  'loteca':'loteca',
+  'loteca':'loteca'
 };
+
 function guessSlug(text){
   const p = String(text||'').toLowerCase();
   for (const k of Object.keys(LOTERIA_SLUGS)){
@@ -47,45 +51,69 @@ function guessSlug(text){
   }
   return slugify(text||'loteria');
 }
-function fileUrl(rel){ return `file://${path.join(ROOT, rel)}`; }
+
+/** Converte caminho relativo para file:// absoluto.
+ * Se já for http(s), retorna como está.
+ * Se o arquivo local não existir, retorna null (para cair no fallback). */
+function resolvePathOrUrl(relOrUrl){
+  const v = String(relOrUrl||'').trim();
+  if (!v) return null;
+  if (isHttp(v)) return v;
+  const abs = path.isAbsolute(v) ? v : path.join(ROOT, v);
+  return fs.existsSync(abs) ? fileUrl(abs) : null;
+}
+
+// Normaliza números (“1 2;03,4” → “01, 02, 03, 04”)
+function normalizeNumeros(raw){
+  let s = safe(raw).replace(/[;\|\s]+/g, ',');
+  const parts = s.split(',').map(x => x.trim()).filter(Boolean);
+  const norm = parts.map(p => {
+    const n = p.replace(/\D/g,'');
+    if (n.length>=1 && n.length<=2) return ('0'+Number(n)).slice(-2);
+    return p; // preserva “1x2” (Loteca)
+  });
+  return norm.join(', ');
+}
 
 function buildFields(item){
-  // Esperado no JSON (GAS):
-  // Loteria | Concurso | Data | Números | URL | TelegramC1 | TelegramC2 | (opcionais) Logo | ImagemFundo
+  // Esperado (vindo do GAS): Produto/Loteria, Concurso, Data, Números, URL, TelegramC1, TelegramC2
   const loteria  = safe(item.Loteria || item.Produto);
   const concurso = safe(item.Concurso);
   const data     = safe(item.Data);
-  const numeros  = safe(item['Números'] ?? item.Numeros);
+  const numeros  = normalizeNumeros(item['Números'] ?? item.Numeros);
   const url      = safe(item.URL ?? item.Url);
   const tg1      = safe(item.TelegramC1 ?? item.TELEGRAM_CANAL_1);
   const tg2      = safe(item.TelegramC2 ?? item.TELEGRAM_CANAL_2);
 
   const slug = guessSlug(loteria);
 
-  // FallBacks (usa seus arquivos locais)
-  const fundo = (item.ImagemFundo && String(item.ImagemFundo).trim())
-    ? item.ImagemFundo
-    : fileUrl(path.join('assets','fundos', `${slug}.jpg`));
-
-  const logo = (item.Logo && String(item.Logo).trim())
-    ? item.Logo
-    : fileUrl(path.join('assets','logos', `${slug}.png`));
+  // Fundo e Logo — prioriza o que vier no JSON; senão usa pasta /assets
+  let fundo = resolvePathOrUrl(item.ImagemFundo);
+  if (!fundo) {
+    const localFundo = path.join('assets','fundos', `${slug}.jpg`);
+    fundo = resolvePathOrUrl(localFundo); // file://...
+  }
+  let logo = resolvePathOrUrl(item.Logo);
+  if (!logo) {
+    const localLogo = path.join('assets','logos', `${slug}.png`);
+    logo = resolvePathOrUrl(localLogo);
+  }
 
   // Título e descrição para o template
   const produto   = concurso ? `${loteria} • Concurso ${concurso}` : loteria;
   const descricao = numeros ? `Números: ${numeros}` : '';
 
-  // Nome do arquivo final
-  const tag = concurso || data || '';
-  const filename = tag ? `${slug}-${slugify(tag)}.jpg` : `${slug}.jpg`;
+  // Nome do arquivo final (usa id, se existir, senão usa slug + concurso/data)
+  const tagBase = safe(item.id) || (concurso || data || '');
+  const filename = tagBase ? `${slug}-${slugify(tagBase)}.jpg` : `${slug}.jpg`;
 
   return { slug, produto, data, descricao, url, tg1, tg2, fundo, logo, filename };
 }
 
 function applyTemplate(html, f){
   return html
-    .replace(/{{ImagemFundo}}/g, f.fundo)
-    .replace(/{{Logo}}/g,        f.logo)
+    .replace(/{{ImagemFundo}}/g, f.fundo || '')
+    .replace(/{{Logo}}/g,        f.logo || '')
     .replace(/{{Produto}}/g,     f.produto)
     .replace(/{{Data}}/g,        f.data)
     .replace(/{{Descricao}}/g,   f.descricao)
@@ -94,21 +122,28 @@ function applyTemplate(html, f){
     .replace(/{{TelegramC2}}/g,  f.tg2);
 }
 
-// -------------------- main --------------------
+// ===== MAIN =====
 async function main(){
   ensureDir(OUT_DIR);
 
+  if (!fs.existsSync(TEMPLATE_FILE)) {
+    console.error('❌ Template não encontrado:', TEMPLATE_FILE);
+    process.exit(1);
+  }
   if (!fs.existsSync(DATA_FILE)) {
-    console.log('Arquivo não encontrado:', DATA_FILE);
+    console.log('⚠️  Arquivo não encontrado (nada a fazer):', DATA_FILE);
     process.exit(0);
   }
 
   let items = [];
   try { items = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8') || '[]'); }
-  catch { items = []; }
+  catch (e) {
+    console.error('❌ JSON inválido em', DATA_FILE, e.message);
+    process.exit(1);
+  }
 
   if (!Array.isArray(items) || items.length === 0){
-    console.log('Nada para gerar: data/to_publish.json está vazio.');
+    console.log('ℹ️  Nada para gerar: data/to_publish.json está vazio.');
     return;
   }
 
@@ -123,8 +158,11 @@ async function main(){
 
   for (const item of items){
     const f = buildFields(item);
-    const html = applyTemplate(template, f);
 
+    if (!f.fundo) console.warn(`⚠️  Fundo ausente para "${f.slug}" — verifique assets/fundos/${f.slug}.jpg`);
+    if (!f.logo)  console.warn(`⚠️  Logo ausente para "${f.slug}" — verifique assets/logos/${f.slug}.png`);
+
+    const html = applyTemplate(template, f);
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
     const outPath = path.join(OUT_DIR, f.filename);
