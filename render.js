@@ -5,6 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { pathToFileURL } from 'url';
 import puppeteer from 'puppeteer';
 
 const ROOT          = process.cwd();
@@ -16,7 +17,7 @@ const TEMPLATE_FILE = path.join(ROOT, 'templates', 'post-instagram.html');
 function ensureDir(p){ if(!fs.existsSync(p)) fs.mkdirSync(p, { recursive:true }); }
 function safe(v){ return (v===undefined || v===null) ? '' : String(v); }
 function isHttp(u){ return /^https?:\/\//i.test(String(u||'')); }
-function fileUrl(absPath){ return `file://${absPath}`; }
+function fileUrl(absPath){ return pathToFileURL(absPath).href; }
 
 function slugify(s){
   return String(s||'')
@@ -63,14 +64,13 @@ function resolvePathOrUrl(relOrUrl){
   return fs.existsSync(abs) ? fileUrl(abs) : null;
 }
 
-// Normaliza números (“1 2;03,4” → “01, 02, 03, 04”)
+// Normaliza números (“1 2;03,4” → “01, 02, 03, 04”) preservando “1x2” (Loteca)
 function normalizeNumeros(raw){
   let s = safe(raw).replace(/[;\|\s]+/g, ',');
   const parts = s.split(',').map(x => x.trim()).filter(Boolean);
   const norm = parts.map(p => {
-    const n = p.replace(/\D/g,'');
-    if (n.length>=1 && n.length<=2) return ('0'+Number(n)).slice(-2);
-    return p; // preserva “1x2” (Loteca)
+    if (/^\d{1,2}$/.test(p)) return ('0'+Number(p)).slice(-2);
+    return p;
   });
   return norm.join(', ');
 }
@@ -104,7 +104,7 @@ function buildFields(item){
   const produto   = concurso ? `${loteria} • Concurso ${concurso}` : loteria;
   const descricao = numeros ? `Números: ${numeros}` : '';
 
-  // ===== Nome do arquivo final (elimina repetições) =====
+  // ===== Nome do arquivo final (sem repetições) =====
   // Preferimos 'id' quando existir (ex.: "lotomania-2846").
   // Se o 'id' já contiver o slug, não repetimos.
   const tagRaw = safe(item.id) || (concurso || data || '');
@@ -113,7 +113,6 @@ function buildFields(item){
   if (!tag) {
     filename = `${slug}.jpg`;
   } else if (tag.startsWith(`${slug}-`)) {
-    // id já contém o slug: "mega-sena-2938" → mega-sena-2938.jpg
     filename = `${tag}.jpg`;
   } else {
     filename = `${slug}-${tag}.jpg`;
@@ -143,7 +142,7 @@ async function main(){
     process.exit(1);
   }
   if (!fs.existsSync(DATA_FILE)) {
-    console.log('⚠️  Arquivo não encontrado (nada a fazer):', DATA_FILE);
+    console.log('ℹ️  Nada a renderizar:', DATA_FILE, 'não existe.');
     process.exit(0);
   }
 
@@ -161,11 +160,23 @@ async function main(){
 
   const template = fs.readFileSync(TEMPLATE_FILE, 'utf8');
 
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    defaultViewport: { width:1080, height:1080, deviceScaleFactor: 2 },
-    args: ['--no-sandbox','--disable-setuid-sandbox']
-  });
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      defaultViewport: { width:1080, height:1080, deviceScaleFactor: 2 },
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-gpu',
+        '--font-render-hinting=none'
+      ]
+    });
+  } catch (e) {
+    console.error('❌ Falha ao iniciar o Puppeteer/Chromium:', e.message);
+    process.exit(1);
+  }
+
   const page = await browser.newPage();
 
   for (const item of items){
@@ -189,4 +200,3 @@ main().catch(err => {
   console.error('❌ Erro no render:', err);
   process.exit(1);
 });
-```0
