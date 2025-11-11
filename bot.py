@@ -1,9 +1,9 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-11c — SANITY CHECK + FORCE_PUBLISH_ROWS + DISABLE_X_DUPCHECK + logs detalhados
+# Rev: 2025-11-11c — marcação com retry; FORCE_PUBLISH_ROWS; Loteca ON; filtros; mídia X fix
 # Planilha: ImportadosBlogger2 | Colunas: A=Loteria B=Concurso C=Data D=Números E=URL
 # Status por rede (padrões): H=8 (X), M=13 (Discord), N=14 (Pinterest), O=15 (Facebook), J=10 (Telegram)
 
-import os, re, io, glob, json, time, base64, pytz, tweepy, requests, datetime as dt
+import os, re, io, glob, json, time, base64, pytz, tweepy, requests, datetime as dt, math, random
 from threading import Thread
 from collections import defaultdict
 from dotenv import load_dotenv
@@ -32,24 +32,20 @@ TARGET_NETWORKS = [s.strip().upper() for s in os.getenv("TARGET_NETWORKS", "X").
 BACKLOG_DAYS = int(os.getenv("BACKLOG_DAYS", "7"))  # use 0 para ignorar data
 DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
 
-# Gate opcional (desligado por padrão)
+# Gate de horário (DESLIGADO por padrão)
 ENABLE_TIME_GATE = os.getenv("ENABLE_TIME_GATE", "false").strip().lower() == "true"
 TIME_GATE_HHMM   = os.getenv("TIME_GATE_HHMM", "2245").strip()
 
-# Loteca
+# PUBLICAR LOTECA (ON por padrão)
 PUBLISH_LOTECA = os.getenv("PUBLISH_LOTECA", "true").strip().lower() == "true"
 
-# Filtros por loteria (slugs)
+# Filtros por loteria (slugs separados por vírgula). Ex.: "mega-sena,quina"
 LOTERIAS_ONLY = [s.strip().lower() for s in os.getenv("LOTERIAS_ONLY", "").split(",") if s.strip()]
 LOTERIAS_SKIP = [s.strip().lower() for s in os.getenv("LOTERIAS_SKIP", "").split(",") if s.strip()]
 
-# Forçar linhas específicas (número da linha na planilha — mesma numeração visual)
-FORCE_PUBLISH_ROWS = set()
-_tmp_force = os.getenv("FORCE_PUBLISH_ROWS", "").strip()
-if _tmp_force:
-    for x in _tmp_force.split(","):
-        x = x.strip()
-        if x.isdigit(): FORCE_PUBLISH_ROWS.add(int(x))
+# Forçar publicação de linhas específicas (ignora status/backlog/filtros)
+# Formatos aceitos: "788", "788,790", "770-775,788"
+FORCE_PUBLISH_ROWS = os.getenv("FORCE_PUBLISH_ROWS", "").strip()
 
 # ===== Modo de TEXTO =====
 GLOBAL_TEXT_MODE = (os.getenv("GLOBAL_TEXT_MODE", "") or "").strip().upper()
@@ -72,7 +68,6 @@ def get_text_mode(rede: str) -> str:
 # ===== X (Twitter)
 X_POST_IN_ALL_ACCOUNTS = os.getenv("X_POST_IN_ALL_ACCOUNTS", "true").strip().lower() == "true"
 POST_X_WITH_IMAGE = os.getenv("POST_X_WITH_IMAGE", "true").strip().lower() == "true"
-DISABLE_X_DUPCHECK = os.getenv("DISABLE_X_DUPCHECK", "false").strip().lower() == "true"
 COL_STATUS_X = int(os.getenv("COL_STATUS_X", "8"))
 
 # ===== Facebook
@@ -156,6 +151,7 @@ def _after_gate() -> bool:
     gate = _now().replace(hour=hh, minute=mm, second=0, microsecond=0)
     return _now() >= gate
 
+# Slugs / filtros
 _LOTERIA_SLUGS = {
     'mega-sena':'mega-sena','quina':'quina','lotofacil':'lotofacil','lotofácil':'lotofacil',
     'lotomania':'lotomania','timemania':'timemania','dupla sena':'dupla-sena','dupla-sena':'dupla-sena',
@@ -185,6 +181,22 @@ def _match_loteria_filters(nome: str) -> bool:
         return False
     return True
 
+def _parse_force_rows(expr: str):
+    if not expr: return set()
+    out = set()
+    parts = [p.strip() for p in expr.split(",") if p.strip()]
+    for p in parts:
+        m = re.match(r"^(\d+)\-(\d+)$", p)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            if a > b: a, b = b, a
+            out.update(range(a, b+1))
+        elif p.isdigit():
+            out.add(int(p))
+    return out
+
+FORCE_ROWS = _parse_force_rows(FORCE_PUBLISH_ROWS)
+
 # =========================
 # Google Sheets
 # =========================
@@ -204,11 +216,25 @@ def _open_ws():
     if not SHEET_ID: raise RuntimeError("GOOGLE_SHEET_ID não definido.")
     return _gs_client().open_by_key(SHEET_ID).worksheet(SHEET_TAB)
 
-def marcar_publicado(ws, rownum, rede, value=None):
+def _retry_sleep(i):
+    # backoff exponencial com jitter
+    time.sleep((2 ** i) + random.random())
+
+def marcar_publicado(ws, rownum, rede, value=None, retries=3):
     col = COL_STATUS_REDES.get(rede)
-    if not col: return
+    if not col:
+        _log(f"[{rede}] coluna de status não definida; skip marcação.")
+        return
     valor = value or f"Publicado {rede} via {BOT_ORIGEM} em {_ts_br()}"
-    ws.update_cell(rownum, col, valor)
+    for i in range(retries):
+        try:
+            ws.update_cell(rownum, col, valor)
+            _log(f"[{rede}] marcado L{rownum} col{col} = {valor}")
+            return
+        except Exception as e:
+            _log(f"[{rede}] falha ao marcar L{rownum} (tentativa {i+1}/{retries}): {e}")
+            _retry_sleep(i)
+    _log(f"[{rede}] desistiu de marcar L{rownum} após {retries} tentativas.")
 
 # =========================
 # Imagem
@@ -273,30 +299,19 @@ def montar_texto_base(row) -> str:
     return "\n".join(linhas).strip()
 
 # =========================
-# Coleta de candidatos + SANITY
+# Coleta de candidatos
 # =========================
-def _sanity_sheet(ws, rede: str):
-    """Imprime contagem de vazios na coluna de status e mostra as 5 primeiras linhas elegíveis."""
-    rows = ws.get_all_values()
-    if len(rows) <= 1:
-        _log(f"[{rede}] SANITY: planilha sem linhas além do cabeçalho."); return
-    data = rows[1:]
-    col_status = COL_STATUS_REDES.get(rede)
-    vazias = []
-    for i, row in enumerate(data, start=2):
-        status = row[col_status-1] if len(row) >= col_status else ""
-        if not str(status or "").strip():
-            lot = row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else ""
-            dtb = row[COL_Data-1] if _safe_len(row, COL_Data) else ""
-            vazias.append((i, lot, dtb))
-    _log(f"[{rede}] SANITY: total linhas={len(data)} | vazias_col{col_status}={len(vazias)}")
-    for ln, lot, dtb in vazias[:5]:
-        _log(f"[{rede}] SANITY exemplo vazio → L{ln} | {lot} | {dtb}")
-
 def coletar_candidatos_para(ws, rede: str):
     rows = ws.get_all_values()
     if len(rows) <= 1:
         _log(f"[{rede}] Planilha sem dados."); return []
+
+    forced = set()
+    if FORCE_ROWS:
+        # Linhas da planilha são 1-based; dados começam na 2
+        forced = {r for r in FORCE_ROWS if r >= 2}
+        if forced:
+            _log(f"[{rede}] FORCE_PUBLISH_ROWS ativo → {sorted(list(forced))}")
 
     data = rows[1:]
     cand = []; col_status = COL_STATUS_REDES.get(rede)
@@ -306,18 +321,14 @@ def coletar_candidatos_para(ws, rede: str):
     total = len(data); vazias = preenchidas = fora_backlog = filtradas = 0
 
     for rindex, row in enumerate(data, start=2):
-        loteria_nome = (row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "")
-        slug = _guess_slug(loteria_nome)
-
-        # FORCE: passa por cima de tudo
-        if rindex in FORCE_PUBLISH_ROWS:
-            cand.append((rindex, row)); vazias += 1
-            _log(f"[{rede}] FORCE L{rindex}: forçado por FORCE_PUBLISH_ROWS ({slug}).")
+        if rindex in forced:
+            cand.append((rindex, row))
             continue
 
+        loteria_nome = (row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "")
+        slug = _guess_slug(loteria_nome)
         if not _match_loteria_filters(loteria_nome):
             filtradas += 1
-            _log(f"[{rede}] SKIP L{rindex}: filtro de loteria ({slug}).")
             continue
 
         status_val = row[col_status-1] if len(row) >= col_status else ""
@@ -328,14 +339,10 @@ def coletar_candidatos_para(ws, rede: str):
         if dentro and not tem_status:
             cand.append((rindex, row)); vazias += 1
         else:
-            if tem_status:
-                preenchidas += 1
-                _log(f"[{rede}] SKIP L{rindex}: status col {col_status} preenchido ({str(status_val)[:25]})")
-            elif not dentro:
-                fora_backlog += 1
-                _log(f"[{rede}] SKIP L{rindex}: fora do backlog ({data_br})")
+            if tem_status:   preenchidas += 1
+            elif not dentro: fora_backlog += 1
 
-    _log(f"[{rede}] Candidatas: {vazias}/{total} | status: {preenchidas} | fora backlog: {fora_backlog} | filtro: {filtradas}")
+    _log(f"[{rede}] Candidatas: {len(cand)}/{total} | vazias:{vazias} status:{preenchidas} backlog:{fora_backlog} filtro:{filtradas}")
     return cand
 
 # =========================
@@ -387,7 +394,6 @@ def x_load_recent_texts(acc: XAccount, max_results=50):
         _log(f"[{acc.handle}] warn: falha ao ler tweets: {e}"); return set()
 
 def x_is_dup(acc: XAccount, text: str) -> bool:
-    if DISABLE_X_DUPCHECK: return False
     t = (text or "").strip()
     return bool(t) and (t in _recent_tweets_cache[acc.label] or t in _postados_nesta_execucao[acc.label])
 
@@ -637,10 +643,7 @@ def main():
          f"PUBLISH_LOTECA={PUBLISH_LOTECA}",
          f"ONLY={','.join(LOTERIAS_ONLY) or '—'}",
          f"SKIP={','.join(LOTERIAS_SKIP) or '—'}",
-         f"BACKLOG_DAYS={BACKLOG_DAYS}",
-         f"FORCE_ROWS={','.join(map(str,sorted(FORCE_PUBLISH_ROWS))) or '—'}",
-         f"DISABLE_X_DUPCHECK={DISABLE_X_DUPCHECK}"
-    )
+         f"FORCE_ROWS={FORCE_PUBLISH_ROWS or '—'}")
 
     if ENABLE_TIME_GATE and not DRY_RUN and not _after_gate():
         _log(f"Saindo: gate horário ativo (TIME_GATE_HHMM={TIME_GATE_HHMM})."); return
@@ -648,29 +651,16 @@ def main():
     keepalive_thread = start_keepalive() if ENABLE_KEEPALIVE else None
     try:
         ws = _open_ws()
-        # Sanidade por rede (mostra vazios na coluna de status)
         for rede in TARGET_NETWORKS:
-            if rede in COL_STATUS_REDES:
-                _sanity_sheet(ws, rede)
-
-        for rede in TARGET_NETWORKS:
-            if rede not in COL_STATUS_REDES:
-                _log(f"[{rede}] rede não suportada."); continue
+            if rede not in COL_STATUS_REDES: _log(f"[{rede}] rede não suportada."); continue
             candidatos = coletar_candidatos_para(ws, rede)
-            if not candidatos:
-                _log(f"[{rede}] Nenhuma candidata."); continue
-            if rede == "X":
-                publicar_em_x(ws, candidatos)
-            elif rede == "FACEBOOK":
-                publicar_em_facebook(ws, candidatos)
-            elif rede == "TELEGRAM":
-                publicar_em_telegram(ws, candidatos)
-            elif rede == "DISCORD":
-                publicar_em_discord(ws, candidatos)
-            elif rede == "PINTEREST":
-                publicar_em_pinterest(ws, candidatos)
-            else:
-                _log(f"[{rede}] não implementada.")
+            if not candidatos: _log(f"[{rede}] Nenhuma candidata."); continue
+            if rede == "X": publicar_em_x(ws, candidatos)
+            elif rede == "FACEBOOK": publicar_em_facebook(ws, candidatos)
+            elif rede == "TELEGRAM": publicar_em_telegram(ws, candidatos)
+            elif rede == "DISCORD": publicar_em_discord(ws, candidatos)
+            elif rede == "PINTEREST": publicar_em_pinterest(ws, candidatos)
+            else: _log(f"[{rede}] não implementada.")
         _log("Concluído.")
     except KeyboardInterrupt:
         _log("Interrompido pelo usuário.")
