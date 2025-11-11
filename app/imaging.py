@@ -290,3 +290,103 @@ def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url=""):
     bg.save(buf, format="PNG", optimize=True)
     buf.seek(0)
     return buf
+
+# ====== PRO — Quina & Lotofácil (1080x1080, números visíveis, CTA) ======
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+import os
+
+_CORES_PRO = {
+    "lotofácil": {"bg1": (130, 2, 99), "bg2": (75, 0, 51), "chip": (180, 94, 179)},
+    "quina":     {"bg1": (56, 62,116), "bg2": (28,31, 67), "chip": (96,102,159)},
+}
+
+def _font_pro(size, bold=False):
+    cands = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/Library/Fonts/Arial.ttf", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
+    ]
+    for p in cands:
+        if os.path.exists(p): return ImageFont.truetype(p, size=size)
+    return ImageFont.load_default()
+
+def _gradiente_pro(w,h,top,bottom):
+    base = Image.new("RGB",(w,h),top)
+    over = Image.new("RGB",(w,h),bottom)
+    mask = Image.linear_gradient("L").resize((1,h)).resize((w,h))
+    return Image.composite(over, base, mask)
+
+def _vinheta_pro(img, strength=200, blur=160):
+    w,h = img.size
+    v = Image.new("L",(w,h),0); d = ImageDraw.Draw(v)
+    d.ellipse([-150,-50,w+150,h+250], fill=strength)
+    v = v.filter(ImageFilter.GaussianBlur(blur))
+    return Image.composite(img, Image.new("RGB",(w,h),(0,0,0)), v)
+
+def _logo_pro(canvas, path, box):
+    try:
+        lg = Image.open(path).convert("RGBA")
+        lg.thumbnail((box[2]-box[0], box[3]-box[1]))
+        x = box[0] + (box[2]-box[0]-lg.width)//2
+        y = box[1] + (box[3]-box[1]-lg.height)//2
+        canvas.paste(lg, (x,y), lg)
+    except: pass
+
+def _chip_pro(number, r, color, font):
+    base = Image.new("RGBA", (r*2, r*2), (0,0,0,0))
+    d = ImageDraw.Draw(base)
+    d.ellipse([0,0,r*2-1,r*2-1], fill=color+(255,))
+    hl = Image.new("RGBA",(r*2,r*2),(255,255,255,0))
+    ImageDraw.Draw(hl).ellipse([r*0.2,r*0.1,r*1.8,r*1.3], fill=(255,255,255,45))
+    base = Image.alpha_composite(base, hl)
+    s = str(number).zfill(2)
+    tw = d.textlength(s, font=font); th = font.getbbox(s)[3]-font.getbbox(s)[1]
+    d.text((r - tw/2, r - th/2 - 2), s, font=font, fill=(255,255,255))
+    return base
+
+def render_image(loteria, concurso, data_ddmmaa, numeros, url, out_path, logos_dir, marca="Portal SimonSports"):
+    lot = loteria.strip().lower()
+    if lot not in _CORES_PRO: raise ValueError(f"Loteria não suportada: {loteria}")
+    tema = _CORES_PRO[lot]
+    W,H = 1080,1080
+    bg = _vinheta_pro(_gradiente_pro(W,H, tema["bg1"], tema["bg2"]))
+    d = ImageDraw.Draw(bg)
+    f_title=_font_pro(96,True); f_sub=_font_pro(38); f_nums15=_font_pro(48,True); f_nums5=_font_pro(72,True)
+    f_btn=_font_pro(46,True); f_water=_font_pro(28)
+
+    # título + data + logo
+    def _shadow(x,y,txt,f,fill=(255,255,255),sh=(0,0,0),off=2):
+        d.text((x+off,y+off),txt,font=f,fill=sh); d.text((x,y),txt,font=f,fill=fill)
+    _shadow(60,64, f"{loteria.capitalize()} {concurso}", f_title)
+    _shadow(60,160, data_ddmmaa, f_sub, fill=(230,230,230))
+    logo_name = "lotofacil.png" if lot=="lotofácil" else f"{lot}.png"
+    _logo_pro(bg, os.path.join(logos_dir, logo_name), (W-300,56,W-56,216))
+
+    # grade
+    if lot=="lotofácil":
+        nums=[int(x) for x in numeros][:15]; grid_w,grid_h=880,520; start_x,start_y=(W-grid_w)//2,300; cols,rows,r=5,3,78
+        for i,n in enumerate(nums):
+            row, col = divmod(i, cols)
+            cx = start_x + col*(grid_w//cols) + (grid_w//(cols*2))
+            cy = start_y + row*(grid_h//rows) + (grid_h//(rows*2))
+            chip=_chip_pro(n,r,tema["chip"],f_nums15); bg.paste(chip,(int(cx-r),int(cy-r)),chip)
+    else:  # quina
+        nums=[int(x) for x in numeros][:5]; r=96; gap=36
+        total=(r*2)*5 + gap*4; sx=(W-total)//2; y=420
+        for i,n in enumerate(nums):
+            x = sx + i*((r*2)+gap)
+            chip=_chip_pro(n,r,tema["chip"],f_nums5); bg.paste(chip,(x,y),chip)
+
+    # botão
+    btn_w,btn_h=760,100; bx=(W-btn_w)//2; by=870
+    d.rounded_rectangle((bx,by,bx+btn_w,by+btn_h), radius=26, fill=(255,215,0), outline=(0,0,0), width=2)
+    txt="VER RESULTADO COMPLETO"; tw=d.textlength(txt,font=f_btn)
+    d.text((W/2 - tw/2, by + (btn_h-52)//2), txt, font=f_btn, fill=(0,0,0))
+
+    # url + marca
+    url_txt=url.replace("https://","").replace("http://",""); uw=d.textlength(url_txt,font=f_sub)
+    d.text((W/2 - uw/2, by + btn_h + 18), url_txt, font=f_sub, fill=(235,235,235,230))
+    mw=d.textlength(marca,font=f_water); d.text((W/2 - mw/2, H-54), marca, font=f_water, fill=(255,255,255,120))
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    bg.save(out_path,"PNG")
+    return out_path
