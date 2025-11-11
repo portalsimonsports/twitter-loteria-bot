@@ -1,5 +1,5 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-09 — GLOBAL_TEXT_MODE + modos por rede + KIT /output + imagem oficial app/imaging.py
+# Rev: 2025-11-11 — Gate opcional (desligado) + Loteca fora do lote + imagem PRO (render_image) + fix Tweepy v2 media
 # Planilha: ImportadosBlogger2 | Colunas: A=Loteria B=Concurso C=Data D=Números E=URL
 # Status por rede (padrões): H=8 (X), M=13 (Discord), N=14 (Pinterest), O=15 (Facebook), J=10 (Telegram)
 
@@ -24,6 +24,11 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # Imagem oficial (padrão aprovado)
 from app.imaging import gerar_imagem_loteria
+try:
+    # Se você adicionou o bloco PRO no imaging.py, esta importação funcionará
+    from app.imaging import render_image as _render_image_pro
+except Exception:
+    _render_image_pro = None
 
 # =========================
 # CONFIG / ENV
@@ -39,19 +44,23 @@ TARGET_NETWORKS = [s.strip().upper() for s in os.getenv("TARGET_NETWORKS", "X").
 BACKLOG_DAYS = int(os.getenv("BACKLOG_DAYS", "7"))
 DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
 
+# Gate de horário (opcional). Padrão DESLIGADO → publica a qualquer momento.
+ENABLE_TIME_GATE = os.getenv("ENABLE_TIME_GATE", "false").strip().lower() == "true"
+TIME_GATE_HHMM   = os.getenv("TIME_GATE_HHMM", "2245").strip()  # usado só se ENABLE_TIME_GATE=true
+
+# Loteca fora do lote por padrão
+SKIP_LOTECA_BATCH = os.getenv("SKIP_LOTECA_BATCH", "true").strip().lower() == "true"
+
 # ===== Modo de TEXTO (GLOBAL e por rede) =====
 GLOBAL_TEXT_MODE = (os.getenv("GLOBAL_TEXT_MODE", "") or "").strip().upper()  # opcional
-# por rede (se vazio, herda do GLOBAL ou usa TEXT_AND_IMAGE como default)
 X_TEXT_MODE         = (os.getenv("X_TEXT_MODE", "") or "").strip().upper()
 FACEBOOK_TEXT_MODE  = (os.getenv("FACEBOOK_TEXT_MODE", "") or "").strip().upper()
 TELEGRAM_TEXT_MODE  = (os.getenv("TELEGRAM_TEXT_MODE", "") or "").strip().upper()
 DISCORD_TEXT_MODE   = (os.getenv("DISCORD_TEXT_MODE", "") or "").strip().upper()
 PINTEREST_TEXT_MODE = (os.getenv("PINTEREST_TEXT_MODE", "") or "").strip().upper()
-
 VALID_TEXT_MODES = {"IMAGE_ONLY", "TEXT_AND_IMAGE", "TEXT_ONLY"}
 
 def get_text_mode(rede: str) -> str:
-    # prioridade: GLOBAL -> específica da rede -> default TEXT_AND_IMAGE
     specific = {
         "X": X_TEXT_MODE,
         "FACEBOOK": FACEBOOK_TEXT_MODE,
@@ -93,6 +102,9 @@ POST_PINTEREST_WITH_IMAGE = os.getenv("POST_PINTEREST_WITH_IMAGE", "true").strip
 USE_KIT_IMAGE_FIRST = os.getenv("USE_KIT_IMAGE_FIRST", "true").strip().lower() == "true"
 KIT_OUTPUT_DIR = os.getenv("KIT_OUTPUT_DIR", "output").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip()
+
+# Logos (para render_image PRO)
+LOGOS_DIR = os.getenv("LOGOS_DIR", "./assets/logos").strip()
 
 # ===== Keepalive (Replit/Render)
 ENABLE_KEEPALIVE = os.getenv("ENABLE_KEEPALIVE", "false").strip().lower() == "true"
@@ -150,6 +162,16 @@ def _within_backlog(date_br: str, days: int) -> bool:
     d = _parse_date_br(date_br)
     if not d: return True
     return (_now().date() - d).days <= days
+
+def _after_gate() -> bool:
+    """Usado apenas quando ENABLE_TIME_GATE=true."""
+    try:
+        hh = int(TIME_GATE_HHMM[:2]); mm = int(TIME_GATE_HHMM[2:4])
+    except Exception:
+        hh, mm = 22, 45
+    now = _now()
+    gate = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    return now >= gate
 
 # =========================
 # Google Sheets
@@ -212,7 +234,7 @@ def _guess_slug(name: str) -> str:
     return _slugify(name or "loteria")
 
 # =========================
-# IMAGEM: KIT /output -> oficial imaging.py
+# IMAGEM: KIT /output -> oficial imaging.py (PRO quando disponível)
 # =========================
 def _try_load_kit_image(row):
     """Se USE_KIT_IMAGE_FIRST, tenta localizar arquivo no KIT_OUTPUT_DIR usando slug e concurso/data."""
@@ -230,8 +252,6 @@ def _try_load_kit_image(row):
             patterns.append(os.path.join(KIT_OUTPUT_DIR, f"{slug}-{_slugify(concurso)}*.jp*g"))
         if data_br:
             patterns.append(os.path.join(KIT_OUTPUT_DIR, f"*{slug}*{_slugify(data_br)}*.jp*g"))
-
-        # fallback genérico por slug
         patterns.append(os.path.join(KIT_OUTPUT_DIR, f"{slug}*.jp*g"))
 
         for pat in patterns:
@@ -248,17 +268,37 @@ def _try_load_kit_image(row):
         return None
 
 def _build_image_from_row(row):
-    """Retorna BytesIO (PNG ou JPG). Prioriza KIT /output (se habilitado)."""
+    """Retorna BytesIO (PNG/JPG). Prioriza KIT; depois tenta render_image PRO; por fim gerar_imagem_loteria."""
+    # 1) KIT
     buf = _try_load_kit_image(row)
     if buf:
-        return buf  # JPG/PNG do kit
-    # Gera imagem oficial (PNG) via Pillow
-    loteria = (row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "Loteria")
-    concurso = (row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000")
-    data_br = (row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y"))
-    numeros = (row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else "")
-    url_res = (row[COL_URL-1] if _safe_len(row, COL_URL) else "")
-    return gerar_imagem_loteria(str(loteria), str(concurso), str(data_br), str(numeros), str(url_res))
+        return buf
+
+    # Dados-base
+    loteria = (row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "Loteria").strip()
+    concurso = (row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "0000").strip()
+    data_br  = (row[COL_Data-1] if _safe_len(row, COL_Data) else _now().strftime("%d/%m/%Y")).strip()
+    numeros  = (row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else "").strip()
+    url_res  = (row[COL_URL-1] if _safe_len(row, COL_URL) else "").strip()
+
+    # 2) PRO (se disponível)
+    if _render_image_pro is not None:
+        try:
+            nums = [int(n.strip()) for n in re.split(r"[,\s;]+", numeros) if n.strip().isdigit()]
+            out_dir = "./output"; os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, f"{_guess_slug(loteria)}_{_slugify(concurso)}.png")
+            _render_image_pro(loteria, concurso, data_br, nums, url_res, out_path, LOGOS_DIR)
+            with open(out_path, "rb") as f:
+                b = io.BytesIO(f.read()); b.seek(0); return b
+        except Exception as e:
+            _log(f"[IMAGING PRO] falhou, usando gerar_imagem_loteria: {e}")
+
+    # 3) Padrão oficial anterior
+    try:
+        return gerar_imagem_loteria(str(loteria), str(concurso), str(data_br), str(numeros), str(url_res))
+    except Exception as e:
+        _log(f"[IMAGING] falha geral na geração: {e}")
+        raise
 
 # =========================
 # Texto (tweet/post/caption)
@@ -299,6 +339,10 @@ def coletar_candidatos_para(ws, rede: str):
     vazias = preenchidas = fora_backlog = 0
 
     for rindex, row in enumerate(data, start=2):
+        loteria_nome = (row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "").lower()
+        if SKIP_LOTECA_BATCH and "loteca" in loteria_nome:
+            _log(f"[{rede}] SKIP L{rindex}: Loteca (fluxo próprio)."); continue
+
         status_val = row[col_status-1] if len(row) >= col_status else ""
         tem_status = bool(str(status_val or "").strip())
         data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else ""
@@ -425,7 +469,7 @@ def publicar_em_x(ws, candidatos):
                         else:
                             resp = acc.client_v2.create_tweet(
                                 text=(texto_para_postar or None) if mode != "IMAGE_ONLY" else None,
-                                media_ids=media_ids if POST_X_WITH_IMAGE else None
+                                media={"media_ids": media_ids} if (POST_X_WITH_IMAGE and media_ids) else None
                             )
                             if texto_para_postar:
                                 _postados_nesta_execucao[acc.label].add(texto_para_postar)
@@ -447,7 +491,7 @@ def publicar_em_x(ws, candidatos):
                     else:
                         resp = acc.client_v2.create_tweet(
                             text=(texto_para_postar or None) if mode != "IMAGE_ONLY" else None,
-                            media_ids=media_ids if POST_X_WITH_IMAGE else None
+                            media={"media_ids": media_ids} if (POST_X_WITH_IMAGE and media_ids) else None
                         )
                         if texto_para_postar:
                             _postados_nesta_execucao[acc.label].add(texto_para_postar)
@@ -577,7 +621,7 @@ def publicar_em_discord(ws, candidatos):
         try:
             if DRY_RUN:
                 for wh in DISCORD_WEBHOOKS:
-                    _log(f"[Discord] DRY-RUN → {wh[-18:]}"); 
+                    _log(f"[Discord] DRY-RUN → {wh[-18:]}")
                 ok_any = True
             else:
                 buf = _build_image_from_row(row)
@@ -682,6 +726,12 @@ def main():
         f"Origem={BOT_ORIGEM} | Redes={','.join(TARGET_NETWORKS)} | DRY_RUN={DRY_RUN} | "
         f"GLOBAL_TEXT_MODE={GLOBAL_TEXT_MODE or '—'} | KIT_FIRST={USE_KIT_IMAGE_FIRST}"
     )
+
+    # Gate de horário opcional (por padrão desligado)
+    if ENABLE_TIME_GATE and not DRY_RUN and not _after_gate():
+        _log(f"Saindo: gate de horário ativo (TIME_GATE_HHMM={TIME_GATE_HHMM}).")
+        return
+
     keepalive_thread = start_keepalive() if ENABLE_KEEPALIVE else None
     try:
         ws = _open_ws()
