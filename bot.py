@@ -1,5 +1,5 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-11b — Loteca ON por padrão + filtros LOTERIAS_ONLY/LOTERIAS_SKIP + debug de coleta + fix media v2
+# Rev: 2025-11-11c — SANITY CHECK + FORCE_PUBLISH_ROWS + DISABLE_X_DUPCHECK + logs detalhados
 # Planilha: ImportadosBlogger2 | Colunas: A=Loteria B=Concurso C=Data D=Números E=URL
 # Status por rede (padrões): H=8 (X), M=13 (Discord), N=14 (Pinterest), O=15 (Facebook), J=10 (Telegram)
 
@@ -32,16 +32,24 @@ TARGET_NETWORKS = [s.strip().upper() for s in os.getenv("TARGET_NETWORKS", "X").
 BACKLOG_DAYS = int(os.getenv("BACKLOG_DAYS", "7"))  # use 0 para ignorar data
 DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
 
-# Gate de horário (opcional; DESLIGADO por padrão)
+# Gate opcional (desligado por padrão)
 ENABLE_TIME_GATE = os.getenv("ENABLE_TIME_GATE", "false").strip().lower() == "true"
 TIME_GATE_HHMM   = os.getenv("TIME_GATE_HHMM", "2245").strip()
 
-# PUBLICAR LOTECA (ON por padrão)
+# Loteca
 PUBLISH_LOTECA = os.getenv("PUBLISH_LOTECA", "true").strip().lower() == "true"
 
-# Filtros por loteria (slugs separados por vírgula). Ex.: "mega-sena,quina"
+# Filtros por loteria (slugs)
 LOTERIAS_ONLY = [s.strip().lower() for s in os.getenv("LOTERIAS_ONLY", "").split(",") if s.strip()]
 LOTERIAS_SKIP = [s.strip().lower() for s in os.getenv("LOTERIAS_SKIP", "").split(",") if s.strip()]
+
+# Forçar linhas específicas (número da linha na planilha — mesma numeração visual)
+FORCE_PUBLISH_ROWS = set()
+_tmp_force = os.getenv("FORCE_PUBLISH_ROWS", "").strip()
+if _tmp_force:
+    for x in _tmp_force.split(","):
+        x = x.strip()
+        if x.isdigit(): FORCE_PUBLISH_ROWS.add(int(x))
 
 # ===== Modo de TEXTO =====
 GLOBAL_TEXT_MODE = (os.getenv("GLOBAL_TEXT_MODE", "") or "").strip().upper()
@@ -64,6 +72,7 @@ def get_text_mode(rede: str) -> str:
 # ===== X (Twitter)
 X_POST_IN_ALL_ACCOUNTS = os.getenv("X_POST_IN_ALL_ACCOUNTS", "true").strip().lower() == "true"
 POST_X_WITH_IMAGE = os.getenv("POST_X_WITH_IMAGE", "true").strip().lower() == "true"
+DISABLE_X_DUPCHECK = os.getenv("DISABLE_X_DUPCHECK", "false").strip().lower() == "true"
 COL_STATUS_X = int(os.getenv("COL_STATUS_X", "8"))
 
 # ===== Facebook
@@ -264,8 +273,26 @@ def montar_texto_base(row) -> str:
     return "\n".join(linhas).strip()
 
 # =========================
-# Coleta de candidatos
+# Coleta de candidatos + SANITY
 # =========================
+def _sanity_sheet(ws, rede: str):
+    """Imprime contagem de vazios na coluna de status e mostra as 5 primeiras linhas elegíveis."""
+    rows = ws.get_all_values()
+    if len(rows) <= 1:
+        _log(f"[{rede}] SANITY: planilha sem linhas além do cabeçalho."); return
+    data = rows[1:]
+    col_status = COL_STATUS_REDES.get(rede)
+    vazias = []
+    for i, row in enumerate(data, start=2):
+        status = row[col_status-1] if len(row) >= col_status else ""
+        if not str(status or "").strip():
+            lot = row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else ""
+            dtb = row[COL_Data-1] if _safe_len(row, COL_Data) else ""
+            vazias.append((i, lot, dtb))
+    _log(f"[{rede}] SANITY: total linhas={len(data)} | vazias_col{col_status}={len(vazias)}")
+    for ln, lot, dtb in vazias[:5]:
+        _log(f"[{rede}] SANITY exemplo vazio → L{ln} | {lot} | {dtb}")
+
 def coletar_candidatos_para(ws, rede: str):
     rows = ws.get_all_values()
     if len(rows) <= 1:
@@ -281,6 +308,13 @@ def coletar_candidatos_para(ws, rede: str):
     for rindex, row in enumerate(data, start=2):
         loteria_nome = (row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "")
         slug = _guess_slug(loteria_nome)
+
+        # FORCE: passa por cima de tudo
+        if rindex in FORCE_PUBLISH_ROWS:
+            cand.append((rindex, row)); vazias += 1
+            _log(f"[{rede}] FORCE L{rindex}: forçado por FORCE_PUBLISH_ROWS ({slug}).")
+            continue
+
         if not _match_loteria_filters(loteria_nome):
             filtradas += 1
             _log(f"[{rede}] SKIP L{rindex}: filtro de loteria ({slug}).")
@@ -353,6 +387,7 @@ def x_load_recent_texts(acc: XAccount, max_results=50):
         _log(f"[{acc.handle}] warn: falha ao ler tweets: {e}"); return set()
 
 def x_is_dup(acc: XAccount, text: str) -> bool:
+    if DISABLE_X_DUPCHECK: return False
     t = (text or "").strip()
     return bool(t) and (t in _recent_tweets_cache[acc.label] or t in _postados_nesta_execucao[acc.label])
 
@@ -581,7 +616,8 @@ def start_keepalive():
     except ImportError:
         _log("Flask não instalado; keepalive desativado."); return None
     app = Flask(__name__)
-    @app.route("/"); @app.route("/ping")
+    @app.route("/")
+    @app.route("/ping")
     def root(): return "ok", 200
     def run():
         port = int(os.getenv("PORT", KEEPALIVE_PORT))
@@ -593,9 +629,18 @@ def start_keepalive():
 # MAIN
 # =========================
 def main():
-    _log("Iniciando bot...", f"Origem={BOT_ORIGEM}", f"Redes={','.join(TARGET_NETWORKS)}",
-         f"DRY_RUN={DRY_RUN}", f"KIT_FIRST={USE_KIT_IMAGE_FIRST}", f"PUBLISH_LOTECA={PUBLISH_LOTECA}",
-         f"ONLY={','.join(LOTERIAS_ONLY) or '—'}", f"SKIP={','.join(LOTERIAS_SKIP) or '—'}")
+    _log("Iniciando bot...",
+         f"Origem={BOT_ORIGEM}",
+         f"Redes={','.join(TARGET_NETWORKS)}",
+         f"DRY_RUN={DRY_RUN}",
+         f"KIT_FIRST={USE_KIT_IMAGE_FIRST}",
+         f"PUBLISH_LOTECA={PUBLISH_LOTECA}",
+         f"ONLY={','.join(LOTERIAS_ONLY) or '—'}",
+         f"SKIP={','.join(LOTERIAS_SKIP) or '—'}",
+         f"BACKLOG_DAYS={BACKLOG_DAYS}",
+         f"FORCE_ROWS={','.join(map(str,sorted(FORCE_PUBLISH_ROWS))) or '—'}",
+         f"DISABLE_X_DUPCHECK={DISABLE_X_DUPCHECK}"
+    )
 
     if ENABLE_TIME_GATE and not DRY_RUN and not _after_gate():
         _log(f"Saindo: gate horário ativo (TIME_GATE_HHMM={TIME_GATE_HHMM})."); return
@@ -603,16 +648,29 @@ def main():
     keepalive_thread = start_keepalive() if ENABLE_KEEPALIVE else None
     try:
         ws = _open_ws()
+        # Sanidade por rede (mostra vazios na coluna de status)
         for rede in TARGET_NETWORKS:
-            if rede not in COL_STATUS_REDES: _log(f"[{rede}] rede não suportada."); continue
+            if rede in COL_STATUS_REDES:
+                _sanity_sheet(ws, rede)
+
+        for rede in TARGET_NETWORKS:
+            if rede not in COL_STATUS_REDES:
+                _log(f"[{rede}] rede não suportada."); continue
             candidatos = coletar_candidatos_para(ws, rede)
-            if not candidatos: _log(f"[{rede}] Nenhuma candidata."); continue
-            if rede == "X": publicar_em_x(ws, candidatos)
-            elif rede == "FACEBOOK": publicar_em_facebook(ws, candidatos)
-            elif rede == "TELEGRAM": publicar_em_telegram(ws, candidatos)
-            elif rede == "DISCORD": publicar_em_discord(ws, candidatos)
-            elif rede == "PINTEREST": publicar_em_pinterest(ws, candidatos)
-            else: _log(f"[{rede}] não implementada.")
+            if not candidatos:
+                _log(f"[{rede}] Nenhuma candidata."); continue
+            if rede == "X":
+                publicar_em_x(ws, candidatos)
+            elif rede == "FACEBOOK":
+                publicar_em_facebook(ws, candidatos)
+            elif rede == "TELEGRAM":
+                publicar_em_telegram(ws, candidatos)
+            elif rede == "DISCORD":
+                publicar_em_discord(ws, candidatos)
+            elif rede == "PINTEREST":
+                publicar_em_pinterest(ws, candidatos)
+            else:
+                _log(f"[{rede}] não implementada.")
         _log("Concluído.")
     except KeyboardInterrupt:
         _log("Interrompido pelo usuário.")
