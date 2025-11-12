@@ -1,44 +1,54 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-11d — DEBUG detalhado (candidatas/skip), verificação de secrets, retry marcação,
-#                    Loteca ON, filtros ONLY/SKIP, FORCE_PUBLISH_ROWS, mídia X fix.
+# Rev: 2025-11-12 — FIX keepalive Flask; FORCE_PUBLISH_ROWS; retries update_cell; Loteca ON; debug de coleta
 # Planilha: ImportadosBlogger2 | Colunas: A=Loteria B=Concurso C=Data D=Números E=URL
 # Status por rede (padrões): H=8 (X), M=13 (Discord), N=14 (Pinterest), O=15 (Facebook), J=10 (Telegram)
 
-import os, re, io, glob, json, time, base64, pytz, tweepy, requests, datetime as dt, random, string
+import os, re, io, glob, json, time, base64, pytz, tweepy, requests, datetime as dt
 from threading import Thread
 from collections import defaultdict
 from dotenv import load_dotenv
 
+# Google Sheets
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Imaging
+# Imagem oficial
 from app.imaging import gerar_imagem_loteria
 try:
+    # opcional: se seu imaging possui renderizador “pro”
     from app.imaging import render_image as _render_image_pro
 except Exception:
     _render_image_pro = None
 
-# ===== ENV =====
+# =========================
+# CONFIG / ENV
+# =========================
 load_dotenv()
 TZ = pytz.timezone("America/Sao_Paulo")
-
 SHEET_ID  = os.getenv("GOOGLE_SHEET_ID", "").strip()
 SHEET_TAB = os.getenv("SHEET_TAB", "ImportadosBlogger2").strip()
+
 TARGET_NETWORKS = [s.strip().upper() for s in os.getenv("TARGET_NETWORKS", "X").split(",") if s.strip()]
 
-BACKLOG_DAYS = int(os.getenv("BACKLOG_DAYS", "7"))
+BACKLOG_DAYS = int(os.getenv("BACKLOG_DAYS", "7"))  # use 0 para ignorar data
 DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
-DEBUG = os.getenv("DEBUG", "true").strip().lower() == "true"   # <— ligado por padrão para diagnosticar
+DEBUG = os.getenv("DEBUG", "false").strip().lower() == "true"
 
+# Gate de horário (opcional; DESLIGADO por padrão)
 ENABLE_TIME_GATE = os.getenv("ENABLE_TIME_GATE", "false").strip().lower() == "true"
 TIME_GATE_HHMM   = os.getenv("TIME_GATE_HHMM", "2245").strip()
 
+# PUBLICAR LOTECA (ON por padrão)
 PUBLISH_LOTECA = os.getenv("PUBLISH_LOTECA", "true").strip().lower() == "true"
+
+# Filtros por loteria (slugs separados por vírgula). Ex.: "mega-sena,quina"
 LOTERIAS_ONLY = [s.strip().lower() for s in os.getenv("LOTERIAS_ONLY", "").split(",") if s.strip()]
 LOTERIAS_SKIP = [s.strip().lower() for s in os.getenv("LOTERIAS_SKIP", "").split(",") if s.strip()]
-FORCE_PUBLISH_ROWS = os.getenv("FORCE_PUBLISH_ROWS", "").strip()
 
+# Forçar publicação/marcação de linhas específicas (números absolutos da planilha, separados por vírgula)
+FORCE_PUBLISH_ROWS = [int(s.strip()) for s in os.getenv("FORCE_PUBLISH_ROWS", "").split(",") if s.strip().isdigit()]
+
+# ===== Modo de TEXTO =====
 GLOBAL_TEXT_MODE = (os.getenv("GLOBAL_TEXT_MODE", "") or "").strip().upper()
 X_TEXT_MODE         = (os.getenv("X_TEXT_MODE", "") or "").strip().upper()
 FACEBOOK_TEXT_MODE  = (os.getenv("FACEBOOK_TEXT_MODE", "") or "").strip().upper()
@@ -47,35 +57,53 @@ DISCORD_TEXT_MODE   = (os.getenv("DISCORD_TEXT_MODE", "") or "").strip().upper()
 PINTEREST_TEXT_MODE = (os.getenv("PINTEREST_TEXT_MODE", "") or "").strip().upper()
 VALID_TEXT_MODES = {"IMAGE_ONLY", "TEXT_AND_IMAGE", "TEXT_ONLY"}
 
+def get_text_mode(rede: str) -> str:
+    specific = {
+        "X": X_TEXT_MODE, "FACEBOOK": FACEBOOK_TEXT_MODE,
+        "TELEGRAM": TELEGRAM_TEXT_MODE, "DISCORD": DISCORD_TEXT_MODE,
+        "PINTEREST": PINTEREST_TEXT_MODE,
+    }.get(rede, "")
+    mode = (specific or GLOBAL_TEXT_MODE or "TEXT_AND_IMAGE").upper()
+    return mode if mode in VALID_TEXT_MODES else "TEXT_AND_IMAGE"
+
+# ===== X (Twitter)
 X_POST_IN_ALL_ACCOUNTS = os.getenv("X_POST_IN_ALL_ACCOUNTS", "true").strip().lower() == "true"
 POST_X_WITH_IMAGE = os.getenv("POST_X_WITH_IMAGE", "true").strip().lower() == "true"
 COL_STATUS_X = int(os.getenv("COL_STATUS_X", "8"))
 
+# ===== Facebook
 POST_FB_WITH_IMAGE = os.getenv("POST_FB_WITH_IMAGE", "true").strip().lower() == "true"
 COL_STATUS_FACEBOOK = int(os.getenv("COL_STATUS_FACEBOOK", "15"))
 FB_PAGE_IDS    = [s.strip() for s in os.getenv("FB_PAGE_IDS", os.getenv("FB_PAGE_ID", "")).split(",") if s.strip()]
 FB_PAGE_TOKENS = [s.strip() for s in os.getenv("FB_PAGE_TOKENS", os.getenv("FB_PAGE_TOKEN", "")).split(",") if s.strip()]
 
+# ===== Telegram
 POST_TG_WITH_IMAGE = os.getenv("POST_TG_WITH_IMAGE", "true").strip().lower() == "true"
 COL_STATUS_TELEGRAM = int(os.getenv("COL_STATUS_TELEGRAM", "10"))
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "").strip()
 TG_CHAT_IDS  = [s.strip() for s in os.getenv("TG_CHAT_IDS", "").split(",") if s.strip()]
 
+# ===== Discord
 COL_STATUS_DISCORD = int(os.getenv("COL_STATUS_DISCORD", "13"))
 DISCORD_WEBHOOKS = [s.strip() for s in os.getenv("DISCORD_WEBHOOKS", "").split(",") if s.strip()]
 
+# ===== Pinterest
 COL_STATUS_PINTEREST = int(os.getenv("COL_STATUS_PINTEREST", "14"))
 PINTEREST_ACCESS_TOKEN = os.getenv("PINTEREST_ACCESS_TOKEN", "").strip()
 PINTEREST_BOARD_ID     = os.getenv("PINTEREST_BOARD_ID", "").strip()
 POST_PINTEREST_WITH_IMAGE = os.getenv("POST_PINTEREST_WITH_IMAGE", "true").strip().lower() == "true"
 
+# ===== KIT (HTML/CSS) /output
 USE_KIT_IMAGE_FIRST = os.getenv("USE_KIT_IMAGE_FIRST", "true").strip().lower() == "true"
 KIT_OUTPUT_DIR   = os.getenv("KIT_OUTPUT_DIR", "output").strip()
+PUBLIC_BASE_URL  = os.getenv("PUBLIC_BASE_URL", "").strip()
 LOGOS_DIR        = os.getenv("LOGOS_DIR", "./assets/logos").strip()
 
+# Keepalive
 ENABLE_KEEPALIVE = os.getenv("ENABLE_KEEPALIVE", "false").strip().lower() == "true"
 KEEPALIVE_PORT   = int(os.getenv("KEEPALIVE_PORT", "8080"))
 
+# Limites
 MAX_PUBLICACOES_RODADA = int(os.getenv("MAX_PUBLICACOES_RODADA", "30"))
 PAUSA_ENTRE_POSTS = float(os.getenv("PAUSA_ENTRE_POSTS", "2.0"))
 
@@ -87,30 +115,22 @@ def _detect_origem():
     return "Local"
 BOT_ORIGEM = _detect_origem()
 
-# ===== Sheet mapping =====
+# =========================
+# Planilha — colunas (1-based)
+# =========================
 COL_Loteria, COL_Concurso, COL_Data, COL_Numeros, COL_URL = 1, 2, 3, 4, 5
 COL_URL_Imagem, COL_Imagem = 6, 7
-COL_STATUS_REDES = {
-    "X": COL_STATUS_X,            # H (8)
-    "DISCORD": COL_STATUS_DISCORD,# M (13)
-    "PINTEREST": COL_STATUS_PINTEREST, # N (14)
-    "FACEBOOK": COL_STATUS_FACEBOOK,   # O (15)
-    "TELEGRAM": COL_STATUS_TELEGRAM,   # J (10)
-}
+COL_STATUS_REDES = {"X": COL_STATUS_X, "FACEBOOK": COL_STATUS_FACEBOOK, "TELEGRAM": COL_STATUS_TELEGRAM,
+                    "DISCORD": COL_STATUS_DISCORD, "PINTEREST": COL_STATUS_PINTEREST}
 
-# ===== Utils =====
+# =========================
+# Utils
+# =========================
 def _now(): return dt.datetime.now(TZ)
 def _ts():  return _now().strftime("%Y-%m-%d %H:%M:%S")
 def _ts_br():return _now().strftime("%d/%m/%Y %H:%M")
 def _safe_len(row, idx): return len(row) >= idx
 def _log(*a): print(f"[{_ts()}]", *a, flush=True)
-
-def _col_letter(idx:int):
-    s = ""
-    while idx:
-        idx, r = divmod(idx-1, 26)
-        s = chr(65+r) + s
-    return s
 
 def _parse_date_br(s: str):
     s = str(s or "").strip()
@@ -161,22 +181,9 @@ def _match_loteria_filters(nome: str) -> bool:
         return False
     return True
 
-def _parse_force_rows(expr: str):
-    if not expr: return set()
-    out = set()
-    parts = [p.strip() for p in expr.split(",") if p.strip()]
-    for p in parts:
-        m = re.match(r"^(\d+)\-(\d+)$", p)
-        if m:
-            a, b = int(m.group(1)), int(m.group(2))
-            if a > b: a, b = b, a
-            out.update(range(a, b+1))
-        elif p.isdigit():
-            out.add(int(p))
-    return out
-FORCE_ROWS = _parse_force_rows(FORCE_PUBLISH_ROWS)
-
-# ===== Google Sheets =====
+# =========================
+# Google Sheets
+# =========================
 def _gs_client():
     sa_json = os.getenv("GOOGLE_SERVICE_JSON", "").strip()
     scopes = ['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive']
@@ -193,25 +200,27 @@ def _open_ws():
     if not SHEET_ID: raise RuntimeError("GOOGLE_SHEET_ID não definido.")
     return _gs_client().open_by_key(SHEET_ID).worksheet(SHEET_TAB)
 
-def _retry_sleep(i): time.sleep((2 ** i) + random.random())
-
-def marcar_publicado(ws, rownum, rede, value=None, retries=3):
-    col = COL_STATUS_REDES.get(rede)
-    if not col:
-        _log(f"[{rede}] coluna de status não definida; skip marcação.")
-        return
-    valor = value or f"Publicado {rede} via {BOT_ORIGEM} em {_ts_br()}"
-    for i in range(retries):
+def update_cell_with_retry(ws, row, col, value, attempts=3, delay=1.2):
+    last_err = None
+    for i in range(1, attempts+1):
         try:
-            ws.update_cell(rownum, col, valor)
-            _log(f"[{rede}] marcado L{rownum} {_col_letter(col)}={valor}")
-            return
+            ws.update_cell(row, col, value); return True
         except Exception as e:
-            _log(f"[{rede}] falha ao marcar L{rownum} (tent {i+1}/{retries}): {e}")
-            _retry_sleep(i)
-    _log(f"[{rede}] desistiu de marcar L{rownum} após {retries} tentativas.")
+            last_err = e
+            _log(f"[GS] update_cell falhou (tentativa {i}/{attempts}) L{row} C{col}: {e}")
+            time.sleep(delay)
+    _log(f"[GS] FALHA definitiva ao atualizar L{row} C{col}: {last_err}")
+    return False
 
-# ===== Imagem =====
+def marcar_publicado(ws, rownum, rede, value=None):
+    col = COL_STATUS_REDES.get(rede)
+    if not col: return
+    valor = value or f"Publicado {rede} via {BOT_ORIGEM} em {_ts_br()}"
+    update_cell_with_retry(ws, rownum, col, valor)
+
+# =========================
+# Imagem
+# =========================
 def _try_load_kit_image(row):
     if not USE_KIT_IMAGE_FIRST: return None
     try:
@@ -230,7 +239,9 @@ def _try_load_kit_image(row):
             files = sorted(glob.glob(pat))
             if files:
                 with open(files[0], "rb") as f:
-                    b = io.BytesIO(f.read()); b.seek(0); return b
+                    b = io.BytesIO(f.read()); b.seek(0); 
+                if DEBUG: _log("[KIT] usando", files[0])
+                return b
     except Exception as e:
         _log(f"[KIT] erro: {e}")
     return None
@@ -251,41 +262,42 @@ def _build_image_from_row(row):
             out_path = os.path.join("./output", f"{_guess_slug(loteria)}_{_slugify(concurso)}.png")
             _render_image_pro(loteria, concurso, data_br, nums, url_res, out_path, LOGOS_DIR)
             with open(out_path, "rb") as f:
-                b = io.BytesIO(f.read()); b.seek(0); return b
+                b = io.BytesIO(f.read()); b.seek(0); 
+            if DEBUG: _log("[IMAGING PRO] gerado", out_path)
+            return b
         except Exception as e:
-            _log(f"[IMAGING PRO] falhou → gerar_imagem_loteria: {e}")
+            _log(f"[IMAGING PRO] falhou → usando gerar_imagem_loteria: {e}")
     return gerar_imagem_loteria(loteria, concurso, data_br, numeros, url_res)
 
-# ===== Texto =====
-def get_text_mode(rede: str) -> str:
-    specific = {
-        "X": X_TEXT_MODE, "FACEBOOK": FACEBOOK_TEXT_MODE,
-        "TELEGRAM": TELEGRAM_TEXT_MODE, "DISCORD": DISCORD_TEXT_MODE,
-        "PINTEREST": PINTEREST_TEXT_MODE,
-    }.get(rede, "")
-    mode = (specific or GLOBAL_TEXT_MODE or "TEXT_AND_IMAGE").upper()
-    return mode if mode in VALID_TEXT_MODES else "TEXT_AND_IMAGE"
-
+# =========================
+# Texto
+# =========================
 def montar_texto_base(row) -> str:
-    loteria = (row[COL_Loteria-1] or "").strip()
-    concurso = (row[COL_Concurso-1] or "").strip()
-    data_br  = (row[COL_Data-1] or "").strip()
-    numeros  = (row[COL_Numeros-1] or "").strip()
-    url      = (row[COL_URL-1] or "").strip()
+    loteria = (row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "").strip()
+    concurso = (row[COL_Concurso-1] if _safe_len(row, COL_Concurso) else "").strip()
+    data_br  = (row[COL_Data-1] if _safe_len(row, COL_Data) else "").strip()
+    numeros  = (row[COL_Numeros-1] if _safe_len(row, COL_Numeros) else "").strip()
+    url      = (row[COL_URL-1] if _safe_len(row, COL_URL) else "").strip()
     nums = [n.strip() for n in numeros.replace(';', ',').replace(' ', ',').split(',') if n.strip()]
     linhas = [f"{loteria} — Concurso {concurso} — ({data_br})"]
     if nums: linhas.append("Números: " + ", ".join(nums))
     if url:  linhas += ["Resultado completo:", url]
     return "\n".join(linhas).strip()
 
-# ===== Coleta =====
+# =========================
+# Coleta de candidatos
+# =========================
+def _debug_row(prefix, rindex, row, col_status, motivo):
+    if not DEBUG: return
+    loteria_nome = (row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "")
+    data_br = (row[COL_Data-1] if _safe_len(row, COL_Data) else "")
+    status_val = row[col_status-1] if len(row) >= col_status else ""
+    _log(f"{prefix} L{rindex} | {loteria_nome} | data={data_br} | status={status_val!r} | {motivo}")
+
 def coletar_candidatos_para(ws, rede: str):
     rows = ws.get_all_values()
     if len(rows) <= 1:
         _log(f"[{rede}] Planilha sem dados."); return []
-
-    forced = {r for r in _parse_force_rows(FORCE_PUBLISH_ROWS) if r >= 2}
-    if forced: _log(f"[{rede}] FORCE_PUBLISH_ROWS → {sorted(list(forced))}")
 
     data = rows[1:]
     cand = []; col_status = COL_STATUS_REDES.get(rede)
@@ -293,18 +305,19 @@ def coletar_candidatos_para(ws, rede: str):
         _log(f"[{rede}] Coluna de status não definida."); return []
 
     total = len(data); vazias = preenchidas = fora_backlog = filtradas = 0
-    sample = []
+
+    # Prioriza FORCE_PUBLISH_ROWS, quando definido
+    forced = set(FORCE_PUBLISH_ROWS)
 
     for rindex, row in enumerate(data, start=2):
-        if rindex in forced:
-            cand.append((rindex, row)); continue
+        if forced and rindex not in forced:
+            continue  # quando FORCE_PUBLISH_ROWS está setado, publica só as linhas forçadas
 
         loteria_nome = (row[COL_Loteria-1] if _safe_len(row, COL_Loteria) else "")
         slug = _guess_slug(loteria_nome)
         if not _match_loteria_filters(loteria_nome):
             filtradas += 1
-            if DEBUG and len(sample) < 20:
-                sample.append(f"L{rindex} {slug} → SKIP filtro")
+            _debug_row(f"[{rede}] SKIP", rindex, row, col_status, f"filtro loteria ({slug})")
             continue
 
         status_val = row[col_status-1] if len(row) >= col_status else ""
@@ -314,25 +327,21 @@ def coletar_candidatos_para(ws, rede: str):
 
         if dentro and not tem_status:
             cand.append((rindex, row)); vazias += 1
-            if DEBUG and len(sample) < 20:
-                sample.append(f"L{rindex} {slug} ({data_br}) → CANDIDATA")
+            _debug_row(f"[{rede}] OK", rindex, row, col_status, "candidata")
         else:
             if tem_status:
                 preenchidas += 1
-                if DEBUG and len(sample) < 20:
-                    sample.append(f"L{rindex} {slug} → SKIP status col {_col_letter(col_status)}='{str(status_val)[:14]}'")
+                _debug_row(f"[{rede}] SKIP", rindex, row, col_status, f"status col {col_status} já preenchido")
             elif not dentro:
                 fora_backlog += 1
-                if DEBUG and len(sample) < 20:
-                    sample.append(f"L{rindex} {slug} ({data_br}) → SKIP fora backlog")
+                _debug_row(f"[{rede}] SKIP", rindex, row, col_status, f"fora do backlog ({data_br})")
 
-    _log(f"[{rede}] Candidatas: {len(cand)}/{total} | vazias:{vazias} status:{preenchidas} backlog:{fora_backlog} filtro:{filtradas}")
-    if DEBUG:
-        _log(f"[{rede}] Amostra (até 20):")
-        for s in sample: _log("  ·", s)
+    _log(f"[{rede}] Candidatas: {len(cand)}/{total} | status: {preenchidas} | fora backlog: {fora_backlog} | filtro: {filtradas} | forced={','.join(map(str,forced)) or '—'}")
     return cand
 
-# ===== Publicadores =====
+# =========================
+# Publicadores
+# =========================
 TW1 = {"api_key":os.getenv("TWITTER_API_KEY_1",""),
        "api_secret":os.getenv("TWITTER_API_SECRET_1",""),
        "access_token":os.getenv("TWITTER_ACCESS_TOKEN_1",""),
@@ -356,16 +365,14 @@ class XAccount:
         except Exception:
             self.user_id = None; self.handle = f"@{label}"
 
-def _check_x_secrets():
-    def ok(d): return all(d.get(k) for k in ("api_key","api_secret","access_token","access_secret"))
-    return ok(TW1) or ok(TW2)
-
 def build_x_accounts():
     accs = []
     def ok(d): return all(d.get(k) for k in ("api_key","api_secret","access_token","access_secret"))
     if ok(TW1): accs.append(XAccount("ACC1", **TW1))
+    else: _log("Conta ACC1 incompleta nos Secrets — verifique *_1.")
     if ok(TW2): accs.append(XAccount("ACC2", **TW2))
-    if not accs: raise RuntimeError("Nenhuma conta X configurada (verifique *_1 ou *_2 nos Secrets).")
+    else: _log("Conta ACC2 incompleta nos Secrets — verifique *_2.")
+    if not accs: raise RuntimeError("Nenhuma conta X configurada.")
     return accs
 
 _recent_tweets_cache = defaultdict(set)
@@ -394,8 +401,6 @@ def x_upload_media_if_any(acc: XAccount, row):
         _log(f"[{acc.handle}] Erro imagem: {e}"); return None
 
 def publicar_em_x(ws, candidatos):
-    if not _check_x_secrets():
-        raise RuntimeError("X: nenhum conjunto de credenciais completo encontrado.")
     contas = build_x_accounts()
     for acc in contas:
         _recent_tweets_cache[acc.label] = x_load_recent_texts(acc, 50)
@@ -414,10 +419,10 @@ def publicar_em_x(ws, candidatos):
                 media_ids = x_upload_media_if_any(acc, row)
                 try:
                     if DRY_RUN:
-                        _log(f"[X][{acc.handle}] DRY-RUN L{rownum}"); ok = True
+                        _log(f"[X][{acc.handle}] DRY-RUN"); ok = True
                     else:
                         if texto_para_postar and x_is_dup(acc, texto_para_postar):
-                            _log(f"[X][{acc.handle}] SKIP duplicado L{rownum}."); ok = False
+                            _log(f"[X][{acc.handle}] SKIP duplicado."); ok = False
                         else:
                             resp = acc.client_v2.create_tweet(
                                 text=(texto_para_postar or None) if mode != "IMAGE_ONLY" else None,
@@ -426,19 +431,19 @@ def publicar_em_x(ws, candidatos):
                             if texto_para_postar:
                                 _postados_nesta_execucao[acc.label].add(texto_para_postar)
                                 _recent_tweets_cache[acc.label].add(texto_para_postar)
-                            _log(f"[X][{acc.handle}] OK L{rownum} → {resp.data['id']}"); ok = True
+                            _log(f"[X][{acc.handle}] OK → {resp.data['id']}"); ok = True
                 except Exception as e:
-                    _log(f"[X][{acc.handle}] erro L{rownum}: {e}"); ok = False
+                    _log(f"[X][{acc.handle}] erro: {e}"); ok = False
                 ok_any = ok_any or ok; time.sleep(0.7)
         else:
             acc = contas[acc_idx % len(contas)]; acc_idx += 1
             media_ids = x_upload_media_if_any(acc, row)
             try:
                 if DRY_RUN:
-                    _log(f"[X][{acc.handle}] DRY-RUN L{rownum}"); ok_any = True
+                    _log(f"[X][{acc.handle}] DRY-RUN"); ok_any = True
                 else:
                     if texto_para_postar and x_is_dup(acc, texto_para_postar):
-                        _log(f"[X][{acc.handle}] SKIP duplicado L{rownum}."); ok_any = False
+                        _log(f"[X][{acc.handle}] SKIP duplicado."); ok_any = False
                     else:
                         resp = acc.client_v2.create_tweet(
                             text=(texto_para_postar or None) if mode != "IMAGE_ONLY" else None,
@@ -447,16 +452,16 @@ def publicar_em_x(ws, candidatos):
                         if texto_para_postar:
                             _postados_nesta_execucao[acc.label].add(texto_para_postar)
                             _recent_tweets_cache[acc.label].add(texto_para_postar)
-                        _log(f"[X][{acc.handle}] OK L{rownum} → {resp.data['id']}"); ok_any = True
+                        _log(f"[X][{acc.handle}] OK → {resp.data['id']}"); ok_any = True
             except Exception as e:
-                _log(f"[X][{acc.handle}] erro L{rownum}: {e}"); ok_any = False
+                _log(f"[X][{acc.handle}] erro: {e}"); ok_any = False
 
         if ok_any and not DRY_RUN:
             marcar_publicado(ws, rownum, "X"); publicados += 1
         time.sleep(PAUSA_ENTRE_POSTS)
     _log(f"[X] Publicados: {publicados}"); return publicados
 
-# ===== Facebook =====
+# --- Facebook ---
 def _fb_post_text(page_id, page_token, message: str, link: str | None = None):
     url = f"https://graph.facebook.com/v19.0/{page_id}/feed"
     data = {"message": message, "access_token": page_token}
@@ -479,22 +484,22 @@ def publicar_em_facebook(ws, candidatos):
         base = montar_texto_base(row); msg = "" if mode == "IMAGE_ONLY" else base; ok_any = False
         for pid, ptoken in zip(FB_PAGE_IDS, FB_PAGE_TOKENS):
             try:
-                if DRY_RUN: _log(f"[Facebook][{pid}] DRY-RUN L{rownum}"); ok = True
+                if DRY_RUN: _log(f"[Facebook][{pid}] DRY-RUN"); ok = True
                 else:
                     if POST_FB_WITH_IMAGE:
                         buf = _build_image_from_row(row); fb_id = _fb_post_photo(pid, ptoken, msg, buf.getvalue())
                     else:
                         url_post = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
                         fb_id = _fb_post_text(pid, ptoken, msg, link=url_post or None)
-                    _log(f"[Facebook][{pid}] OK L{rownum} → {fb_id}"); ok = True
+                    _log(f"[Facebook][{pid}] OK → {fb_id}"); ok = True
             except Exception as e:
-                _log(f"[Facebook][{pid}] erro L{rownum}: {e}"); ok = False
+                _log(f"[Facebook][{pid}] erro: {e}"); ok = False
             ok_any = ok_any or ok; time.sleep(0.7)
         if ok_any and not DRY_RUN: marcar_publicado(ws, rownum, "FACEBOOK"); publicados += 1
         time.sleep(PAUSA_ENTRE_POSTS)
     _log(f"[Facebook] Publicados: {publicados}"); return publicados
 
-# ===== Telegram =====
+# --- Telegram ---
 def _tg_send_photo(token, chat_id, caption, image_bytes):
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
     files = {"photo": ("resultado.png", image_bytes, "image/png")}
@@ -516,7 +521,7 @@ def publicar_em_telegram(ws, candidatos):
         base = montar_texto_base(row); msg = "" if mode == "IMAGE_ONLY" else base; ok_any = False
         for chat_id in TG_CHAT_IDS:
             try:
-                if DRY_RUN: _log(f"[Telegram][{chat_id}] DRY-RUN L{rownum}"); ok = True
+                if DRY_RUN: _log(f"[Telegram][{chat_id}] DRY-RUN"); ok = True
                 else:
                     if POST_TG_WITH_IMAGE:
                         buf = _build_image_from_row(row); msg_id = _tg_send_photo(TG_BOT_TOKEN, chat_id, msg, buf.getvalue())
@@ -524,15 +529,15 @@ def publicar_em_telegram(ws, candidatos):
                         url_post = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
                         if url_post and msg: msg = f"{msg}\n{url_post}"
                         msg_id = _tg_send_text(TG_BOT_TOKEN, chat_id, msg or (url_post or ""))
-                    _log(f"[Telegram][{chat_id}] OK L{rownum} → {msg_id}"); ok = True
+                    _log(f"[Telegram][{chat_id}] OK → {msg_id}"); ok = True
             except Exception as e:
-                _log(f"[Telegram][{chat_id}] erro L{rownum}: {e}"); ok = False
+                _log(f"[Telegram][{chat_id}] erro: {e}"); ok = False
             ok_any = ok_any or ok; time.sleep(0.5)
         if ok_any and not DRY_RUN: marcar_publicado(ws, rownum, "TELEGRAM"); publicados += 1
         time.sleep(PAUSA_ENTRE_POSTS)
     _log(f"[Telegram] Publicados: {publicados}"); return publicados
 
-# ===== Discord =====
+# --- Discord ---
 def _discord_send(webhook_url, content=None, image_bytes=None):
     data = {"content": content or ""}; files = {"file": ("resultado.png", image_bytes, "image/png")} if image_bytes else None
     r = requests.post(webhook_url, data=data, files=files, timeout=30); r.raise_for_status(); return True
@@ -544,7 +549,7 @@ def publicar_em_discord(ws, candidatos):
         base = montar_texto_base(row); msg = "" if mode == "IMAGE_ONLY" else base; ok_any = False
         try:
             if DRY_RUN:
-                for wh in DISCORD_WEBHOOKS: _log(f"[Discord] DRY-RUN L{rownum} → {wh[-18:]}")
+                for wh in DISCORD_WEBHOOKS: _log(f"[Discord] DRY-RUN → {wh[-18:]}")
                 ok_any = True
             else:
                 buf = _build_image_from_row(row)
@@ -554,15 +559,15 @@ def publicar_em_discord(ws, candidatos):
                     if url_post and payload: payload = f"{payload}\n{url_post}"
                     elif url_post and not payload: payload = url_post
                     _discord_send(wh, content=(payload or None), image_bytes=buf.getvalue())
-                    _log(f"[Discord] OK L{rownum} → {wh[-18:]}")
+                    _log(f"[Discord] OK → {wh[-18:]}")
                 ok_any = True
         except Exception as e:
-            _log(f"[Discord] erro L{rownum}: {e}"); ok_any = False
+            _log(f"[Discord] erro: {e}"); ok_any = False
         if ok_any and not DRY_RUN: marcar_publicado(ws, rownum, "DISCORD"); publicados += 1
         time.sleep(PAUSA_ENTRE_POSTS)
     _log(f"[Discord] Publicados: {publicados}"); return publicados
 
-# ===== Pinterest =====
+# --- Pinterest ---
 def _pinterest_create_pin(token, board_id, title, description, link, image_bytes=None, image_url=None):
     url = "https://api.pinterest.com/v5/pins"; headers = {"Authorization": f"Bearer {token}"}
     payload = {"board_id": board_id, "title": title[:100], "description": (description or "")[:500]}
@@ -588,53 +593,48 @@ def publicar_em_pinterest(ws, candidatos):
         desc_full = montar_texto_base(row); desc = "" if mode == "IMAGE_ONLY" else desc_full
         url_post = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
         try:
-            if DRY_RUN: _log(f"[Pinterest] DRY-RUN L{rownum}: {title}"); ok = True
+            if DRY_RUN: _log(f"[Pinterest] DRY-RUN: {title}"); ok = True
             else:
                 if POST_PINTEREST_WITH_IMAGE:
                     buf = _build_image_from_row(row)
                     pin_id = _pinterest_create_pin(PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, title, desc, url_post, image_bytes=buf.getvalue())
                 else:
                     pin_id = _pinterest_create_pin(PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, title, desc, url_post, image_url=url_post or None)
-                _log(f"[Pinterest] OK L{rownum} → {pin_id}"); ok = True
+                _log(f"[Pinterest] OK → {pin_id}"); ok = True
         except Exception as e:
-            _log(f"[Pinterest] erro L{rownum}: {e}"); ok = False
+            _log(f"[Pinterest] erro: {e}"); ok = False
         if ok and not DRY_RUN: marcar_publicado(ws, rownum, "PINTEREST"); publicados += 1
         time.sleep(PAUSA_ENTRE_POSTS)
     _log(f"[Pinterest] Publicados: {publicados}"); return publicados
 
-# ===== Keepalive =====
+# =========================
+# Keepalive (opcional)
+# =========================
 def start_keepalive():
     try:
         from flask import Flask
     except ImportError:
         _log("Flask não instalado; keepalive desativado."); return None
     app = Flask(__name__)
-    @app.route("/"); @app.route("/ping")
-    def root(): return "ok", 200
+
+    @app.route("/")
+    @app.route("/ping")
+    def root():
+        return "ok", 200
+
     def run():
         port = int(os.getenv("PORT", KEEPALIVE_PORT))
         app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
     th = Thread(target=run, daemon=True); th.start()
     _log(f"Keepalive Flask ativo em 0.0.0.0:{os.getenv('PORT', KEEPALIVE_PORT)}"); return th
 
-# ===== MAIN =====
+# =========================
+# MAIN
+# =========================
 def main():
-    # Log de configuração
-    _log("Iniciando bot...",
-         f"Origem={BOT_ORIGEM}",
-         f"Redes={','.join(TARGET_NETWORKS)}",
-         f"DRY_RUN={DRY_RUN}",
-         f"DEBUG={DEBUG}",
-         f"KIT_FIRST={USE_KIT_IMAGE_FIRST}",
-         f"PUBLISH_LOTECA={PUBLISH_LOTECA}",
-         f"ONLY={','.join(LOTERIAS_ONLY) or '—'}",
-         f"SKIP={','.join(LOTERIAS_SKIP) or '—'}",
-         f"FORCE_ROWS={FORCE_PUBLISH_ROWS or '—'}")
-    if DEBUG:
-        _log("Mapeamento de colunas de status:",
-             f"X:{_col_letter(COL_STATUS_X)}  FB:{_col_letter(COL_STATUS_FACEBOOK)}  TG:{_col_letter(COL_STATUS_TELEGRAM)}  "
-             f"DC:{_col_letter(COL_STATUS_DISCORD)}  PIN:{_col_letter(COL_STATUS_PINTEREST)}")
-
+    _log("==== Iniciando bot.py ====")
+    _log(f"Origem={BOT_ORIGEM} | Redes={','.join(TARGET_NETWORKS)} | DRY_RUN={DRY_RUN} | KIT_FIRST={USE_KIT_IMAGE_FIRST}")
+    _log(f"PUBLISH_LOTECA={PUBLISH_LOTECA} | ONLY={','.join(LOTERIAS_ONLY) or '—'} | SKIP={','.join(LOTERIAS_SKIP) or '—'} | FORCE={','.join(map(str,FORCE_PUBLISH_ROWS)) or '—'}")
     if ENABLE_TIME_GATE and not DRY_RUN and not _after_gate():
         _log(f"Saindo: gate horário ativo (TIME_GATE_HHMM={TIME_GATE_HHMM})."); return
 
@@ -642,12 +642,9 @@ def main():
     try:
         ws = _open_ws()
         for rede in TARGET_NETWORKS:
-            if rede not in COL_STATUS_REDES:
-                _log(f"[{rede}] rede não suportada."); continue
+            if rede not in COL_STATUS_REDES: _log(f"[{rede}] rede não suportada."); continue
             candidatos = coletar_candidatos_para(ws, rede)
-            if not candidatos:
-                _log(f"[{rede}] Nenhuma candidata."); continue
-
+            if not candidatos: _log(f"[{rede}] Nenhuma candidata."); continue
             if rede == "X": publicar_em_x(ws, candidatos)
             elif rede == "FACEBOOK": publicar_em_facebook(ws, candidatos)
             elif rede == "TELEGRAM": publicar_em_telegram(ws, candidatos)
