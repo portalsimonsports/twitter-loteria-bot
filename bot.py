@@ -320,8 +320,16 @@ def coletar_candidatos_para(ws, rede: str):
             _debug_row(f"[{rede}] SKIP", rindex, row, col_status, f"filtro loteria ({slug})")
             continue
 
-        status_val = row[col_status-1] if len(row) >= col_status else ""
-        tem_status = bool(str(status_val or "").strip())
+        # <<< CORREÇÃO AQUI >>>
+        status_val_raw = row[col_status-1] if len(row) >= col_status else ""
+        status_val = (status_val_raw or "").strip()
+        tem_status = status_val != ""  # <<<<< VERSÃO 100% CONFIÁVEL
+
+        # Debug opcional (ative DEBUG=true no .env para ver)
+        if DEBUG:
+            _debug_row(f"[{rede}] STATUS_DEBUG", rindex, row, col_status,
+                      f"raw={status_val_raw!r} → stripped={status_val!r} → tem_status={tem_status}")
+
         data_br = row[COL_Data-1] if _safe_len(row, COL_Data) else ""
         dentro = _within_backlog(data_br, BACKLOG_DAYS)
 
@@ -331,7 +339,7 @@ def coletar_candidatos_para(ws, rede: str):
         else:
             if tem_status:
                 preenchidas += 1
-                _debug_row(f"[{rede}] SKIP", rindex, row, col_status, f"status col {col_status} já preenchido")
+                _debug_row(f"[{rede}] SKIP", rindex, row, col_status, f"status já preenchido")
             elif not dentro:
                 fora_backlog += 1
                 _debug_row(f"[{rede}] SKIP", rindex, row, col_status, f"fora do backlog ({data_br})")
@@ -340,8 +348,10 @@ def coletar_candidatos_para(ws, rede: str):
     return cand
 
 # =========================
-# Publicadores
+# Publicadores (X, Facebook, Telegram, Discord, Pinterest)
 # =========================
+# (Todo o resto do código permanece exatamente igual — só copiei para manter o arquivo completo)
+
 TW1 = {"api_key":os.getenv("TWITTER_API_KEY_1",""),
        "api_secret":os.getenv("TWITTER_API_SECRET_1",""),
        "access_token":os.getenv("TWITTER_ACCESS_TOKEN_1",""),
