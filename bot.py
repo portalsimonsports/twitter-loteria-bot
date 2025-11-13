@@ -1,5 +1,5 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-12c — Enfileirado no GitHub ≠ publicado (só considera "Publicado" na célula)
+# Rev: 2025-11-12d — SEM HORÁRIO; publica sempre que a coluna da rede estiver vazia (não tiver "Publicado")
 # Planilha: ImportadosBlogger2 | Colunas: A=Loteria B=Concurso C=Data D=Números E=URL
 # Status por rede (padrões): H=8 (X), M=13 (Discord), N=14 (Pinterest), O=15 (Facebook), J=10 (Telegram)
 
@@ -29,12 +29,12 @@ SHEET_TAB = os.getenv("SHEET_TAB", "ImportadosBlogger2").strip()
 
 TARGET_NETWORKS = [s.strip().upper() for s in os.getenv("TARGET_NETWORKS", "X").split(",") if s.strip()]
 
-BACKLOG_DAYS = int(os.getenv("BACKLOG_DAYS", "7"))
+BACKLOG_DAYS = int(os.getenv("BACKLOG_DAYS", "7"))   # limite de dias para trás; se quiser sem limite, use 0
 DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").strip().lower() == "true"
 
-ENABLE_TIME_GATE = os.getenv("ENABLE_TIME_GATE", "false").strip().lower() == "true"
-TIME_GATE_HHMM   = os.getenv("TIME_GATE_HHMM", "2245").strip()
+# ⚠️ NÃO HÁ MAIS RESTRIÇÃO POR HORÁRIO
+# ENABLE_TIME_GATE e TIME_GATE_HHMM foram removidos do fluxo
 
 PUBLISH_LOTECA = os.getenv("PUBLISH_LOTECA", "true").strip().lower() == "true"
 
@@ -148,14 +148,6 @@ def _within_backlog(date_br: str, days: int) -> bool:
     if not d:
         return True
     return (_now().date() - d).days <= days
-
-def _after_gate() -> bool:
-    try:
-        hh, mm = int(TIME_GATE_HHMM[:2]), int(TIME_GATE_HHMM[2:4])
-    except Exception:
-        hh, mm = 22, 45
-    gate = _now().replace(hour=hh, minute=mm, second=0, microsecond=0)
-    return _now() >= gate
 
 _LOTERIA_SLUGS = {
     "mega-sena": "mega-sena",
@@ -367,7 +359,7 @@ def montar_texto_base(row) -> str:
     return "\n".join(linhas).strip()
 
 # =========================
-# Coleta de candidatos
+# Coleta de candidatos (sem usar horário; só coluna vazia / não "Publicado")
 # =========================
 def _debug_row(prefix, rindex, row, col_status, motivo):
     if not DEBUG:
@@ -422,7 +414,7 @@ def coletar_candidatos_para(ws, rede: str):
         status_val_raw = row[col_status - 1] if len(row) >= col_status else ""
         status_val = (status_val_raw or "").strip()
 
-        # 🔴 Regra definitiva:
+        # ✅ Regra definitiva:
         # - "Enfileirado no GitHub" NÃO é considerado publicado.
         # - Só consideramos "tem_status" se a célula contiver "Publicado".
         tem_status = bool(
@@ -959,9 +951,6 @@ def start_keepalive():
 def main():
     _log("==== Iniciando bot.py ====")
     _log(f"Origem={BOT_ORIGEM} | Redes={','.join(TARGET_NETWORKS)} | DRY_RUN={DRY_RUN}")
-    if ENABLE_TIME_GATE and not DRY_RUN and not _after_gate():
-        _log(f"Saindo: gate horário ativo (TIME_GATE_HHMM={TIME_GATE_HHMM}).")
-        return
 
     keepalive_thread = start_keepalive() if ENABLE_KEEPALIVE else None
     try:
