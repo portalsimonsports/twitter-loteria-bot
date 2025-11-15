@@ -1,340 +1,342 @@
 # app/imaging.py — Portal SimonSports
-# Rev: 2025-11-13 — Layout tipo “bolinhas” (inspirado no print 2)
+# Rev: 2025-11-14 — Layout bolinhas unificado para todas as loterias
 #
-# Funções públicas:
-#   gerar_imagem_loteria(loteria, concurso, data_str, numeros_str, url_res) -> BytesIO
-#   render_image(loteria, concurso, data_str, numeros_list, url_res, out_path, logos_dir) -> salva PNG
+# - Fundo em degradê na cor da loteria
+# - Logo no topo direito (./assets/logos/slug.png)
+# - Título: "<Loteria> <Concurso>"
+# - Data do sorteio
+# - Números em bolinhas brancas centralizadas
+# - Botão amarelo "VER RESULTADO COMPLETO"
+# - URL e marca no rodapé
 #
-# Observações:
-#   - Tamanho: 1080x1080 (quadrado, bom para X/Instagram)
-#   - Fundo na cor oficial da loteria (quando encontrada)
-#   - Números em círculos brancos, com quebra em 1 ou 2 linhas
-#   - Texto “Ver resultado completo no Portal SimonSports” perto do rodapé
-#   - “PORTAL SIMONSPORTS” em destaque no rodapé
-#   - Se o logo existir em LOGOS_DIR/slug.png, ele aparece no topo à direita
+# Compatível com:
+#   gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url="")
+#   render_image(loteria, concurso, data_br, numeros_list, url, out_path, logos_dir, marca="Portal SimonSports")
 
 import os
 import io
+import math
 import re
-from typing import List, Tuple, Optional
+from datetime import datetime
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-# =========================
-# Config / Constantes
-# =========================
+# ------------------------
+# Constantes básicas
+# ------------------------
+W, H = 1080, 1080  # tamanho quadrado padrão
 
-WIDTH, HEIGHT = 1080, 1080
-
-# Cores oficiais aproximadas das loterias (RGB)
+# ------------------------
+# Cores por loteria
+# ------------------------
 CORES_LOTERIAS = {
     "mega-sena":    (32, 152, 105),
-    "quina":        (80, 43, 136),
-    "lotofacil":    (198, 33, 104),
-    "lotofácil":    (198, 33, 104),
-    "lotomania":    (243, 118, 33),
-    "timemania":    (0, 153, 68),
-    "dupla-sena":   (141, 0, 28),
-    "dupla sena":   (141, 0, 28),
-    "federal":      (0, 87, 159),
-    "dia-de-sorte": (213, 143, 34),
-    "dia de sorte": (213, 143, 34),
+    "quina":        (64, 40, 94),
+    "lotofacil":    (149, 55, 148),
+    "lotomania":    (243, 112, 33),
+    "timemania":    (39, 127, 66),
+    "dupla-sena":   (149, 32, 49),
+    "federal":      (0, 76, 153),
+    "dia-de-sorte": (184, 134, 11),
     "super-sete":   (37, 62, 116),
-    "super sete":   (37, 62, 116),
-    "loteca":       (56, 118, 29),
+    "loteca":       (56, 118, 29),  # #38761d
 }
 
-# Diretório padrão de logos (pode ser sobrescrito via env)
-LOGOS_DIR_DEFAULT = os.getenv("LOGOS_DIR", "./assets/logos").strip() or "./assets/logos"
-
-
-# =========================
-# Helpers de texto / cores
-# =========================
-
-def _slugify(s: str) -> str:
-    s = (s or "").lower()
+def _slug(text: str) -> str:
+    s = (text or "").lower().strip()
+    s = s.replace("ç", "c")
     s = re.sub(r"[áàâãä]", "a", s)
     s = re.sub(r"[éèêë]", "e", s)
     s = re.sub(r"[íìîï]", "i", s)
     s = re.sub(r"[óòôõö]", "o", s)
     s = re.sub(r"[úùûü]", "u", s)
-    s = re.sub(r"ç", "c", s)
     s = re.sub(r"[^a-z0-9\- ]+", "", s)
-    s = re.sub(r"\s+", "-", s).strip("-")
-    return s or "loteria"
+    s = re.sub(r"\s+", "-", s)
 
+    # mapeamentos especiais
+    mapa = {
+        "lotofácil": "lotofacil",
+        "dupla sena": "dupla-sena",
+        "dia de sorte": "dia-de-sorte",
+        "super sete": "super-sete",
+    }
+    return mapa.get(s, s)
 
-def _guess_slug(loteria: str) -> str:
-    p = (loteria or "").lower()
-    for k in CORES_LOTERIAS.keys():
-        if k in p:
-            return k
-    return _slugify(loteria or "loteria")
+def _cor_loteria(nome: str):
+    return CORES_LOTERIAS.get(_slug(nome), (40, 40, 60))
 
-
-def _get_loteria_color(loteria: str) -> Tuple[int, int, int]:
-    slug = _guess_slug(loteria)
-    return CORES_LOTERIAS.get(slug, (32, 32, 32))
-
-
-def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    """
-    Tenta carregar uma fonte 'decente'. Se não achar, cai na default do Pillow.
-    """
-    candidates = []
-    if bold:
-        candidates = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "DejaVuSans-Bold.ttf",
-            "arialbd.ttf",
-            "Arial Bold.ttf",
-        ]
-    else:
-        candidates = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "DejaVuSans.ttf",
-            "arial.ttf",
-            "Arial.ttf",
-        ]
+# ------------------------
+# Fontes
+# ------------------------
+def _load_font(candidates, size):
     for path in candidates:
-        try:
-            return ImageFont.truetype(path, size)
-        except Exception:
-            continue
-    # fallback
-    return ImageFont.load_default()
-
-
-def _draw_centered(draw: ImageDraw.ImageDraw, text: str, y: int, font: ImageFont.FreeTypeFont, fill=(255, 255, 255)):
-    w, h = draw.textsize(text, font=font)
-    x = (WIDTH - w) // 2
-    draw.text((x, y), text, font=font, fill=fill)
-
-
-def _load_logo(loteria: str, logos_dir: Optional[str] = None) -> Optional[Image.Image]:
-    logos_dir = logos_dir or LOGOS_DIR_DEFAULT
-    slug = _guess_slug(loteria)
-    if not os.path.isdir(logos_dir):
-        return None
-    # tenta slug.png / slug.jpg
-    for ext in (".png", ".jpg", ".jpeg"):
-        path = os.path.join(logos_dir, slug + ext)
         if os.path.exists(path):
             try:
-                img = Image.open(path).convert("RGBA")
-                return img
+                return ImageFont.truetype(path, size=size)
             except Exception:
-                return None
+                continue
+    return ImageFont.load_default()
+
+def _font_regular(size):
+    return _load_font(
+        [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/Library/Fonts/Arial.ttf",
+        ],
+        size,
+    )
+
+def _font_bold(size):
+    return _load_font(
+        [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/Library/Fonts/Arial Bold.ttf",
+        ],
+        size,
+    )
+
+def _font_serif(size):
+    return _load_font(
+        [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+        ],
+        size,
+    )
+
+# ------------------------
+# Fundo / gradiente / vinheta
+# ------------------------
+def _gradiente_vertical(w, h, top_color, bottom_color):
+    base = Image.new("RGB", (w, h), top_color)
+    over = Image.new("RGB", (w, h), bottom_color)
+    mask = Image.linear_gradient("L").resize((1, h)).resize((w, h))
+    return Image.composite(over, base, mask)
+
+def _vinheta(img, strength=220, blur=120):
+    w, h = img.size
+    mask = Image.new("L", (w, h), 0)
+    d = ImageDraw.Draw(mask)
+    # elipse maior que o quadro para ficar suave
+    d.ellipse((-200, -80, w + 200, h + 280), fill=strength)
+    mask = mask.filter(ImageFilter.GaussianBlur(blur))
+    return Image.composite(img, Image.new("RGB", (w, h), (0, 0, 0)), mask)
+
+# ------------------------
+# Util: logo, chip, texto com sombra
+# ------------------------
+def _load_logo(logos_dir, loteria_slug):
+    if not logos_dir:
+        return None
+    path = os.path.join(logos_dir, f"{loteria_slug}.png")
+    if os.path.exists(path):
+        try:
+            return Image.open(path).convert("RGBA")
+        except Exception:
+            return None
     return None
 
+def _texto_sombra(draw, x, y, texto, font, fill=(255, 255, 255), shadow=(0, 0, 0), off=2, anchor="la"):
+    draw.text((x + off, y + off), texto, font=font, fill=shadow, anchor=anchor)
+    draw.text((x, y), texto, font=font, fill=fill, anchor=anchor)
 
-# =========================
-# Layout principal
-# =========================
+def _chip_numero(numero: int, raio: int, cor, fonte):
+    img = Image.new("RGBA", (raio * 2, raio * 2), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    # bolinha principal
+    d.ellipse((0, 0, raio * 2 - 1, raio * 2 - 1), fill=(255, 255, 255, 255))
+    # highlight suave
+    hl = Image.new("RGBA", (raio * 2, raio * 2), (0, 0, 0, 0))
+    d2 = ImageDraw.Draw(hl)
+    d2.ellipse((raio * 0.2, raio * 0.1, raio * 1.8, raio * 1.3), fill=(255, 255, 255, 70))
+    img = Image.alpha_composite(img, hl)
 
-def _draw_background(img: Image.Image, base_color: Tuple[int, int, int]):
+    txt = str(numero).zfill(2)
+    tw = d.textlength(txt, font=fonte)
+    bbox = fonte.getbbox(txt)
+    th = bbox[3] - bbox[1]
+    d.text((raio - tw / 2, raio - th / 2 - 2), txt, font=fonte, fill=cor)
+    return img
+
+# ------------------------
+# Layout de números (bolinhas)
+# ------------------------
+def _layout_bolinhas(canvas, numeros, loteria_slug):
     """
-    Fundo em leve gradiente radial escurecendo nas bordas.
+    Desenha as bolinhas de números centralizadas.
+    numeros: lista de inteiros
     """
-    r, g, b = base_color
-    base = Image.new("RGB", (WIDTH, HEIGHT), (r, g, b))
-    overlay = Image.new("L", (WIDTH, HEIGHT), 0)
-    ov_draw = ImageDraw.Draw(overlay)
-
-    max_radius = int((WIDTH + HEIGHT) / 1.5)
-    center = (WIDTH // 2, HEIGHT // 2)
-
-    for i in range(max_radius, 0, -20):
-        alpha = int(255 * (i / max_radius) ** 2 * 0.6)
-        bbox = [
-            center[0] - i,
-            center[1] - i,
-            center[0] + i,
-            center[1] + i,
-        ]
-        ov_draw.ellipse(bbox, fill=alpha)
-
-    overlay = overlay.filter(ImageFilter.GaussianBlur(80))
-    img.paste(base, (0, 0))
-    img.putalpha(255)
-    img = Image.composite(img, Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 200)), overlay)
-    return img.convert("RGB")
-
-
-def _layout_header(draw: ImageDraw.ImageDraw, loteria: str, concurso: str, data_str: str, base_color: Tuple[int, int, int], logos_dir: Optional[str]):
-    title_font = _load_font(72, bold=True)
-    sub_font   = _load_font(38, bold=False)
-
-    loteria_txt = (loteria or "").upper().strip()
-    concurso_txt = f"Concurso {concurso}".strip() if concurso else ""
-    data_txt = data_str.strip() if data_str else ""
-
-    # Título à esquerda
-    margin_left = 90
-    y = 110
-
-    draw.text((margin_left, y), loteria_txt, font=title_font, fill=(255, 255, 255))
-    tw, th = draw.textsize(loteria_txt, font=title_font)
-
-    if concurso_txt:
-        y2 = y + th + 10
-        draw.text((margin_left, y2), concurso_txt, font=sub_font, fill=(230, 230, 230))
-        _, sh = draw.textsize(concurso_txt, font=sub_font)
-    else:
-        y2 = y + th
-        sh = 0
-
-    if data_txt:
-        y3 = y2 + sh + 6
-        draw.text((margin_left, y3), data_txt, font=sub_font, fill=(230, 230, 230))
-
-    # Logo no topo direito (se existir)
-    logo = _load_logo(loteria, logos_dir)
-    if logo:
-        target_h = 110
-        ratio = target_h / logo.height
-        new_w = int(logo.width * ratio)
-        logo = logo.resize((new_w, target_h), Image.LANCZOS)
-        x_logo = WIDTH - new_w - 80
-        y_logo = 80
-        img_rgba = logo.convert("RGBA")
-        draw_im = draw.im  # PIL internals
-        # desenhar via paste
-        bg = draw_im  # type: ignore
-        base_img = Image.frombytes("RGBA", bg.size, bg.tobytes())
-        base_img.paste(img_rgba, (x_logo, y_logo), img_rgba)
-        draw_im.frombytes(base_img.tobytes())
-
-
-def _split_numbers_tokens(numeros_str: str) -> List[str]:
-    if not numeros_str:
-        return []
-    # separa por vírgula, ponto-e-vírgula, espaço
-    tokens = re.split(r"[,\s;]+", numeros_str)
-    return [t for t in tokens if t.strip()]
-
-
-def _layout_bolinhas(draw: ImageDraw.ImageDraw, numeros_str: str):
-    tokens = _split_numbers_tokens(numeros_str)
-    if not tokens:
+    d = ImageDraw.Draw(canvas)
+    n = len(numeros)
+    if n == 0:
         return
 
-    # Limita exageros visuais para 20 itens
-    tokens = tokens[:20]
+    # parâmetros gerais
+    area_top = 320
+    area_bottom = 780
+    area_height = area_bottom - area_top
+    margin_lr = 90
 
-    # duas linhas no máximo
-    max_por_linha = 10
-    linhas = [tokens[i:i + max_por_linha] for i in range(0, len(tokens), max_por_linha)]
-    if len(linhas) > 2:
-        linhas = linhas[:2]
+    # define grid básico (rows x cols)
+    if n <= 6:
+        rows, cols = 1, n
+    elif n <= 10:
+        rows, cols = 2, math.ceil(n / 2)
+    elif n <= 15:
+        rows, cols = 3, 5
+    elif n <= 20:
+        rows, cols = 4, 5
+    else:
+        cols = 7
+        rows = math.ceil(n / cols)
 
-    n_linhas = len(linhas)
-    # área central aproximada
-    top_area = 360
-    available_height = 360
-    line_spacing = available_height // (n_linhas + 1)
+    # raio dependendo do número de linhas
+    if rows == 1:
+        r = 90
+    elif rows == 2:
+        r = 80
+    elif rows == 3:
+        r = 74
+    elif rows == 4:
+        r = 68
+    else:
+        r = 60
 
-    # raio baseado no maior comprimento da linha
-    max_len = max(len(l) for l in linhas)
-    total_padding = 2 * (max_len + 1)  # espaços entre círculos
-    max_diameter = min(120, WIDTH // (max_len + 2))
-    radius = max(40, min(60, max_diameter // 2))
+    # fonte dos números
+    f_num = _font_bold(52 if rows <= 2 else 46)
 
-    font = _load_font(40, bold=True)
+    # espaço vertical
+    total_h = rows * (2 * r) + (rows - 1) * 26
+    start_y = area_top + (area_height - total_h) / 2
 
-    for li, linha_tokens in enumerate(linhas):
-        y_center = top_area + (li + 1) * line_spacing
-        n = len(linha_tokens)
-        if n <= 0:
-            continue
+    idx = 0
+    for r_idx in range(rows):
+        # números nesta linha
+        remaining = n - idx
+        line_cols = min(cols, remaining)
+        row_w = line_cols * (2 * r) + (line_cols - 1) * 26
+        start_x = (W - row_w) / 2
 
-        total_width = n * (2 * radius) + (n - 1) * 20
-        start_x = (WIDTH - total_width) // 2
+        cy = start_y + r_idx * (2 * r + 26) + r
+        cx = start_x + r
 
-        for idx, tok in enumerate(linha_tokens):
-            x_center = start_x + radius + idx * (2 * radius + 20)
-            # círculo
-            bbox = [
-                x_center - radius,
-                y_center - radius,
-                x_center + radius,
-                y_center + radius,
-            ]
-            draw.ellipse(bbox, fill=(255, 255, 255), outline=(230, 230, 230), width=3)
+        for c_idx in range(line_cols):
+            num = numeros[idx]
+            chip = _chip_numero(num, r, (0, 0, 0), f_num)
+            canvas.paste(chip, (int(cx - r), int(cy - r)), chip)
+            cx += 2 * r + 26
+            idx += 1
 
-            num_txt = tok
-            tw, th = draw.textsize(num_txt, font=font)
-            tx = x_center - tw // 2
-            ty = y_center - th // 2 - 2
-            draw.text((tx, ty), num_txt, font=font, fill=(0, 0, 0))
+# ------------------------
+# CTA botão + URL + marca
+# ------------------------
+def _draw_cta_url_marca(canvas, url, marca):
+    d = ImageDraw.Draw(canvas)
 
+    # botão
+    btn_w, btn_h = 760, 100
+    bx = (W - btn_w) // 2
+    by = 820
+    d.rounded_rectangle(
+        (bx, by, bx + btn_w, by + btn_h),
+        radius=26,
+        fill=(255, 215, 0),
+        outline=(0, 0, 0),
+        width=2,
+    )
+    f_btn = _font_bold(46)
+    txt_btn = "VER RESULTADO COMPLETO"
+    tw = d.textlength(txt_btn, font=f_btn)
+    d.text((W / 2 - tw / 2, by + (btn_h - 50) / 2), txt_btn, font=f_btn, fill=(0, 0, 0))
 
-def _layout_footer(draw: ImageDraw.ImageDraw, url_res: str):
-    small_font = _load_font(30, bold=False)
-    big_font   = _load_font(42, bold=True)
+    # URL (sem https://)
+    if url:
+        f_url = _font_regular(34)
+        clean = url.replace("https://", "").replace("http://", "")
+        tw = d.textlength(clean, font=f_url)
+        d.text((W / 2 - tw / 2, by + btn_h + 18), clean, font=f_url, fill=(235, 235, 235))
 
-    # texto "Ver resultado completo..."
-    txt1 = "↻ Ver resultado completo no Portal SimonSports"
-    w1, h1 = draw.textsize(txt1, font=small_font)
-    x1 = (WIDTH - w1) // 2
-    y1 = HEIGHT - 220
-    draw.text((x1, y1), txt1, font=small_font, fill=(245, 245, 245))
+    # marca
+    if marca:
+        f_marca = _font_regular(26)
+        mw = d.textlength(marca, font=f_marca)
+        d.text((W / 2 - mw / 2, H - 54), marca, font=f_marca, fill=(255, 255, 255, 160))
 
-    # URL (se tiver)
-    if url_res:
-        w2, h2 = draw.textsize(url_res, font=small_font)
-        x2 = (WIDTH - w2) // 2
-        y2 = y1 + h1 + 8
-        draw.text((x2, y2), url_res, font=small_font, fill=(230, 230, 230))
+# ------------------------
+# Construção principal da imagem
+# ------------------------
+def _build_canvas(loteria, concurso, data_br, numeros_list, url, logos_dir, marca="Portal SimonSports"):
+    lot_slug = _slug(loteria)
+    base_cor = _cor_loteria(loteria)
 
-    # "PORTAL SIMONSPORTS"
-    txt_brand = "PORTAL SIMONSPORTS"
-    w3, h3 = draw.textsize(txt_brand, font=big_font)
-    x3 = (WIDTH - w3) // 2
-    y3 = HEIGHT - 120
-    draw.text((x3, y3), txt_brand, font=big_font, fill=(255, 255, 255))
+    # gradiente + vinheta
+    top = tuple(min(255, int(c * 1.1)) for c in base_cor)
+    bottom = tuple(max(0, int(c * 0.6)) for c in base_cor)
+    bg = _gradiente_vertical(W, H, top, bottom)
+    bg = _vinheta(bg)
 
+    d = ImageDraw.Draw(bg)
 
-# =========================
-# Funções públicas
-# =========================
+    # título + data
+    f_title = _font_serif(96)
+    f_data = _font_bold(40)
 
-def gerar_imagem_loteria(loteria: str, concurso: str, data_str: str, numeros_str: str, url_res: str):
+    titulo = f"{loteria} {concurso}".strip()
+    _texto_sombra(d, 64, 72, titulo, f_title, fill=(255, 255, 255), shadow=(0, 0, 0), off=3, anchor="la")
+    _texto_sombra(d, 64, 170, data_br, f_data, fill=(230, 230, 230), shadow=(0, 0, 0), off=2, anchor="la")
+
+    # logo topo-direito
+    logo = _load_logo(logos_dir, lot_slug)
+    if logo:
+        max_w = 220
+        max_h = 140
+        logo.thumbnail((max_w, max_h), Image.LANCZOS)
+        x = W - 64 - logo.width
+        y = 70
+        bg.paste(logo, (x, y), logo)
+
+    # grade de bolinhas
+    _layout_bolinhas(bg, numeros_list, lot_slug)
+
+    # CTA, URL e marca
+    _draw_cta_url_marca(bg, url, marca)
+
+    return bg
+
+# ------------------------
+# Função usada pelo bot como fallback (BytesIO)
+# ------------------------
+def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url=""):
     """
-    Gera a imagem padrão em memória (BytesIO) a partir dos dados da loteria.
-    Usada diretamente pelo bot.py atual.
+    Função original usada pelo bot quando não utiliza render_image().
+    Aqui convertemos numeros_str em lista de ints e chamamos o mesmo layout.
     """
-    base_color = _get_loteria_color(loteria)
-    img = Image.new("RGB", (WIDTH, HEIGHT), base_color)
-    img = _draw_background(img, base_color)
+    # extrai inteiros do texto (ignorando palavras como 'Setembro', 'Time do Coração', etc.)
+    numeros = [int(x) for x in re.split(r"[^\d]+", numeros_str or "") if x.isdigit()]
+    if not numeros:
+        # se não achar nada, apenas não desenha bolinhas
+        numeros = []
 
-    draw = ImageDraw.Draw(img)
-
-    _layout_header(draw, loteria, concurso, data_str, base_color, LOGOS_DIR_DEFAULT)
-    _layout_bolinhas(draw, numeros_str)
-    _layout_footer(draw, url_res)
+    img = _build_canvas(loteria, concurso, data_br, numeros, url, logos_dir="./assets/logos")
 
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    img.save(buf, format="PNG")
     buf.seek(0)
     return buf
 
-
-def render_image(loteria: str, concurso: str, data_str: str, numeros_list: List[int], url_res: str, out_path: str, logos_dir: str = None):
+# ------------------------
+# Função PRO usada pelo bot.py (salva em disco)
+# ------------------------
+def render_image(loteria, concurso, data_ddmmaa, numeros, url, out_path, logos_dir, marca="Portal SimonSports"):
     """
-    Versão “PRO” que salva a imagem em disco.
-    Útil para o bot novo (quando você quiser usar de novo).
+    Usada pelo bot.py quando disponível (_render_image_pro).
+    numeros: lista de inteiros (já tratados no bot)
     """
-    numeros_str = ", ".join(str(n) for n in numeros_list) if numeros_list else ""
-    base_color = _get_loteria_color(loteria)
-    img = Image.new("RGB", (WIDTH, HEIGHT), base_color)
-    img = _draw_background(img, base_color)
-
-    draw = ImageDraw.Draw(img)
-    _layout_header(draw, loteria, concurso, data_str, base_color, logos_dir or LOGOS_DIR_DEFAULT)
-    _layout_bolinhas(draw, numeros_str)
-    _layout_footer(draw, url_res)
+    numeros_list = list(numeros or [])
+    img = _build_canvas(loteria, concurso, data_ddmmaa, numeros_list, url, logos_dir, marca=marca)
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    img.save(out_path, format="PNG", optimize=True)
+    img.save(out_path, "PNG")
+    return out_path
