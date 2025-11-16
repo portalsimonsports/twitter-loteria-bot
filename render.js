@@ -27,6 +27,7 @@ function slugify(s){
     .trim().replace(/\s+/g,'-');
 }
 
+// Nome -> slug (arquivos de fundo/logo)
 const LOTERIA_SLUGS = {
   'mega-sena':'mega-sena',
   'quina':'quina',
@@ -52,7 +53,9 @@ function guessSlug(text){
   return slugify(text||'loteria');
 }
 
-/* ===== Arquivo → URL ou file:// ===== */
+/** Converte caminho relativo para file:// absoluto.
+ * Se já for http(s), retorna como está.
+ * Se o arquivo local não existir, retorna null (para cair no fallback). */
 function resolvePathOrUrl(relOrUrl){
   const v = String(relOrUrl||'').trim();
   if (!v) return null;
@@ -61,126 +64,116 @@ function resolvePathOrUrl(relOrUrl){
   return fs.existsSync(abs) ? fileUrl(abs) : null;
 }
 
-/* ===== Normalização (preserva 1x2 da Loteca) ===== */
-function getNormalizedParts(raw){
+// Normaliza números (“1 2;03,4” → “01, 02, 03, 04”) preservando “1x2” (Loteca)
+function normalizeNumeros(raw){
   let s = safe(raw).replace(/[;\|\s]+/g, ',');
   const parts = s.split(',').map(x => x.trim()).filter(Boolean);
-  return parts.map(p => {
+  const norm = parts.map(p => {
     if (/^\d{1,2}$/.test(p)) return ('0'+Number(p)).slice(-2);
     return p;
   });
+  return norm.join(', ');
 }
 
-function normalizeNumeros(raw){
-  return getNormalizedParts(raw).join(', ');
-}
-
-/* ================= Build fields ================= */
+/* =============== Build fields =============== */
 function buildFields(item){
+  // Esperado (vindo do GAS): Produto/Loteria, Concurso, Data, Números, URL, TelegramC1, TelegramC2
   const loteria  = safe(item.Loteria || item.Produto);
   const concurso = safe(item.Concurso);
   const data     = safe(item.Data);
-  const numerosRaw = item['Números'] ?? item.Numeros;
-
-  const numsList = getNormalizedParts(numerosRaw);
-  const numeros  = numsList.join(', ');
-
-  const url = safe(item.URL ?? item.Url);
-  const tg1 = safe(item.TelegramC1 ?? item.TELEGRAM_CANAL_1);
-  const tg2 = safe(item.TelegramC2 ?? item.TELEGRAM_CANAL_2);
+  const numeros  = normalizeNumeros(item['Números'] ?? item.Numeros);
+  const url      = safe(item.URL ?? item.Url);
+  const tg1      = safe(item.TelegramC1 ?? item.TELEGRAM_CANAL_1);
+  const tg2      = safe(item.TelegramC2 ?? item.TELEGRAM_CANAL_2);
 
   const slug = guessSlug(loteria);
 
-  /* ==== Fundo e logo ==== */
+  // Fundo e Logo — prioriza o que vier no JSON; senão usa pasta /assets
   let fundo = resolvePathOrUrl(item.ImagemFundo);
-  if (!fundo) fundo = resolvePathOrUrl(path.join('assets','fundos', `${slug}.jpg`));
-
+  if (!fundo) {
+    const localFundo = path.join('assets','fundos', `${slug}.jpg`);
+    fundo = resolvePathOrUrl(localFundo); // file://...
+  }
   let logo = resolvePathOrUrl(item.Logo);
-  if (!logo) logo = resolvePathOrUrl(path.join('assets','logos', `${slug}.png`));
+  if (!logo) {
+    const localLogo = path.join('assets','logos', `${slug}.png`);
+    logo = resolvePathOrUrl(localLogo);
+  }
 
-  /* ==== Texto superior ==== */
+  // Título e descrição para o template
   const produto   = concurso ? `${loteria} • Concurso ${concurso}` : loteria;
   const descricao = numeros ? `Números: ${numeros}` : '';
 
-  /* ==== Dupla Sena (1º e 2º sorteio) ==== */
-  let primeiroSorteio = '';
-  let segundoSorteio  = '';
-
-  if (slug === 'dupla-sena' && numsList.length >= 7){
-    primeiroSorteio = numsList.slice(0,6).join(', ');
-    segundoSorteio  = numsList.slice(6,12).join(', ');
+  // ===== Nome do arquivo final (sem repetições) =====
+  // Preferimos 'id' quando existir (ex.: "lotomania-2846").
+  // Se o 'id' já contiver o slug, não repetimos.
+  const tagRaw = safe(item.id) || (concurso || data || '');
+  const tag = slugify(tagRaw);
+  let filename;
+  if (!tag) {
+    filename = `${slug}.jpg`;
+  } else if (tag.startsWith(`${slug}-`)) {
+    filename = `${tag}.jpg`;
+  } else {
+    filename = `${slug}-${tag}.jpg`;
   }
 
-  /* ==== Nome do arquivo ==== */
-  const tagBase = safe(item.id) || (concurso || data || '');
-  const tag = slugify(tagBase);
-  const filename = tag ? `${slug}-${tag}.jpg` : `${slug}.jpg`;
-
-  return {
-    slug, produto, data, descricao,
-    url, tg1, tg2,
-    fundo, logo, filename,
-    primeiroSorteio, segundoSorteio
-  };
+  return { slug, produto, data, descricao, url, tg1, tg2, fundo, logo, filename };
 }
 
-/* ================= Template ================= */
 function applyTemplate(html, f){
   return html
-    .replace(/{{ImagemFundo}}/g,   f.fundo || '')
-    .replace(/{{Logo}}/g,          f.logo  || '')
-    .replace(/{{Produto}}/g,       f.produto)
-    .replace(/{{Data}}/g,          f.data)
-    .replace(/{{Descricao}}/g,     f.descricao)
-    .replace(/{{URL}}/g,           f.url)
-    .replace(/{{TelegramC1}}/g,    f.tg1)
-    .replace(/{{TelegramC2}}/g,    f.tg2)
-    .replace(/{{PrimeiroSorteio}}/g, f.primeiroSorteio || '')
-    .replace(/{{SegundoSorteio}}/g,  f.segundoSorteio  || '');
+    .replace(/{{ImagemFundo}}/g, f.fundo || '')
+    .replace(/{{Logo}}/g,        f.logo || '')
+    .replace(/{{Produto}}/g,     f.produto)
+    .replace(/{{Data}}/g,        f.data)
+    .replace(/{{Descricao}}/g,   f.descricao)
+    .replace(/{{URL}}/g,         f.url)
+    .replace(/{{TelegramC1}}/g,  f.tg1)
+    .replace(/{{TelegramC2}}/g,  f.tg2);
 }
 
 /* ================= MAIN ================= */
 async function main(){
   ensureDir(OUT_DIR);
 
-  if (!fs.existsSync(TEMPLATE_FILE)){
+  if (!fs.existsSync(TEMPLATE_FILE)) {
     console.error('❌ Template não encontrado:', TEMPLATE_FILE);
     process.exit(1);
   }
-
-  if (!fs.existsSync(DATA_FILE)){
-    console.log('ℹ️ Nada para gerar — data/to_publish.json não existe.');
+  if (!fs.existsSync(DATA_FILE)) {
+    console.log('ℹ️  Nada a renderizar:', DATA_FILE, 'não existe.');
     process.exit(0);
   }
 
   let items = [];
-  try {
-    items = JSON.parse(fs.readFileSync(DATA_FILE,'utf8') || '[]');
-  } catch(e){
-    console.error('❌ JSON inválido em data/to_publish.json:', e.message);
+  try { items = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8') || '[]'); }
+  catch (e) {
+    console.error('❌ JSON inválido em', DATA_FILE, e.message);
     process.exit(1);
   }
 
   if (!Array.isArray(items) || items.length === 0){
-    console.log('ℹ️ Nada para gerar — arquivo vazio.');
+    console.log('ℹ️  Nada para gerar: data/to_publish.json está vazio.');
     return;
   }
 
-  const template = fs.readFileSync(TEMPLATE_FILE,'utf8');
+  const template = fs.readFileSync(TEMPLATE_FILE, 'utf8');
 
   let browser;
   try {
     browser = await puppeteer.launch({
       headless: 'new',
-      defaultViewport: { width:1080, height:1080, deviceScaleFactor:2 },
+      defaultViewport: { width:1080, height:1080, deviceScaleFactor: 2 },
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-gpu'
+        '--disable-gpu',
+        '--font-render-hinting=none'
       ]
     });
-  } catch(e){
-    console.error('❌ Erro ao iniciar Puppeteer:', e.message);
+  } catch (e) {
+    console.error('❌ Falha ao iniciar o Puppeteer/Chromium:', e.message);
     process.exit(1);
   }
 
@@ -189,12 +182,14 @@ async function main(){
   for (const item of items){
     const f = buildFields(item);
 
+    if (!f.fundo) console.warn(`⚠️  Fundo ausente para "${f.slug}" — verifique assets/fundos/${f.slug}.jpg`);
+    if (!f.logo)  console.warn(`⚠️  Logo ausente para "${f.slug}" — verifique assets/logos/${f.slug}.png`);
+
     const html = applyTemplate(template, f);
-    await page.setContent(html, { waitUntil:'networkidle0' });
+    await page.setContent(html, { waitUntil: 'networkidle0' });
 
     const outPath = path.join(OUT_DIR, f.filename);
-    await page.screenshot({ path: outPath, type:'jpeg', quality:95 });
-
+    await page.screenshot({ path: outPath, type: 'jpeg', quality: 95 });
     console.log('✅ Imagem gerada:', outPath);
   }
 
@@ -202,6 +197,6 @@ async function main(){
 }
 
 main().catch(err => {
-  console.error('❌ Erro geral no render:', err);
+  console.error('❌ Erro no render:', err);
   process.exit(1);
 });
