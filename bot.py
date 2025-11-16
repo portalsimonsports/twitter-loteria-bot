@@ -1,5 +1,5 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-09b — GLOBAL_TEXT_MODE + modos por rede + KIT /output + imagem oficial app/imaging.py
+# Rev: 2025-11-15 — SEM FILTRO DE DATA (BACKLOG) — publica sempre que a coluna da rede estiver vazia
 #
 # Planilha: ImportadosBlogger2
 # Colunas: A=Loteria B=Concurso C=Data D=Números E=URL
@@ -8,7 +8,7 @@
 # Regras de publicação:
 # - PUBLICA SEMPRE que a coluna da REDE alvo estiver VAZIA
 # - NÃO olha coluna de “Enfileirado”
-# - Opcional: filtro BACKLOG_DAYS para não pegar coisa muito antiga
+# - NÃO restringe mais por data / horário (BACKLOG_DAYS ignorado)
 
 import os
 import re
@@ -49,6 +49,7 @@ TARGET_NETWORKS = [
     if s.strip()
 ]
 
+# BACKLOG_DAYS agora é ignorado, mas deixei leitura para não quebrar .env
 BACKLOG_DAYS = int(os.getenv("BACKLOG_DAYS", "7"))
 DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
 
@@ -124,7 +125,7 @@ POST_PINTEREST_WITH_IMAGE = os.getenv("POST_PINTEREST_WITH_IMAGE", "true").strip
 
 # ===== KIT (HTML/CSS) /output =====
 
-USE_KIT_IMAGE_FIRST = os.getenv("USE_KIT_IMAGE_FIRST", "true").strip().lower() == "true"
+USE_KIT_IMAGE_FIRST = os.getenv("USE_KIT_IMAGE_FIRST", "false").strip().lower() == "true"
 KIT_OUTPUT_DIR = os.getenv("KIT_OUTPUT_DIR", "output").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip()  # (reservado para futuro uso se precisar)
 
@@ -195,32 +196,6 @@ def _safe_len(row, idx):
 
 def _log(*a):
     print(f"[{_ts()}]", *a, flush=True)
-
-
-def _parse_date_br(s: str):
-    s = str(s or "").strip()
-    if not s:
-        return None
-    m = re.match(r"(\d{2}/\d{2}/\d{4})", s)
-    if not m:
-        return None
-    try:
-        return dt.datetime.strptime(m.group(1), "%d/%m/%Y").date()
-    except ValueError:
-        return None
-
-
-def _within_backlog(date_br: str, days: int) -> bool:
-    """
-    Retorna True se a data estiver dentro do intervalo BACKLOG_DAYS.
-    Se não conseguir parsear, NÃO bloqueia (True).
-    """
-    if days <= 0:
-        return True
-    d = _parse_date_br(date_br)
-    if not d:
-        return True
-    return (_now().date() - d).days <= days
 
 
 # =========================
@@ -401,9 +376,9 @@ def montar_texto_base(row) -> str:
             n.strip()
             for n in (
                 numeros.replace(";", ",")
-                .replace(" ", ",")
-                .replace("–", "-")
-                .split(",")
+                    .replace(" ", ",")
+                    .replace("–", "-")
+                    .split(",")
             )
             if n.strip()
         ]
@@ -435,8 +410,9 @@ def coletar_candidatos_para(ws, rede: str):
     """
     Retorna lista de tuplas (rownum, row) somente onde:
       - status da REDE (coluna específica) está VAZIO
-      - data dentro de BACKLOG_DAYS (se configurado)
+
     NÃO olha coluna de ENFILEIRADO.
+    NÃO filtra mais por data (BACKLOG_DAYS ignorado).
     """
     rows = ws.get_all_values()
     if len(rows) <= 1:
@@ -453,29 +429,22 @@ def coletar_candidatos_para(ws, rede: str):
     total = len(data)
     vazias = 0
     preenchidas = 0
-    fora_backlog = 0
 
     for rindex, row in enumerate(data, start=2):
         status_val = row[col_status - 1] if len(row) >= col_status else ""
         tem_status = bool(str(status_val or "").strip())
-        data_br = row[COL_Data - 1] if _safe_len(row, COL_Data) else ""
-        dentro = _within_backlog(data_br, BACKLOG_DAYS)
 
-        if dentro and not tem_status:
+        if not tem_status:
             cand.append((rindex, row))
             vazias += 1
         else:
-            if tem_status:
-                preenchidas += 1
-                _log(
-                    f"[{rede}] SKIP L{rindex}: status col {col_status} preenchido ({str(status_val)[:25]})"
-                )
-            elif not dentro:
-                fora_backlog += 1
-                _log(f"[{rede}] SKIP L{rindex}: fora do backlog ({data_br})")
+            preenchidas += 1
+            _log(
+                f"[{rede}] SKIP L{rindex}: status col {col_status} preenchido ({str(status_val)[:25]})"
+            )
 
     _log(
-        f"[{rede}] Candidatas: {vazias}/{total} | status preenchido: {preenchidas} | fora backlog: {fora_backlog}"
+        f"[{rede}] Candidatas (sem filtro de data): {vazias}/{total} | status preenchido: {preenchidas}"
     )
     return cand
 
