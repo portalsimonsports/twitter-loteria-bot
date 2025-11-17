@@ -1,12 +1,12 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-15 — SEM FILTRO DE DATA (BACKLOG) — publica sempre que a coluna da rede estiver vazia
+# Rev: 2025-11-16 — SEM FILTRO DE DATA + LIMPEZA DE CARACTERES INVISÍVEIS NA COLUNA DE STATUS
 #
 # Planilha: ImportadosBlogger2
 # Colunas: A=Loteria B=Concurso C=Data D=Números E=URL
 # Status por rede (padrões): H=8 (X), M=13 (Discord), N=14 (Pinterest), O=15 (Facebook), J=10 (Telegram)
 #
 # Regras de publicação:
-# - PUBLICA SEMPRE que a coluna da REDE alvo estiver VAZIA
+# - PUBLICA SEMPRE que a coluna da REDE alvo estiver VAZIA (após remover espaços e caracteres invisíveis)
 # - NÃO olha coluna de “Enfileirado”
 # - NÃO restringe mais por data / horário (BACKLOG_DAYS ignorado)
 
@@ -176,6 +176,26 @@ COL_STATUS_REDES = {
 
 def _not_empty(v):
     return bool(str(v or "").strip())
+
+
+def _is_empty_status(v):
+    """
+    Considera a célula VAZIA mesmo se tiver espaços ou caracteres invisíveis
+    comuns (zero width, BOM, etc).
+    Usado para decidir se a coluna de status está realmente vazia.
+    """
+    if v is None:
+        return True
+
+    s = str(v)
+    # limpa espaços normais nas pontas
+    s = s.strip()
+    # remove caracteres invisíveis mais comuns
+    invisiveis = ["\u200B", "\u200C", "\u200D", "\uFEFF", "\u2060"]
+    for ch in invisiveis:
+        s = s.replace(ch, "")
+
+    return s == ""
 
 
 def _now():
@@ -376,9 +396,9 @@ def montar_texto_base(row) -> str:
             n.strip()
             for n in (
                 numeros.replace(";", ",")
-                    .replace(" ", ",")
-                    .replace("–", "-")
-                    .split(",")
+                .replace(" ", ",")
+                .replace("–", "-")
+                .split(",")
             )
             if n.strip()
         ]
@@ -409,7 +429,7 @@ def montar_texto_base(row) -> str:
 def coletar_candidatos_para(ws, rede: str):
     """
     Retorna lista de tuplas (rownum, row) somente onde:
-      - status da REDE (coluna específica) está VAZIO
+      - status da REDE (coluna específica) está VAZIO (após remover caracteres invisíveis)
 
     NÃO olha coluna de ENFILEIRADO.
     NÃO filtra mais por data (BACKLOG_DAYS ignorado).
@@ -432,15 +452,17 @@ def coletar_candidatos_para(ws, rede: str):
 
     for rindex, row in enumerate(data, start=2):
         status_val = row[col_status - 1] if len(row) >= col_status else ""
-        tem_status = bool(str(status_val or "").strip())
+        tem_status = not _is_empty_status(status_val)
 
         if not tem_status:
             cand.append((rindex, row))
             vazias += 1
         else:
             preenchidas += 1
+            preview = str(status_val)
+            preview = preview.replace("\n", "\\n")
             _log(
-                f"[{rede}] SKIP L{rindex}: status col {col_status} preenchido ({str(status_val)[:25]})"
+                f"[{rede}] SKIP L{rindex}: status col {col_status} preenchido ({preview[:40]})"
             )
 
     _log(
