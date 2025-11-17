@@ -1,5 +1,6 @@
 # app/imaging.py — Portal SimonSports
-# Rev: 2025-11-15 — Layout “bolinhas” com cores da loteria + logo + CTA
+# Rev: 2025-11-15b — Layout “bolinhas” com cores da loteria + logo + CTA
+# Ajuste: Lotofácil agora exibe TODOS os números (suporta 2º sorteio via "|")
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io
@@ -155,6 +156,7 @@ def parse_numeros(loteria_nome: str, numeros_str: str):
     """
     Retorna (lista_de_listas, extra_text).
     Cada sublista = uma linha de bolinhas.
+    Suporta 2º sorteio em Lotofácil (quando houver "|" na string original).
     """
     s = (numeros_str or "").strip()
 
@@ -165,7 +167,7 @@ def parse_numeros(loteria_nome: str, numeros_str: str):
         extra = m.group(1).strip()
         s = s[:m.start()].strip(",; -")
 
-    # normaliza separadores
+    # normaliza separadores (mantendo comportamento para "|")
     s = s.replace("–", "-")
     s = re.sub(r"[;| ]+", ",", s)
     parts = [p.strip() for p in s.split(",") if p.strip()]
@@ -176,19 +178,24 @@ def parse_numeros(loteria_nome: str, numeros_str: str):
     n = len(nums)
     rows = []
 
-    # Regras específicas leves
     nome = loteria_nome.lower()
+
     if "lotofacil" in nome:
-        # 3 linhas de 5
-        rows = [nums[i:i+5] for i in range(0, min(15, n), 5)]
+        # AGORA: exibe TODOS os números, em blocos de 5
+        # ex.: 15 dezenas → 3 linhas
+        #      30 dezenas (2 sorteios via "|") → 6 linhas
+        rows = [nums[i:i+5] for i in range(0, n, 5)]
+
     elif "lotomania" in nome:
         rows = [nums[i:i+5] for i in range(0, min(20, n), 5)]
+
     elif "timemania" in nome:
         # 7 números + time -> duas linhas se passar de 7
         if n <= 7:
             rows = [nums]
         else:
             rows = [nums[:7], nums[7:]]
+
     elif "dupla" in nome:
         # 2 linhas de 6, se tiver 12
         if n >= 12:
@@ -196,6 +203,7 @@ def parse_numeros(loteria_nome: str, numeros_str: str):
         else:
             row_size = 6 if n > 6 else n
             rows = [nums[:row_size], nums[row_size:]]
+
     else:
         # regra geral: máx 8 por linha, 1–3 linhas
         if n <= 8:
