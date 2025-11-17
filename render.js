@@ -14,7 +14,11 @@ const DATA_FILE     = path.join(ROOT, 'data', 'to_publish.json');
 const TEMPLATE_FILE = path.join(ROOT, 'templates', 'post-instagram.html');
 
 /* ================= Utils ================= */
-function ensureDir(p){ if(!fs.existsSync(p)) fs.mkdirmkdirSync(p, { recursive:true }); }
+function ensureDir(p) {
+  if (!fs.existsSync(p)) {
+    fs.mkdirSync(p, { recursive: true });
+  }
+}
 function safe(v){ return (v===undefined || v===null) ? '' : String(v); }
 function isHttp(u){ return /^https?:\/\//i.test(String(u||'')); }
 function fileUrl(absPath){ return pathToFileURL(absPath).href; }
@@ -131,8 +135,10 @@ function buildFields(item){
   if (!tag) {
     filename = `${slug}.jpg`;
   } else if (tag.startsWith(`${slug}-`)) {
+    // Ex.: slug="quina", tag="quina-6875" → quina-6875.jpg
     filename = `${tag}.jpg`;
   } else {
+    // Ex.: slug="quina", tag="6875" → quina-6875.jpg
     filename = `${slug}-${tag}.jpg`;
   }
 
