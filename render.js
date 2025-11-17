@@ -14,7 +14,7 @@ const DATA_FILE     = path.join(ROOT, 'data', 'to_publish.json');
 const TEMPLATE_FILE = path.join(ROOT, 'templates', 'post-instagram.html');
 
 /* ================= Utils ================= */
-function ensureDir(p){ if(!fs.existsSync(p)) fs.mkdirSync(p, { recursive:true }); }
+function ensureDir(p){ if(!fs.existsSync(p)) fs.mkdirmkdirSync(p, { recursive:true }); }
 function safe(v){ return (v===undefined || v===null) ? '' : String(v); }
 function isHttp(u){ return /^https?:\/\//i.test(String(u||'')); }
 function fileUrl(absPath){ return pathToFileURL(absPath).href; }
@@ -100,9 +100,27 @@ function buildFields(item){
     logo = resolvePathOrUrl(localLogo);
   }
 
-  // Título e descrição para o template
-  const produto   = concurso ? `${loteria} • Concurso ${concurso}` : loteria;
-  const descricao = numeros ? `Números: ${numeros}` : '';
+  // ===== DESCRIÇÃO (ajuste especial Dupla Sena) =====
+  let descricao = '';
+  if (numeros) {
+    if (slug === 'dupla-sena') {
+      // Esperado: 12 dezenas → 1º sorteio (6) + 2º sorteio (6)
+      const parts = numeros.split(',').map(x => x.trim()).filter(Boolean);
+      if (parts.length === 12) {
+        const s1 = parts.slice(0, 6).join(', ');
+        const s2 = parts.slice(6, 12).join(', ');
+        descricao = `1º sorteio: ${s1}\n2º sorteio: ${s2}`;
+      } else {
+        // fallback se não vier exatamente 12 dezenas
+        descricao = `Números: ${numeros}`;
+      }
+    } else {
+      descricao = `Números: ${numeros}`;
+    }
+  }
+
+  // ===== Título (Produto) =====
+  const produto = concurso ? `${loteria} • Concurso ${concurso}` : loteria;
 
   // ===== Nome do arquivo final (sem repetições) =====
   // Preferimos 'id' quando existir (ex.: "lotomania-2846").
@@ -147,8 +165,9 @@ async function main(){
   }
 
   let items = [];
-  try { items = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8') || '[]'); }
-  catch (e) {
+  try {
+    items = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8') || '[]');
+  } catch (e) {
     console.error('❌ JSON inválido em', DATA_FILE, e.message);
     process.exit(1);
   }
