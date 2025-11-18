@@ -1,6 +1,8 @@
 # app/imaging.py — Portal SimonSports
-# Rev: 2025-11-15b — Layout “bolinhas” com cores da loteria + logo + CTA
-# Ajuste: Lotofácil agora exibe TODOS os números (suporta 2º sorteio via "|")
+# Rev: 2025-11-15c — Layout “bolinhas” com cores da loteria + logo + CTA
+# Ajustes:
+# - Lotofácil agora exibe TODOS os números (suporta 2º sorteio via "|")
+# - Dupla Sena agora exibe TODOS os números em blocos de 6 (1 linha por sorteio)
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io
@@ -156,7 +158,9 @@ def parse_numeros(loteria_nome: str, numeros_str: str):
     """
     Retorna (lista_de_listas, extra_text).
     Cada sublista = uma linha de bolinhas.
-    Suporta 2º sorteio em Lotofácil (quando houver "|" na string original).
+    Suporta:
+    - Lotofácil com 1 ou 2 sorteios (via "|", todos os números entram)
+    - Dupla Sena com 1 ou mais sorteios (blocos de 6 por linha)
     """
     s = (numeros_str or "").strip()
 
@@ -167,7 +171,7 @@ def parse_numeros(loteria_nome: str, numeros_str: str):
         extra = m.group(1).strip()
         s = s[:m.start()].strip(",; -")
 
-    # normaliza separadores (mantendo comportamento para "|")
+    # normaliza separadores (inclui "|")
     s = s.replace("–", "-")
     s = re.sub(r"[;| ]+", ",", s)
     parts = [p.strip() for p in s.split(",") if p.strip()]
@@ -181,9 +185,8 @@ def parse_numeros(loteria_nome: str, numeros_str: str):
     nome = loteria_nome.lower()
 
     if "lotofacil" in nome:
-        # AGORA: exibe TODOS os números, em blocos de 5
-        # ex.: 15 dezenas → 3 linhas
-        #      30 dezenas (2 sorteios via "|") → 6 linhas
+        # Lotofácil: exibe TODOS os números em blocos de 5
+        # 15 dezenas → 3 linhas; 30 dezenas (2 sorteios) → 6 linhas, etc.
         rows = [nums[i:i+5] for i in range(0, n, 5)]
 
     elif "lotomania" in nome:
@@ -197,12 +200,9 @@ def parse_numeros(loteria_nome: str, numeros_str: str):
             rows = [nums[:7], nums[7:]]
 
     elif "dupla" in nome:
-        # 2 linhas de 6, se tiver 12
-        if n >= 12:
-            rows = [nums[:6], nums[6:12]]
-        else:
-            row_size = 6 if n > 6 else n
-            rows = [nums[:row_size], nums[row_size:]]
+        # Dupla Sena: TODOS os números em blocos de 6
+        # 6 dezenas → 1 linha, 12 dezenas (2 sorteios) → 2 linhas, etc.
+        rows = [nums[i:i+6] for i in range(0, n, 6)]
 
     else:
         # regra geral: máx 8 por linha, 1–3 linhas
@@ -337,8 +337,8 @@ def desenhar_cta(draw: ImageDraw.ImageDraw, url: str = ""):
         tw = draw.textlength(url_clean, font=font_url)
         draw.text(
             (W / 2 - tw / 2, by + btn_h + 18),
-            url_clean,
             font=font_url,
+            text=url_clean,
             fill=(245, 245, 245),
         )
 
