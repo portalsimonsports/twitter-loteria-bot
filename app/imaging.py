@@ -1,118 +1,350 @@
-# app/imaging.py — Versão FINAL 100% corrigida (19/11/2025)
-# Funciona com Pillow 10+ e sem nenhum SyntaxError
+# imaging.py — Portal SimonSports
+# Rev: 2025-11-18 — Imagem oficial sem botão / sem link interno
+# - Mantém layout profissional com:
+#   • Logo (opcional)
+#   • Nome da loteria
+#   • Concurso + data
+#   • Números em bolas
+#   • Rodapé: apenas "Portal SimonSports"
+# - NÃO desenha mais:
+#   • Botão "Ver resultado completo"
+#   • URL dentro da imagem
 
 import io
-from typing import Tuple
-from PIL import Image, ImageDraw, ImageFont
+import math
+from typing import List, Tuple, Optional
+
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+# =========================
+# CONFIG GERAL
+# =========================
+
+IMG_WIDTH = 1080
+IMG_HEIGHT = 1080
+
+BG_COLOR = (10, 12, 28)     # fundo geral (quase preto azulado)
+CARD_COLOR = (18, 22, 48)   # cartão central
+CARD_RADIUS = 48
+
+TEXT_COLOR = (255, 255, 255)
+SUBTEXT_COLOR = (200, 205, 220)
+NUM_BG_DEFAULT = (60, 90, 140)
+
+FOOTER_TEXT = "Portal SimonSports"
+FOOTER_COLOR = (180, 185, 200)
+
+PADDING = 80
+
+# Se tiver logo em disco, você pode ajustar aqui depois
+DEFAULT_LOGO_PATH = None  # ex: "assets/logos/pss.png"
+
+# =========================
+# CORES POR LOTERIA
+# =========================
 
 CORES_LOTERIAS = {
-    "mega-sena": (32, 152, 105), "quina": (94, 54, 139), "lotofacil": (212, 0, 120),
-    "lotofácil": (212, 0, 120), "lotomania": (242, 144, 0), "timemania": (0, 128, 0),
-    "dupla sena": (153, 0, 51), "dupla-sena": (153, 0, 51), "federal": (0, 84, 150),
-    "dia de sorte": (178, 120, 50), "dia-de-sorte": (178, 120, 50),
-    "super sete": (37, 62, 116), "super-sete": (37, 62, 116), "loteca": (56, 118, 29),
+    # Caixa oficiais aproximadas (RGB)
+    "mega-sena": (32, 152, 105),
+    "quina": (117, 81, 145),
+    "lotofacil": (193, 40, 135),
+    "lotofácil": (193, 40, 135),
+    "lotomania": (255, 140, 0),
+    "timemania": (0, 153, 68),
+    "dupla-sena": (170, 0, 0),
+    "dupla sena": (170, 0, 0),
+    "federal": (0, 102, 179),
+    "dia de sorte": (189, 140, 51),
+    "dia-de-sorte": (189, 140, 51),
+    "super sete": (37, 62, 116),
+    "super-sete": (37, 62, 116),
+    # Loteca com cor especial pedida
+    "loteca": (56, 118, 29),  # #38761d
 }
 
-COR_FUNDO_PADRAO = (25, 25, 35)
-COR_TEXTO_CLARO = (255, 255, 255)
-COR_TEXTO_SUAVE = (230, 230, 240)
-W, H = 1080, 1080
+# =========================
+# HELPERS DE FONTE
+# =========================
 
-def _cor_loteria(nome: str) -> Tuple[int, int, int]:
-    nome = (nome or "").lower()
-    for chave, cor in CORES_LOTERIAS.items():
-        if chave.replace(" ", "") in nome.replace(" ", ""):
-            return cor
-    return (100, 100, 100)
-
-def _fonte(tamanho: int) -> ImageFont.FreeTypeFont:
-    caminhos = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/system/fonts/Roboto-Bold.ttf",
-        "/system/fonts/DroidSans-Bold.ttf",
-    ]
-    for p in caminhos:
+def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+    """
+    Tenta carregar uma fonte mais bonita; se não encontrar, cai no padrão.
+    Você pode alterar os caminhos para fontes específicas do seu ambiente Replit.
+    """
+    possible = []
+    if bold:
+        possible = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        ]
+    else:
+        possible = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ]
+    for path in possible:
         try:
-            return ImageFont.truetype(p, tamanho)
-        except OSError:
+            return ImageFont.truetype(path, size=size)
+        except Exception:
             continue
+    # fallback
     return ImageFont.load_default()
 
-def _tamanho(draw: ImageDraw.Draw, texto: str, fonte: ImageFont.FreeTypeFont) -> Tuple[int, int]:
-    bbox = draw.textbbox((0, 0), texto, font=fonte)
-    return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-def _circulo_texto(draw: ImageDraw.Draw, cx: float, cy: float, r: int, num: str,
-                   fonte: ImageFont.FreeTypeFont, fundo=(255,255,255), texto=(0,0,0)):
-    draw.ellipse((cx-r, cy-r, cx+r, cy+r), fill=fundo)
-    w, h = _tamanho(draw, num, fonte)
-    draw.text((cx - w/2, cy - h/2), num, font=fonte, fill=texto)
+# =========================
+# HELPERS GRÁFICOS
+# =========================
 
-def gerar_imagem_loteria(loteria: str, concurso: str, data_br: str, numeros_str: str, url_res: str = "") -> io.BytesIO:
-    loteria = loteria.strip() if loteria else ""
-    cor = _cor_loteria(loteria)
+def _rounded_rectangle(draw: ImageDraw.ImageDraw, xy, radius: int, fill, outline=None, width: int = 1):
+    x1, y1, x2, y2 = xy
+    draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=fill, outline=outline, width=width)
 
-    img = Image.new("RGB", (W, H), COR_FUNDO_PADRAO)
-    d = ImageDraw.Draw(img)
 
-    # Gradiente
-    for y in range(H):
-        f = y / H
-        r = int(COR_FUNDO_PADRAO[0]*(1-f) + cor[0]*f)
-        g = int(COR_FUNDO_PADRAO[1]*(1-f) + cor[1]*f)
-        b = int(COR_FUNDO_PADRAO[2]*(1-f) + cor[2]*f)
-        d.line([(0,y),(W,y)], fill=(r,g,b))
+def _center_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, cx: int, y: int, fill):
+    w, h = draw.textbbox((0, 0), text, font=font)[2:]
+    draw.text((cx - w // 2, y), text, font=font, fill=fill)
 
-    ftitulo = _fonte(80)
-    fsub = _fonte(42)
-    fnum = _fonte(60)
-    frodape = _fonte(38)
 
-    y = 120
-    titulo = loteria.upper() or "LOTERIA"
-    for linha in [titulo]:  # quase nunca quebra, mas mantém compatibilidade
-        w, h = _tamanho(d, linha, ftitulo)
-        d.text(((W-w)/2, y), linha, font=ftitulo, fill=COR_TEXTO_CLARO)
-        y += h + 10
+def _split_numeros(numeros_str: str) -> List[str]:
+    if not numeros_str:
+        return []
+    tmp = (
+        numeros_str.replace(";", ",")
+        .replace("|", ",")
+        .replace("  ", " ")
+        .replace("–", "-")
+    )
+    parts = [p.strip() for p in tmp.replace(" ", ",").split(",") if p.strip()]
+    # Mantém ordem, remove duplicados simples
+    seen = set()
+    result = []
+    for p in parts:
+        if p not in seen:
+            seen.add(p)
+            result.append(p)
+    return result
 
-    sub = []
-    if concurso: sub.append(f"Concurso {concurso}")
-    if data_br: sub.append(f"({data_br})")
-    if sub:
-        texto_sub = " — ".join(sub)
-        w, h = _tamanho(d, texto_sub, fsub)
-        d.text(((W-w)/2, y + 30), texto_sub, font=fsub, fill=COR_TEXTO_SUAVE)
-        y += h + 80
+
+def _get_cor_loteria(nome: str) -> Tuple[int, int, int]:
+    if not nome:
+        return NUM_BG_DEFAULT
+    key = nome.strip().lower()
+    for k, v in CORES_LOTERIAS.items():
+        if k in key:
+            return v
+    return NUM_BG_DEFAULT
+
+
+def _desenhar_bolinhas(
+    draw: ImageDraw.ImageDraw,
+    area_xy,
+    numeros: List[str],
+    cor_base: Tuple[int, int, int],
+    fonte_num: ImageFont.FreeTypeFont,
+):
+    """
+    Desenha as bolinhas com os números na área fornecida (x1,y1,x2,y2).
+    Tenta organizar em 1 ou 2 linhas de forma equilibrada.
+    """
+    if not numeros:
+        return
+
+    x1, y1, x2, y2 = area_xy
+    largura = x2 - x1
+    altura = y2 - y1
+
+    n = len(numeros)
+    # definimos tamanho de bola aproximado em função da quantidade
+    if n <= 6:
+        r = 64
+    elif n <= 10:
+        r = 52
+    elif n <= 15:
+        r = 44
     else:
-        y += 80
+        r = 40
 
-    # Números
-    nums = [n.strip() for n in numeros_str.replace(";",",").replace(" ","").split(",") if n]
-    if nums:
-        por_linha = 8
-        linhas = [nums[i:i+por_linha] for i in range(0, len(nums), por_linha)]
-        r = 55
-        esp_h, esp_v = 20, 35
-        area_h = H - 220 - y
-        alt_total = len(linhas)*(2*r) + max(0, len(linhas)-1)*esp_v
-        iy = y + (area_h - alt_total)/2
+    di = r * 2
+    margem_h = 16
 
-        for linha in linhas:
-            larg_linha = len(linha)*(2*r) + max(0, len(linha)-1)*esp_h
-            ix = (W - larg_linha)/2
-            cy = iy + linhas.index(linha)*(2*r + esp_v)
-            for j, n in enumerate(linha):
-                cx = ix + j*(2*r + esp_h)
-                _circulo_texto(d, cx, cy, r, n, fnum)
+    # decide linhas
+    if n <= 7:
+        linhas = [numeros]
+    else:
+        metade = math.ceil(n / 2)
+        linhas = [numeros[:metade], numeros[metade:]]
 
-            iy += 2*r + esp_v  # só pra próxima linha
+    total_linhas = len(linhas)
+    if total_linhas == 1:
+        linhas_y = [y1 + (altura - di) // 2]
+    else:
+        gap_linha = (altura - total_linhas * di) // (total_linhas + 1)
+        linhas_y = []
+        yy = y1 + gap_linha
+        for _ in range(total_linhas):
+            linhas_y.append(yy)
+            yy += di + gap_linha
 
-    # Rodapé
-    d.rectangle((0, H-120, W, H), fill=(10,10,18))
-    rodape = "Portal SimonSports"
-    w, h = _tamanho(d, rodape, frodape)
-    d.text(((W-w)/2, H-120 + (120-h)/2), rodape, font=frodape, fill=COR_TEXTO_CLARO)
+    for line_idx, linha in enumerate(linhas):
+        k = len(linha)
+        if k == 0:
+            continue
+        total_larg_bolas = k * di + (k - 1) * margem_h
+        start_x = x1 + (largura - total_larg_bolas) // 2
+        y = linhas_y[line_idx]
 
+        for i, num in enumerate(linha):
+            cx = start_x + i * (di + margem_h) + r
+            cy = y + r
+            # círculo
+            draw.ellipse(
+                (cx - r, cy - r, cx + r, cy + r),
+                fill=cor_base,
+            )
+            # contorno suave
+            outline = tuple(max(0, c - 25) for c in cor_base)
+            draw.ellipse(
+                (cx - r, cy - r, cx + r, cy + r),
+                outline=outline,
+                width=3,
+            )
+
+            # número centralizado
+            tw, th = draw.textbbox((0, 0), num, font=fonte_num)[2:]
+            draw.text(
+                (cx - tw // 2, cy - th // 2),
+                num,
+                font=fonte_num,
+                fill=(255, 255, 255),
+            )
+
+
+def _carregar_logo(path: Optional[str], tamanho_max: int = 120) -> Optional[Image.Image]:
+    if not path:
+        return None
+    try:
+        logo = Image.open(path).convert("RGBA")
+        w, h = logo.size
+        scale = min(tamanho_max / w, tamanho_max / h)
+        if scale < 1:
+            logo = logo.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        return logo
+    except Exception:
+        return None
+
+
+# =========================
+# GERADOR PRINCIPAL
+# =========================
+
+def gerar_imagem_loteria(
+    nome_loteria: str,
+    concurso: str,
+    data_str: str,
+    numeros_str: str,
+    url_resultado: str = "",
+) -> io.BytesIO:
+    """
+    Gera imagem oficial da loteria em PNG dentro de um BytesIO,
+    pronta para ser enviada pelo bot.
+    Não escreve botão, não escreve URL. Apenas:
+      - logo (se houver)
+      - nome da loteria
+      - concurso + data
+      - números em bolas
+      - rodapé "Portal SimonSports"
+    """
+
+    # Normalizações básicas
+    nome_loteria = (nome_loteria or "").strip()
+    concurso = (concurso or "").strip()
+    data_str = (data_str or "").strip()
+    numeros = _split_numeros(numeros_str or "")
+
+    cor_loteria = _get_cor_loteria(nome_loteria)
+
+    # Cria base
+    img = Image.new("RGB", (IMG_WIDTH, IMG_HEIGHT), BG_COLOR)
+    draw = ImageDraw.Draw(img)
+
+    # Leve vinheta / blur de fundo (cartão central depois)
+    overlay = Image.new("RGB", (IMG_WIDTH, IMG_HEIGHT), BG_COLOR)
+    blur = overlay.filter(ImageFilter.GaussianBlur(radius=40))
+    img = Image.blend(img, blur, alpha=0.35)
+    draw = ImageDraw.Draw(img)
+
+    # Card central
+    card_x1 = PADDING
+    card_x2 = IMG_WIDTH - PADDING
+    card_y1 = PADDING
+    card_y2 = IMG_HEIGHT - PADDING
+    _rounded_rectangle(draw, (card_x1, card_y1, card_x2, card_y2), CARD_RADIUS, fill=CARD_COLOR)
+
+    # Faixa superior colorida
+    faixa_alt = 90
+    _rounded_rectangle(
+        draw,
+        (card_x1, card_y1, card_x2, card_y1 + faixa_alt),
+        radius=CARD_RADIUS,
+        fill=cor_loteria,
+    )
+
+    # Títulos / fontes
+    font_titulo = _load_font(54, bold=True)
+    font_sub = _load_font(32, bold=False)
+    font_concurso = _load_font(30, bold=False)
+    font_numeros = _load_font(44, bold=True)
+    font_footer = _load_font(28, bold=False)
+
+    center_x = IMG_WIDTH // 2
+
+    # LOGO (opcional) — lado esquerdo
+    logo = _carregar_logo(DEFAULT_LOGO_PATH, tamanho_max=120)
+    titulo_y = card_y1 + 16
+    if logo:
+        lw, lh = logo.size
+        logo_x = card_x1 + 32
+        logo_y = card_y1 + (faixa_alt - lh) // 2
+        img.paste(logo, (logo_x, logo_y), logo)
+        # Título deslocado um pouco à direita
+        titulo_cx = center_x + int(lw * 0.2)
+    else:
+        titulo_cx = center_x
+
+    # Nome da loteria na faixa
+    nome_exibicao = nome_loteria or "Resultado da Loteria"
+    _center_text(draw, nome_exibicao, font_titulo, titulo_cx, titulo_y, fill=(255, 255, 255))
+
+    # Subtítulo concurso + data (logo abaixo da faixa)
+    subt_y = card_y1 + faixa_alt + 24
+    if concurso or data_str:
+        if concurso and data_str:
+            subt = f"Concurso {concurso} · {data_str}"
+        elif concurso:
+            subt = f"Concurso {concurso}"
+        else:
+            subt = data_str
+        _center_text(draw, subt, font_concurso, center_x, subt_y, fill=SUBTEXT_COLOR)
+
+    # Área dos números (centro do card)
+    numeros_area_top = subt_y + 80
+    numeros_area_bottom = card_y2 - 140  # deixa espaço para rodapé interno
+    _desenhar_bolinhas(
+        draw,
+        (card_x1 + 60, numeros_area_top, card_x2 - 60, numeros_area_bottom),
+        numeros,
+        cor_loteria,
+        font_numeros,
+    )
+
+    # Rodapé interno: apenas linha divisória sutil (opcional)
+    # (Deixamos limpo para a imagem respirar)
+
+    # Rodapé externo: "Portal SimonSports" — ÚNICO texto de marca
+    footer_y = IMG_HEIGHT - PADDING - 10
+    _center_text(draw, FOOTER_TEXT, font_footer, center_x, footer_y, fill=FOOTER_COLOR)
+
+    # Exporta para BytesIO
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     buf.seek(0)
