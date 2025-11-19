@@ -1,13 +1,13 @@
 # app/imaging.py — Geração de imagem oficial das Loterias
-# Rev: 2025-11-19 — Corrigido para Pillow 10+ (textsize removido)
+# Rev: 2025-11-19 — Corrigido Pillow 10+ e SyntaxError resolvido
 #                    Sem botão "Ver resultado", sem URL na imagem
 #                    Rodapé com "Portal SimonSports" centralizado
 
 import io
-import math
 from typing import Tuple
 
 from PIL import Image, ImageDraw, ImageFont
+
 
 # =========================
 # CORES POR LOTERIA
@@ -51,33 +51,28 @@ def _cor_para_loteria(nome: str) -> Tuple[int, int, int]:
     for k, v in CORES_LOTERIAS.items():
         if k in key:
             return v
-    return (100, 100, 100)  # fallback mais visível que o fundo padrão
+    return (100, 100, 100)  # fallback
 
 
 def _carregar_fonte(tamanho: int) -> ImageFont.FreeTypeFont:
-    fontes_tentativa = [
+    tentativas = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/system/fonts/Roboto-Bold.ttf",
+        "/system/fonts/DroidSans-Bold.ttf",
     ]
-    for path in fontes_tentativa:
+    for caminho in tentativas:
         try:
-            return ImageFont.truetype(path, tamanho)
-        except Exception:
+            return ImageFont.truetype(caminho, tamanho)
+        except OSError:
             continue
     return ImageFont.load_default()
 
 
 def _tamanho_texto(draw: ImageDraw.Draw, texto: str, fonte: ImageFont.FreeTypeFont) -> Tuple[int, int]:
-    """
-    Compatível com Pillow ≥ 10 (textsize foi removido)
-    """
-    if hasattr(draw, "textbbox"):  # Pillow 8+
-        bbox = draw.textbbox((0, 0), texto, font=fonte)
-        return bbox[2] - bbox[0], bbox[3] - bbox[1]
-    else:
-        # fallback para versões muito antigas (quase nunca usado)
-        return fonte.getsize(texto)
+    """Compatível com Pillow ≥ 10 (textsize foi removido)"""
+    bbox = draw.textbbox((0, 0), texto, font=fonte)
+    return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
 def _quebrar_texto(draw: ImageDraw.Draw, texto: str, fonte: ImageFont.FreeTypeFont, largura_max: int):
@@ -96,28 +91,37 @@ def _quebrar_texto(draw: ImageDraw.Draw, texto: str, fonte: ImageFont.FreeTypeFo
         else:
             linhas.append(linha_atual)
             linha_atual = palavra
-
     linhas.append(linha_atual)
     return linhas
 
 
 def _desenhar_circulo_com_texto(
     draw: ImageDraw.Draw,
-    cx: float, cy: float,
-    r: int,
+    cx: float,
+    cy: float,
+    raio: int,
     texto: str,
     fonte: ImageFont.FreeTypeFont,
- tw, th = _tamanho_texto(draw, texto, fonte)
-    tx = cx - tw / 2
-    ty = cy - th / 2
-    draw.text((tx, ty), texto, font=fonte, fill=cor_texto)
+    cor_fundo: Tuple[int, int, int],
+    cor_texto: Tuple[int, int, int],
+):
+    """Desenha círculo com número centralizado"""
+    draw.ellipse((cx - raio, cy - raio, cx + raio, cy + raio), fill=cor_fundo)
+    tw, th = _tamanho_texto(draw, texto, fonte)
+    draw.text((cx - tw / 2, cy - th / 2), texto, font=fonte, fill=cor_texto)
 
 
 # =========================
 # FUNÇÃO PRINCIPAL
 # =========================
 
-def gerar_imagem_loteria(loteria: str, concurso: str, data_br: str, numeros_str: str, url_res: str = "") -> io.BytesIO:
+def gerar_imagem_loteria(
+    loteria: str,
+    concurso: str,
+    data_br: str,
+    numeros_str: str,
+    url_res: str = "",
+) -> io.BytesIO:
     loteria = (loteria or "").strip()
     concurso = (concurso or "").strip()
     data_br = (data_br or "").strip()
@@ -128,7 +132,7 @@ def gerar_imagem_loteria(loteria: str, concurso: str, data_br: str, numeros_str:
     img = Image.new("RGB", (IMG_LARGURA, IMG_ALTURA), COR_FUNDO_PADRAO)
     draw = ImageDraw.Draw(img)
 
-    # Gradiente suave de fundo
+    # Gradiente de fundo
     for y in range(IMG_ALTURA):
         fator = y / IMG_ALTURA
         r = int(COR_FUNDO_PADRAO[0] * (1 - fator) + cor_base[0] * fator)
@@ -139,77 +143,66 @@ def gerar_imagem_loteria(loteria: str, concurso: str, data_br: str, numeros_str:
     # Fontes
     fonte_titulo = _carregar_fonte(80)
     fonte_sub = _carregar_fonte(42)
-    fonte_numeros = _carregar_fonte(60)
+    fonte_num = _carregar_fonte(60)
     fonte_rodape = _carregar_fonte(38)
 
-    margem_lateral = 80
-    y_cursor = 120
+    margem = 80
+    y = 120
 
-    # Título da loteria
+    # Título
     titulo = loteria.upper() if loteria else "LOTARIA"
-    linhas_titulo = _quebrar_texto(draw, titulo, fonte_titulo, IMG_LARGURA - 2 * margem_lateral)
-
-    for linha in linhas_titulo:
+    for linha in _quebrar_texto(draw, titulo, fonte_titulo, IMG_LARGURA - 2 * margem):
         w, h = _tamanho_texto(draw, linha, fonte_titulo)
-        x = (IMG_LARGURA - w) / 2
-        draw.text((x, y_cursor), linha, font=fonte_titulo, fill=COR_TEXTO_CLARO)
-        y_cursor += h + 5
+        draw.text(((IMG_LARGURA - w) / 2, y), linha, font=fonte_titulo, fill=COR_TEXTO_CLARO)
+        y += h + 5
 
-    # Subtítulo (Concurso + data)
-    subtitulo_parts = []
+    # Subtítulo
+    partes = []
     if concurso:
-        subtitulo_parts.append(f"Concurso {concurso}")
+        partes.append(f"Concurso {concurso}")
     if data_br:
-        subtitulo_parts.append(f"({data_br})")
-    subtitulo = " — ".join(subtitulo_parts)
+        partes.append(f"({data_br})")
+    subtitulo = " — ".join(partes)
 
     if subtitulo:
         w, h = _tamanho_texto(draw, subtitulo, fonte_sub)
-        x = (IMG_LARGURA - w) / 2
-        draw.text((x, y_cursor + 30), subtitulo, font=fonte_sub, fill=COR_TEXTO_SUAVE)
-        y_cursor += h + 80
+        draw.text(((IMG_LARGURA - w) / 2, y + 30), subtitulo, font=fonte_sub, fill=COR_TEXTO_SUAVE)
+        y += h + 80
     else:
-        y_cursor += 80
+        y += 80
 
-    # Números em círculos
+    # Números
     numeros = [n.strip() for n in numeros_str.replace(";", ",").replace(" ", ",").split(",") if n.strip()]
-
     if numeros:
         max_por_linha = 8
-        linhas_numeros = [numeros[i:i + max_por_linha] for i in range(0, len(numeros), max_por_linha)]
-
+        linhas = [numeros[i:i + max_por_linha] for i in range(0, len(numeros), max_por_linha)]
         raio = 55
-        espaco_h = 20
-        espaco_v = 35
+        esp_h = 20
+        esp_v = 35
 
-        area_top = y_cursor
+        area_top = y
         area_bottom = IMG_ALTURA - 220
-        total_altura = len(linhas_numeros) * (2 * raio) + (len(linhas_numeros) - 1) * espaco_v
-        inicio_y = area_top + (area_bottom - area_top - total_altura) / 2
+        altura_total = len(linhas) * (2 * raio) + (len(linhas) - 1) * esp_v
+        inicio_y = area_top + (area_bottom - area_top - altura_total) / 2
 
-        for idx_linha, linha in enumerate(linhas_numeros):
-            n_cols = len(linha)
-            largura_linha = n_cols * (2 * raio) + (n_cols - 1) * espaco_h
+        for i, linha in enumerate(linhas):
+            largura_linha = len(linha) * (2 * raio) + (len(linha) - 1) * esp_h
             inicio_x = (IMG_LARGURA - largura_linha) / 2
-            cy = inicio_y + idx_linha * (2 * raio + espaco_v)
+            cy = inicio_y + i * (2 * raio + esp_v)
 
-            for idx_col, num in enumerate(linha):
-                cx = inicio_x + idx_col * (2 * raio + espaco_h)
-                _desenhar_circulo_com_texto(
-                    draw, cx, cy, raio, num, fonte_numeros,
-                    cor_fundo=(255, 255, 255), cor_texto=(0, 0, 0)
-                )
+            for j, num in enumerate(linha):
+                cx = inicio_x + j * (2 * raio + esp_h)
+                _desenhar_circulo_com_texto(draw, cx, cy, raio, num, fonte_num,
+                                            cor_fundo=(255, 255, 255), cor_texto=(0, 0, 0))
 
     # Rodapé
-    rodape_y0 = IMG_ALTURA - 120
-    draw.rectangle((0, rodape_y0, IMG_LARGURA, IMG_ALTURA), fill=(10, 10, 18))
+    rodape_y = IMG_ALTURA - 120
+    draw.rectangle((0, rodape_y, IMG_LARGURA, IMG_ALTURA), fill=(10, 10, 18))
+    texto = "Portal SimonSports"
+    w, h = _tamanho_texto(draw, texto, fonte_rodape)
+    draw.text(((IMG_LARGURA - w) / 2, rodape_y + (120 - h) / 2), texto, font=fonte_rodape, fill=COR_TEXTO_CLARO)
 
-    texto_rodape = "Portal SimonSports"
-    w, h = _tamanho_texto(draw, texto_rodape, fonte_rodape)
-    draw.text(((IMG_LARGURA - w) / 2, rodape_y0 + (120 - h) / 2),
-              texto_rodape, font=fonte_rodape, fill=COR_TEXTO_CLARO)
-
-    # Salvar em BytesIO
+    # Exportar
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     buf.seek(0)
