@@ -1,5 +1,6 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-16 — SEM FILTRO DE DATA + LIMPEZA DE CARACTERES INVISÍVEIS NA COLUNA DE STATUS
+# Rev: 2025-11-18 — SEM FILTRO DE DATA + LIMPEZA DE CARACTERES INVISÍVEIS NA COLUNA DE STATUS
+#                  + TEXTO = LINK DO RESULTADO + CTA + REDES SOCIAIS
 #
 # Planilha: ImportadosBlogger2
 # Colunas: A=Loteria B=Concurso C=Data D=Números E=URL
@@ -8,7 +9,18 @@
 # Regras de publicação:
 # - PUBLICA SEMPRE que a coluna da REDE alvo estiver VAZIA (após remover espaços e caracteres invisíveis)
 # - NÃO olha coluna de “Enfileirado”
-# - NÃO restringe mais por data / horário (BACKLOG_DAYS ignorado)
+# - NÃO restringe por data / horário (BACKLOG_DAYS ignorado)
+# - Texto padrão da publicação:
+#     🔗 Resultado completo aqui: <URL>
+#
+#     📲 Siga o Portal SimonSports:
+#     X: <link>
+#     Telegram: <link>
+#     Facebook: <link>
+#     Instagram: <link>
+#     YouTube: <link>
+#
+#   -> Para mandar só a imagem, use GLOBAL_TEXT_MODE=IMAGE_ONLY no .env
 
 import os
 import re
@@ -382,41 +394,35 @@ def _build_image_from_row(row):
 # Texto (tweet/post/caption)
 # =========================
 
+# >>> AJUSTE AQUI COM SEUS LINKS OFICIAIS <<<
+LINK_X = os.getenv("LINK_X", "https://x.com/PortalSimonSports")
+LINK_TG = os.getenv("LINK_TG", "https://t.me/PortalSimonSports")
+LINK_FB = os.getenv("LINK_FB", "https://facebook.com/PortalSimonSports")
+LINK_IG = os.getenv("LINK_IG", "https://instagram.com/PortalSimonSports")
+LINK_YT = os.getenv("LINK_YT", "https://youtube.com/@PortalSimonSports")
+
 
 def montar_texto_base(row) -> str:
-    loteria = (row[COL_Loteria - 1] if _safe_len(row, COL_Loteria) else "").strip()
-    concurso = (row[COL_Concurso - 1] if _safe_len(row, COL_Concurso) else "").strip()
-    data_br = (row[COL_Data - 1] if _safe_len(row, COL_Data) else "").strip()
-    numeros = (row[COL_Numeros - 1] if _safe_len(row, COL_Numeros) else "").strip()
+    """
+    TEXTO PADRÃO:
+    - Linha 1: CTA + link do resultado (coluna E)
+    - Embaixo: links das redes sociais para inscrição/seguidores
+    - Sem cabeçalho, sem lista de números
+    """
     url = (row[COL_URL - 1] if _safe_len(row, COL_URL) else "").strip()
-
-    # normaliza lista de números
-    if numeros:
-        nums = [
-            n.strip()
-            for n in (
-                numeros.replace(";", ",")
-                .replace(" ", ",")
-                .replace("–", "-")
-                .split(",")
-            )
-            if n.strip()
-        ]
-        nums_str = ", ".join(nums)
-    else:
-        nums_str = ""
 
     linhas = []
 
-    if loteria or concurso or data_br:
-        linhas.append(f"{loteria} — Concurso {concurso} — ({data_br})".strip())
-
-    if nums_str:
-        linhas.append(f"Números: {nums_str}")
-
     if url:
-        linhas.append("Resultado completo:")
-        linhas.append(url)
+        linhas.append(f"🔗 Resultado completo aqui: {url}")
+        linhas.append("")  # linha em branco
+
+    linhas.append("📲 Siga o Portal SimonSports:")
+    linhas.append(f"X: {LINK_X}")
+    linhas.append(f"Telegram: {LINK_TG}")
+    linhas.append(f"Facebook: {LINK_FB}")
+    linhas.append(f"Instagram: {LINK_IG}")
+    linhas.append(f"YouTube: {LINK_YT}")
 
     return "\n".join(linhas).strip()
 
@@ -474,6 +480,7 @@ def coletar_candidatos_para(ws, rede: str):
 # =========================
 # Publicadores por REDE
 # =========================
+
 # --- X (Twitter) ---
 TW1 = {
     "api_key": os.getenv("TWITTER_API_KEY_1", ""),
