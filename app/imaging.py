@@ -1,16 +1,16 @@
 # app/imaging.py — Portal SimonSports
-# Rev: 2025-11-18d — Mantém layout “bolinhas” + adiciona LOTECA (tabela 14 linhas 1X2)
-# - Preserva toda a estrutura existente (gradiente, logo, títulos, CTA)
-# - Dupla Sena: todos os números em blocos de 6 (n sorteios)
-# - Timemania / Dia de Sorte: texto extra abaixo dos números (Time/Mês)
-# - Loteca: tabela de 14 linhas (# | Mandante × Visitante | 1X2) com destaque #38761d
+# Rev: 2025-11-18e — Layout “bolinhas” + LOTECA (1X2) + rótulos especiais
+# - Mantém visual aprovado (gradiente, logo, títulos, CTA)
+# - Dupla Sena: rótulos "1º SORTEIO", "2º SORTEIO" acima de cada linha
+# - Timemania / Dia de Sorte: rótulo "NÚMEROS" acima + linha extra abaixo (Time/Mês)
+# - Mais Milionária: bloco "NÚMEROS" + bloco "TREVOS DA SORTE"
+# - Loteca: tabela 14 linhas (# | Mandante × Visitante | 1X2), destaque #38761d
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io
 import os
 import re
 import math
-from datetime import datetime
 
 # ==========================
 # CONFIG GERAL DA IMAGEM
@@ -218,85 +218,210 @@ def parse_numeros(loteria_nome: str, numeros_str: str):
     return rows, extra
 
 # ==========================
-# DESENHO DAS BOLINHAS (geral)
+# MAIS MILIONÁRIA — parser (números + trevos)
+# ==========================
+
+def parse_mais_milionaria(numeros_str: str):
+    """
+    Separa numeros principais (1–50) e Trevos da Sorte (1–6).
+    Aceita formatos:
+      - "01,02,03,04,05,06 | Trevos: 3,5"
+      - "01 02 03 04 05 06 - trevos 3 5"
+      - "01,02,03,04,05,06, 3,5"  (fallback: últimos 2 tokens 1..6 viram trevos)
+    Retorna: (main:list[str], trevos:list[str])
+    """
+    s = (numeros_str or "").strip()
+
+    # Procura explicitamente por "trevos"
+    m = re.search(r"trevos?(?:\s+da\s+sorte)?\s*[:\-]?\s*(.+)$", s, flags=re.I)
+    trevos_part = None
+    if m:
+        trevos_part = m.group(1)
+        s_main = s[:m.start()].strip(",; |-")
+    else:
+        # fallback: se os 2 últimos tokens estiverem entre 1..6, assume que são trevos
+        toks = [t.strip() for t in re.split(r"[,\s|;]+", s) if t.strip()]
+        s_main = ",".join(toks)
+        if len(toks) >= 8 and all(re.fullmatch(r"\d{1,2}", t) for t in toks[-2:]) \
+           and all(1 <= int(t) <= 6 for t in toks[-2:]):
+            trevos_part = ",".join(toks[-2:])
+            s_main = ",".join(toks[:-2])
+
+    # Números principais
+    main = [p.zfill(2) for p in re.split(r"[,\s|;]+", s_main) if re.fullmatch(r"\d{1,2}", p)]
+    main = main[:12]  # segurança; normalmente são 6
+
+    # Trevos
+    trevos = []
+    if trevos_part:
+        for t in re.split(r"[,\s|;]+", trevos_part):
+            t = t.strip()
+            if re.fullmatch(r"\d{1,2}", t):
+                v = int(t)
+                if 1 <= v <= 6:
+                    trevos.append(str(v))
+        trevos = trevos[:2]
+
+    return main, trevos
+
+# ==========================
+# DESENHO DAS BOLINHAS (geral + especiais)
 # ==========================
 
 def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str,
                       numeros_str: str, area_box):
     """
-    area_box = (x0,y0,x1,y1) onde a grade de números deve caber.
+    area_box = (x0,y0,x1,y1) onde a grade deve caber.
+
+    Regras especiais:
+      - Dupla Sena: rótulos '1º SORTEIO', '2º SORTEIO' acima de cada linha.
+      - Timemania: rótulo 'NÚMEROS' acima; abaixo: 'TIME DO CORAÇÃO: <extra>'.
+      - Dia de Sorte: rótulo 'NÚMEROS' acima; abaixo: 'MÊS DA SORTE: <extra>'.
+      - Mais Milionária: bloco 'NÚMEROS' e, abaixo, bloco 'TREVOS DA SORTE'.
     """
     x0, y0, x1, y1 = area_box
     largura = x1 - x0
-    altura = y1 - y0
+    altura  = y1 - y0
 
+    nome_lc = (loteria_nome or "").lower()
+    is_dupla = "dupla" in nome_lc
+    is_time  = "timemania" in nome_lc
+    is_dias  = ("dia-de-sorte" in nome_lc) or ("dia de sorte" in nome_lc)
+    is_mm    = ("milion" in nome_lc)  # Mais Milionária
+
+    # ======== MAIS MILIONÁRIA (números + trevos) ========
+    if is_mm:
+        nums, trevos = parse_mais_milionaria(numeros_str)
+        if not nums:
+            return
+
+        # Layout: rótulo 'NÚMEROS' + linha de números; abaixo rótulo 'TREVOS DA SORTE' + linha menor
+        max_cols = max(1, len(nums))
+        r = 62 if max_cols <= 7 else (54 if max_cols <= 10 else 46)
+        gap_x = 28 if r == 62 else (22 if r == 54 else 20)
+
+        r_trevo = int(r * 0.80)
+        gap_trevo_x = gap_x
+
+        font_num   = FONT_SANS(46, bold=True)
+        font_label = FONT_SANS(30, bold=True)
+
+        label_h = 40
+        gap_between_blocks = 40
+
+        # Alturas dos blocos
+        h_nums   = label_h + 2*r
+        h_trevos = (label_h + 2*r_trevo) if trevos else 0
+
+        total_h = h_nums + (gap_between_blocks if trevos else 0) + h_trevos
+        start_y = y0 + max(0, (altura - total_h) // 2)
+
+        # ---- Bloco NÚMEROS ----
+        txt = "NÚMEROS"
+        tw = draw.textlength(txt, font=font_label)
+        draw.text(((x0+x1)/2 - tw/2, start_y), txt, font=font_label, fill=(245,245,245))
+
+        cy = start_y + label_h + r
+        cols = len(nums)
+        total_w_row = cols * (2*r + gap_x) - gap_x
+        start_x = x0 + (largura - total_w_row) // 2
+        for cidx, token in enumerate(nums):
+            cx = start_x + cidx * (2*r + gap_x) + r
+            draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(255,255,255))
+            if token:
+                txtn = str(token)
+                tn = draw.textlength(txtn, font=font_num)
+                bbox = font_num.getbbox(txtn)
+                th = bbox[3] - bbox[1]
+                draw.text((cx - tn/2, cy - th/2 - 2), txtn, font=font_num, fill=(20,20,20))
+
+        # ---- Bloco TREVOS DA SORTE ----
+        if trevos:
+            base_y = cy + r + gap_between_blocks
+            txt = "TREVOS DA SORTE"
+            tw = draw.textlength(txt, font=font_label)
+            draw.text(((x0+x1)/2 - tw/2, base_y), txt, font=font_label, fill=(245,245,245))
+
+            cy2 = base_y + label_h + r_trevo
+            cols = len(trevos)
+            total_w_row = cols * (2*r_trevo + gap_trevo_x) - gap_trevo_x
+            start_x = x0 + (largura - total_w_row) // 2
+            trevo_color = (56, 118, 29)  # verde do projeto
+            font_trevo  = FONT_SANS(40, bold=True)
+            for cidx, token in enumerate(trevos):
+                cx = start_x + cidx * (2*r_trevo + gap_trevo_x) + r_trevo
+                draw.ellipse((cx - r_trevo, cy2 - r_trevo, cx + r_trevo, cy2 + r_trevo), fill=trevo_color)
+                if token:
+                    t = str(token)
+                    tn = draw.textlength(t, font=font_trevo)
+                    bbox = font_trevo.getbbox(t)
+                    th = bbox[3] - bbox[1]
+                    draw.text((cx - tn/2, cy2 - th/2 - 2), t, font=font_trevo, fill=(255,255,255))
+        return
+
+    # ======== Demais loterias (usa parse_numeros) ========
     rows, extra = parse_numeros(loteria_nome, numeros_str)
     if not rows:
         return
 
+    labels = []
+    if is_dupla and len(rows) > 1:
+        labels = [f"{i+1}º SORTEIO" for i in range(len(rows))]
+    elif is_time or is_dias:
+        labels = ["NÚMEROS"]  # um rótulo único acima
+
     qtd_linhas = len(rows)
-    max_cols = max(len(r) for r in rows)
+    max_cols   = max(len(r) for r in rows)
 
-    # Define raio conforme a quantidade
     if max_cols <= 5:
-        r = 62
-        gap_x = 28
+        r = 62; gap_x = 28
     elif max_cols <= 8:
-        r = 54
-        gap_x = 22
+        r = 54; gap_x = 22
     else:
-        r = 46
-        gap_x = 20
+        r = 46; gap_x = 20
 
-    if qtd_linhas == 1:
-        gap_y = 0
-    elif qtd_linhas == 2:
-        gap_y = 40
-    else:
-        gap_y = 30
+    gap_y   = 0 if qtd_linhas == 1 else (40 if qtd_linhas == 2 else 30)
+    label_h = 40 if labels else 0
 
-    line_height = 2 * r + gap_y
-    total_h = qtd_linhas * line_height - gap_y
-    start_y = y0 + (altura - total_h) // 2
+    line_height = label_h + 2*r + gap_y
+    total_h     = qtd_linhas * line_height - gap_y
+    start_y     = y0 + max(0, (altura - total_h) // 2)
 
-    # Cores das bolinhas (branco) e texto
     circle_color = (255, 255, 255)
-    text_color = (20, 20, 20)
-    font_num = FONT_SANS(46, bold=True)
+    text_color   = (20, 20, 20)
+    font_num     = FONT_SANS(46, bold=True)
+    font_label   = FONT_SANS(30, bold=True)
+    cx_center    = (x0 + x1) / 2
 
     for ridx, row in enumerate(rows):
+        row_top = start_y + ridx * line_height
+        if labels:
+            txt = labels[ridx] if len(labels) > 1 else labels[0]
+            tw  = draw.textlength(txt, font=font_label)
+            draw.text((cx_center - tw/2, row_top), txt, font=font_label, fill=(245,245,245))
+        cy = row_top + label_h + r
+
         cols = len(row)
-        total_w_row = cols * (2 * r + gap_x) - gap_x
+        total_w_row = cols * (2*r + gap_x) - gap_x
         start_x = x0 + (largura - total_w_row) // 2
-        cy = start_y + ridx * (2 * r + gap_y) + r
 
         for cidx, token in enumerate(row):
-            cx = start_x + cidx * (2 * r + gap_x) + r
+            cx = start_x + cidx * (2*r + gap_x) + r
             draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=circle_color)
-
             if token:
                 txt = str(token)
                 tw = draw.textlength(txt, font=font_num)
                 bbox = font_num.getbbox(txt)
                 th = bbox[3] - bbox[1]
-                draw.text(
-                    (cx - tw / 2, cy - th / 2 - 2),
-                    txt,
-                    font=font_num,
-                    fill=text_color,
-                )
+                draw.text((cx - tw/2, cy - th/2 - 2), txt, font=font_num, fill=text_color)
 
-    # Extra (mês, time do coração etc.) embaixo, se houver
+    # Linha extra (abaixo) para Timemania e Dia de Sorte
     if extra:
         font_extra = FONT_SANS(38, bold=True)
-        txt = extra.strip()
-        tw = draw.textlength(txt, font=font_extra)
-        draw.text(
-            ((x0 + x1) / 2 - tw / 2, y1 + 10),
-            txt,
-            font=font_extra,
-            fill=(255, 255, 255),
-        )
+        label = "TIME DO CORAÇÃO: " if is_time else ("MÊS DA SORTE: " if is_dias else "")
+        txt = (label + extra.strip()) if label else extra.strip()
+        tw  = draw.textlength(txt, font=font_extra)
+        draw.text(((x0 + x1) / 2 - tw / 2, y1 + 10), txt, font=font_extra, fill=(255, 255, 255))
 
 # ==========================
 # LOTECA — PARSER & TABELA
@@ -319,10 +444,11 @@ def _parse_loteca(numeros_str: str):
     jogos = []
     s = (numeros_str or "").strip()
 
-    # Tenta JSON primeiro
+    # Tenta JSON primeiro (sem eval perigoso: apenas json-like simples)
     if s.startswith("[") or s.startswith("{"):
         try:
-            data = eval(s, {"__builtins__": None}, {})  # leitura controlada
+            import json
+            data = json.loads(s)
             if isinstance(data, dict) and "jogos" in data:
                 data = data["jogos"]
             if isinstance(data, list):
@@ -548,11 +674,11 @@ def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url=""):
     area_bottom = H - 320
     area_box = (M, area_top, W - M, area_bottom)
 
-    if "loteca" in (loteria or "").lower():
-        # Tabela 14 linhas
+    if "loteca" in loteria.lower():
+        # Tabela 14 linhas (1X2)
         desenhar_loteca(draw, loteria, numeros_str, area_box)
     else:
-        # Bolinhas (geral: Mega, Quina, Lotofácil, Dupla, etc.)
+        # Bolinhas (geral: Mega, Quina, Lotofácil, Dupla, Timemania, Dia de Sorte, Mais Milionária, etc.)
         desenhar_bolinhas(draw, loteria, numeros_str, area_box)
 
     # CTA & marca
