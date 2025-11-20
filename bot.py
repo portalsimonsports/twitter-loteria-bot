@@ -1,6 +1,6 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-18 — SEM FILTRO DE DADOS + LIMPEZA DE CARACTERES INVISÍVEIS NA COLUNA DE STATUS
-# + TEXTO MINIMAL (APENAS LINK DO RESULTADO)
+# Rev: 2025-11-20 — SEM FILTRO DE DATAS + LIMPEZA DE CARACTERES INVISÍVEIS NA COLUNA DE STATUS
+#                    + TEXTO MINIMAL (APENAS LINK DO RESULTADO)
 #
 # Planilha: ImportadosBlogger2
 # Colunas: A=Loteria B=Concurso C=Data D=Números E=URL
@@ -9,7 +9,7 @@
 # Regras de publicação:
 # - PUBLICA SEMPRE que a coluna da REDE alvo estiver VAZIA (após remover espaços e caracteres invisíveis)
 # - NÃO olhar coluna de “Enfileirado”
-# - NÃO restringe mais por data / horário (BACKLOG_DAYS ignorado)
+# - NÃO restringe por data / horário (BACKLOG_DAYS/DIAS_DE_ATRASO ignorado)
 # - Texto padrão da publicação: APENAS o link do resultado (sem cabeçalho, sem lista de números)
 # → Para mandar só uma imagem, use GLOBAL_TEXT_MODE=IMAGE_ONLY no .env
 
@@ -52,15 +52,13 @@ TARGET_NETWORKS = [
     if s.strip()
 ]
 
-# BACKLOG_DAYS agora é ignorado, mas deixei leitura para não quebrar .env
+# BACKLOG_DAYS/DIAS_DE_ATRASO ignorado (mantido por compatibilidade)
 DIAS_DE_ATRASO = int(os.getenv("DIAS_DE_ATRASO", "7"))
 DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
 
 # ===== Modo de TEXTO (GLOBAL e por rede) =====
 
 GLOBAL_TEXT_MODE = (os.getenv("GLOBAL_TEXT_MODE", "") or "").strip().upper()  # opcional
-
-# por rede (se vazio, herda do GLOBAL ou usa TEXT_AND_IMAGE como padrão)
 X_TEXT_MODE = (os.getenv("X_TEXT_MODE", "") or "").strip().upper()
 FACEBOOK_TEXT_MODE = (os.getenv("FACEBOOK_TEXT_MODE", "") or "").strip().upper()
 TELEGRAM_TEXT_MODE = (os.getenv("TELEGRAM_TEXT_MODE", "") or os.getenv("MODO_TEXTO_TELEGRAM", "") or "").strip().upper()
@@ -115,11 +113,11 @@ PINTEREST_ACCESS_TOKEN = os.getenv("PINTEREST_ACCESS_TOKEN", "").strip()
 PINTEREST_BOARD_ID = os.getenv("PINTEREST_BOARD_ID", "").strip()
 POST_PINTEREST_WITH_IMAGE = os.getenv("POST_PINTEREST_WITH_IMAGE", "true").strip().lower() == "true"
 
-# ===== KIT (HTML/CSS) /saída =====
+# ===== KIT (HTML/CSS) / saída =====
 
 USE_KIT_IMAGE_FIRST = os.getenv("USE_KIT_IMAGE_FIRST", "false").strip().lower() == "true"
 KIT_OUTPUT_DIR = os.getenv("KIT_OUTPUT_DIR", "output").strip()
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip()  # (reservado para uso futuro)
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip()  # reservado
 
 # ===== Manter ativo (Replit/Render) =====
 
@@ -149,14 +147,14 @@ BOT_ORIGEM = _detect_origem()
 # =========================
 
 COL_LOTERIA, COL_CONCURSO, COL_DATA, COL_NUMEROS, COL_URL = 1, 2, 3, 4, 5
-COL_URL_IMAGEM, COL_IMAGEM = 6, 7  # indiretamente (não obrigatórios)
+COL_URL_IMAGEM, COL_IMAGEM = 6, 7  # opcionais
 
 COL_STATUS_REDES = {
-    "X": COL_STATUS_X,        # H
-    "FACEBOOK": COL_STATUS_FACEBOOK,  # O
-    "TELEGRAM": COL_STATUS_TELEGRAM,  # J
-    "DISCORD": COL_STATUS_DISCORD,    # M
-    "PINTEREST": COL_STATUS_PINTEREST # N
+    "X": COL_STATUS_X,               # H
+    "FACEBOOK": COL_STATUS_FACEBOOK, # O
+    "TELEGRAM": COL_STATUS_TELEGRAM, # J
+    "DISCORD": COL_STATUS_DISCORD,   # M
+    "PINTEREST": COL_STATUS_PINTEREST# N
 }
 
 # =========================
@@ -179,13 +177,12 @@ def _is_empty_status(v):
     """
     Considera a célula VAZIA mesmo se tiver espaços ou caracteres invisíveis
     comuns (largura zero, BOM, etc).
-    Usado para decidir se a coluna de status está realmente vazia.
     """
     if v is None:
         return True
-    s = str(v).strip()
-    invisiveis = ["\u200B", "\u200C", "\u200D", "\uFEFF", "\u2060"]
-    for ch in invisiveis:
+    s = str(v)
+    s = s.strip()
+    for ch in ["\u200B", "\u200C", "\u200D", "\uFEFF", "\u2060"]:
         s = s.replace(ch, "")
     return s == ""
 
@@ -263,12 +260,12 @@ def _guess_slug(name: str) -> str:
     return _slugify(name or "loteria")
 
 # =========================
-# IMAGEM: KIT /saída -> imagem oficial.py
+# IMAGEM: KIT / saída -> imagem oficial.py
 # =========================
 
 def _try_load_kit_image(row):
     """
-    Se USE_KIT_IMAGE_FIRST, tente localizar o arquivo no KIT_OUTPUT_DIR usando slug e concurso/data.
+    Se USE_KIT_IMAGE_FIRST, tenta localizar o arquivo no KIT_OUTPUT_DIR usando slug e concurso/data.
     Retorna BytesIO ou None.
     """
     if not USE_KIT_IMAGE_FIRST:
@@ -303,7 +300,7 @@ def _try_load_kit_image(row):
 def _build_image_from_row(row):
     """
     Retorna BytesIO (PNG ou JPG).
-    Prioriza KIT /saída (se habilitado); se não encontrar, gera imagem oficial via gerar_imagem_loteria.
+    Prioriza KIT / saída (se habilitado); se não encontrar, gera imagem oficial via gerar_imagem_loteria.
     """
     buf = _try_load_kit_image(row)
     if buf:
@@ -341,7 +338,6 @@ def coleta_candidatos_para(ws, rede: str):
     """
     Retorna lista de tuplas (rownum, row) somente onde:
       - status da REDE (coluna específica) está VAZIO (após remover caracteres invisíveis)
-
     NÃO olhar coluna de ENFILEIRADO.
     NÃO filtra por datas (BACKLOG_DAYS ignorado).
     """
