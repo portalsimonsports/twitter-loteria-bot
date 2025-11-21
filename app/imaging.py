@@ -1,8 +1,6 @@
 # app/imaging.py — Portal SimonSports
-# Rev: 2025-11-21
-# - Parser da LOTECA mais robusto para capturar gols (mandante/visitante) e calcular 1/X/2
-# - Mantida paleta CAIXA e layout aprovado
-# - (Sem remover nada do seu arquivo anterior — apenas melhorias de parse)
+# Rev: 2025-11-21 — Loteca sem coluna “1X2”, correção do gol do mandante
+#                    (aceita número em qualquer posição do lado esquerdo)
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io
@@ -14,6 +12,7 @@ W, H = 1080, 1080
 M = 80
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")
 LOGOS_DIR  = os.path.join(ASSETS_DIR, "logos")
+
 SHOW_CTA = False
 BRAND_TEXT = "Portal SimonSports"
 
@@ -137,6 +136,7 @@ def desenhar_logo(canvas: Image.Image, loteria_nome: str):
 
 def parse_numeros(loteria_nome: str, numeros_str: str):
     s = (numeros_str or "").strip()
+
     extra = None
     m = re.search(r"(?:-|;)\s*([A-Za-zÀ-ÿ0-9/ \.\-]+)$", s)
     if m:
@@ -181,13 +181,13 @@ def parse_mais_milionaria(numeros_str: str):
         main = []
         for t in main_tokens:
             if re.fullmatch(r"\d{1,2}", t):
-                v = int(t); 
+                v = int(t)
                 if 1 <= v <= 50: main.append(f"{v:02d}")
             if len(main) == 6: break
         trevos = []
         for t in trevo_tokens:
             if re.fullmatch(r"\d{1,2}", t):
-                v = int(t); 
+                v = int(t)
                 if 1 <= v <= 6: trevos.append(str(v))
             if len(trevos) == 2: break
         return main, trevos
@@ -265,10 +265,9 @@ def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str,
     rows, extra = parse_numeros(loteria_nome, numeros_str)
     if not rows: return
     labels = []
-    nome_lc = (loteria_nome or "").lower()
-    if "dupla" in nome_lc and len(rows) > 1:
+    if is_dupla and len(rows) > 1:
         labels = [f"{i+1}º SORTEIO" for i in range(len(rows))]
-    elif ("timemania" in nome_lc) or ("dia-de-sorte" in nome_lc) or ("dia de sorte" in nome_lc):
+    elif is_time or is_dias:
         labels = ["NÚMEROS"]
 
     qtd_linhas = len(rows); max_cols = max(len(r) for r in rows)
@@ -307,34 +306,45 @@ def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str,
                 th = font_num.getbbox(txt)[3] - font_num.getbbox(txt)[1]
                 draw.text((cx - tw/2, cy - th/2 - 2), txt, font=font_num, fill=text_color)
 
-if '_SPLIT_X' not in globals():
-    _SPLIT_X = re.compile(r"\s+[xX×]\s+")
+    if extra:
+        font_extra = FONT_SANS(38, bold=True)
+        label = "TIME DO CORAÇÃO: " if is_time else ("MÊS DA SORTE: " if is_dias else "")
+        txt = (label + extra.strip()) if label else extra.strip()
+        tw  = draw.textlength(txt, font=font_extra)
+        draw.text(((x0 + x1) / 2 - tw / 2, y1 + 10), txt, font=font_extra, fill=(255, 255, 255))
+
+_SPLIT_X = re.compile(r"\s+[xX×]\s+")
 
 def _strip_index_prefix(s: str) -> str:
-    return re.sub(r"^\s*\d{1,2}[\.\)]?\s*", "", s or "")
+    # remove prefixos comuns de índice e palavras de rótulo
+    s = re.sub(r"^\s*(?:\d{1,2}[\.\)]|dica|palpite|jogo|partida)\s*", "", s, flags=re.I)
+    return s.strip()
 
 def _extract_goals_and_name(token: str):
     """
-    Mais abrangente:
-    - remove dia/observações entre parênteses no fim
-    - aceita '2 NOME', 'NOME 2' ou número em qualquer posição (último inteiro da string)
+    Extrai (nome, gols). Aceita:
+      - "2 NOME", "NOME 2"
+      - número em QUALQUER posição isolado por espaços (ex.: "dica 0 ATHLETICO/PR")
     """
     s = (token or "").strip()
-    s = re.sub(r"\s*\([^)]+\)\s*$", "", s, flags=re.I)  # remove (Dom), (Sáb), etc.
-    # padrões clássicos
+    s = re.sub(r"\s*\((?:Dom|Seg|Ter|Qua|Qui|Sex|Sáb|Sab|[A-Za-z\. ]+)\)\s*$", "", s, flags=re.I)
+
+    # 1) extremos
     m = re.match(r"^\s*(\d+)\s+(.+)$", s)
     if m:
         return m.group(2).strip(" -"), int(m.group(1))
+
     m = re.match(r"^(.+?)\s+(\d+)\s*$", s)
     if m:
         return m.group(1).strip(" -"), int(m.group(2))
-    # fallback: pega o ÚLTIMO inteiro na string
-    m = re.search(r"(\d+)(?!.*\d)", s)
-    if m:
-        g = int(m.group(1))
-        nome = (s[:m.start()] + s[m.end():]).strip(" -")
-        nome = re.sub(r"\s{2,}", " ", nome)
-        return nome, g
+
+    # 2) número "solto" em qualquer posição
+    anynums = re.findall(r"(?:^|\s)(\d{1,2})(?=\s|$)", s)
+    if anynums:
+        g = int(anynums[-1])
+        name = re.sub(rf"(?:^|\s){g}(?=\s|$)", " ", s).strip()
+        return name.strip(" -"), g
+
     return s.strip(" -"), None
 
 def _clean_team_name(s: str) -> str:
@@ -360,20 +370,12 @@ def _parse_loteca(numeros_str: str):
                     vist, g2x = _extract_goals_and_name(vist_raw)
                     g1 = it.get("g1", g1x)
                     g2 = it.get("g2", g2x)
-                    res = str(it.get("resultado", "")).upper().strip()
-                    if g1 is not None and g2 is not None:
-                        try:
-                            a, b = int(g1), int(g2)
-                            res = "1" if a > b else ("2" if b > a else "X")
-                        except:
-                            pass
                     jogos.append({
                         "idx": i,
                         "mandante": _clean_team_name(mand),
                         "visitante": _clean_team_name(vist),
                         "g1": None if g1 is None else int(g1),
                         "g2": None if g2 is None else int(g2),
-                        "resultado": res
                     })
         except Exception:
             pass
@@ -387,76 +389,75 @@ def _parse_loteca(numeros_str: str):
             left, right = parts[0], parts[1]
             mand, g1 = _extract_goals_and_name(left)
             vist, g2 = _extract_goals_and_name(right)
-            res = ""
-            if (g1 is not None) and (g2 is not None):
-                try:
-                    a, b = int(g1), int(g2)
-                    res = "1" if a > b else ("2" if b > a else "X")
-                except:
-                    pass
             jogos.append({
                 "idx": i,
                 "mandante": _clean_team_name(mand),
                 "visitante": _clean_team_name(vist),
                 "g1": None if g1 is None else int(g1),
                 "g2": None if g2 is None else int(g2),
-                "resultado": res
             })
     jogos = jogos[:14]
     while len(jogos) < 14:
-        jogos.append({"idx": len(jogos)+1, "mandante": "", "visitante": "", "g1": None, "g2": None, "resultado": ""})
+        jogos.append({"idx": len(jogos)+1, "mandante": "", "visitante": "", "g1": None, "g2": None})
     return jogos
 
 def desenhar_loteca(draw: ImageDraw.ImageDraw, loteria_nome: str,
                     numeros_str: str, area_box):
     x0, y0, x1, y1 = area_box
     jogos = _parse_loteca(numeros_str)
-    col_w = [0.07, 0.06, 0.36, 0.04, 0.36, 0.06, 0.11]
+
+    # Removemos a coluna 1X2. Layout:  # | G | Mandante | × | Visitante | G
+    col_w = [0.08, 0.07, 0.40, 0.05, 0.30, 0.10]
     xs = [x0]
     for p in col_w:
         xs.append(xs[-1] + (x1 - x0) * p)
+
     header_h = 60
     row_h = (y1 - y0 - header_h) / 14
+
     draw.rounded_rectangle((x0, y0, x1, y0 + header_h), radius=16, fill=(28, 34, 62))
     f_head = FONT_SANS(26, bold=True)
     def _center(a, b): return a + (b - a) / 2
-    headers = ["#", "G", "Mandante", "×", "Visitante", "G", "1X2"]
+    headers = ["#", "G", "Mandante", "×", "Visitante", "G"]
     for i, htxt in enumerate(headers):
         draw.text((_center(xs[i], xs[i+1]), y0 + header_h/2 - 1), htxt, font=f_head, fill=TEXT_LIGHT, anchor="mm")
+
     f_idx   = FONT_SANS(24, bold=True)
     f_team  = FONT_SANS(24, bold=True)
     f_goals = FONT_SANS(26, bold=True)
-    f_res   = FONT_SANS(24, bold=True)
+
     for i in range(14):
         top = y0 + header_h + i * row_h
         bot = top + row_h - 4
         if i % 2 == 0:
             draw.rounded_rectangle((x0, top, x1, bot), radius=10, fill=(26, 32, 58))
+
         j = jogos[i]
         idx  = j["idx"]
         mand = j["mandante"]; vist = j["visitante"]
         g1   = j["g1"];       g2   = j["g2"]
-        res  = (j["resultado"] or "").upper()
-        if res == "1":
-            draw.rounded_rectangle((xs[1]+6, top+6, xs[2]-6, bot-6), radius=10, fill=HIGHLIGHT)
-            draw.rounded_rectangle((xs[2]+6, top+6, xs[3]-6, bot-6), radius=10, fill=HIGHLIGHT)
-        elif res == "2":
-            draw.rounded_rectangle((xs[4]+6, top+6, xs[5]-6, bot-6), radius=10, fill=HIGHLIGHT)
-            draw.rounded_rectangle((xs[5]+6, top+6, xs[6]-6, bot-6), radius=10, fill=HIGHLIGHT)
-        elif res == "X":
-            draw.rounded_rectangle((xs[6]+6, top+6, xs[7]-6, bot-6), radius=10, fill=HIGHLIGHT)
+
+        # Destaque vencedor quando houver placar completo
+        if (g1 is not None) and (g2 is not None):
+            if g1 > g2:
+                # destaca mandante (nome + gol)
+                draw.rounded_rectangle((xs[1]+6, top+6, xs[2]-6, bot-6), radius=10, fill=HIGHLIGHT)
+                draw.rounded_rectangle((xs[2]+6, top+6, xs[3]-6, bot-6), radius=10, fill=HIGHLIGHT)
+            elif g2 > g1:
+                # destaca visitante (nome + gol)
+                draw.rounded_rectangle((xs[4]+6, top+6, xs[5]-6, bot-6), radius=10, fill=HIGHLIGHT)
+                draw.rounded_rectangle((xs[5]+6, top+6, xs[6]-6, bot-6), radius=10, fill=HIGHLIGHT)
+
         draw.text((_center(xs[0], xs[1]), (top+bot)/2), f"{idx:02d}", font=f_idx,  fill=TEXT_LIGHT, anchor="mm")
         draw.text((_center(xs[1], xs[2]), (top+bot)/2), "-" if g1 is None else str(g1),
-                  font=f_goals, fill=(255,255,255) if res=="1" else (230,232,240), anchor="mm")
+                  font=f_goals, fill=(255,255,255) if (g1 is not None and (g2 is not None and g1 > g2)) else (230,232,240), anchor="mm")
         draw.text((_center(xs[2], xs[3]), (top+bot)/2), mand or "-", font=f_team,
-                  fill=(255,255,255) if res=="1" else (230,232,240), anchor="mm")
+                  fill=(255,255,255) if (g1 is not None and (g2 is not None and g1 > g2)) else (230,232,240), anchor="mm")
         draw.text((_center(xs[3], xs[4]), (top+bot)/2), "×", font=f_team, fill=(200,200,215), anchor="mm")
         draw.text((_center(xs[4], xs[5]), (top+bot)/2), vist or "-", font=f_team,
-                  fill=(255,255,255) if res=="2" else (230,232,240), anchor="mm")
+                  fill=(255,255,255) if (g2 is not None and (g1 is not None and g2 > g1)) else (230,232,240), anchor="mm")
         draw.text((_center(xs[5], xs[6]), (top+bot)/2), "-" if g2 is None else str(g2),
-                  font=f_goals, fill=(255,255,255) if res=="2" else (230,232,240), anchor="mm")
-        draw.text((_center(xs[6], xs[7]), (top+bot)/2), (res or "-"), font=f_res,
-                  fill=(255,255,255) if res in ("1","2","X") else (230,232,240), anchor="mm")
+                  font=f_goals, fill=(255,255,255) if (g2 is not None and (g1 is not None and g2 > g1)) else (230,232,240), anchor="mm")
 
 def desenhar_cta(draw: ImageDraw.ImageDraw, url: str = ""):
     btn_w, btn_h = 760, 96
@@ -495,20 +496,27 @@ def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url=""):
     data_br   = str(data_br or "").strip()
     numeros_s = str(numeros_str or "").strip()
     url       = str(url or "").strip()
+
     img = criar_fundo(loteria)
     draw = ImageDraw.Draw(img)
+
     desenhar_titulo(draw, loteria, concurso, data_br)
     desenhar_logo(img, loteria)
+
     area_top = M + 180
     area_bottom = H - 320
     area_box = (M, area_top, W - M, area_bottom)
+
     if "loteca" in loteria.lower():
         desenhar_loteca(draw, loteria, numeros_s, area_box)
     else:
         desenhar_bolinhas(draw, loteria, numeros_s, area_box)
+
     if SHOW_CTA:
         desenhar_cta(draw, url=url)
+
     desenhar_marca(draw)
+
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     buf.seek(0)
