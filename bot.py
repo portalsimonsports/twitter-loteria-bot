@@ -1,7 +1,7 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-21 — DUAS CONTAS X (marcar só quando todas postarem) + REPLY COM LINK/CANAIS
-#                    LOG automático (aba "Log_Publicacoes") + sem filtro de datas
-#                    limpeza de caracteres invisíveis nas colunas de status
+# Rev: 2025-11-21 — X com “link abaixo da imagem” (reply), canais Telegram no reply
+#                   — Marca publicação no X somente quando TODAS as contas concluírem
+#                   — Mantém: SEM filtro de datas, ignora “Enfileirado”, texto mínimo
 
 import os
 import re
@@ -42,17 +42,18 @@ TARGET_NETWORKS = [
     if s.strip()
 ]
 
-# Compat (não usados p/ filtrar)
-DIAS_DE_ATRASO = int(os.getenv("DIAS_DE_ATRASO", "7"))
+# Compat / flags
+DIAS_DE_ATRASO = int(os.getenv("DIAS_DE_ATRASO", "7"))  # ignorado
 DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
 
 # ===== Modo de TEXTO (GLOBAL e por rede) =====
-GLOBAL_TEXT_MODE = (os.getenv("GLOBAL_TEXT_MODE", "") or "").strip().upper()
+GLOBAL_TEXT_MODE = (os.getenv("GLOBAL_TEXT_MODE", "") or "").strip().upper()  # opcional
 X_TEXT_MODE = (os.getenv("X_TEXT_MODE", "") or "").strip().upper()
 FACEBOOK_TEXT_MODE = (os.getenv("FACEBOOK_TEXT_MODE", "") or "").strip().upper()
 TELEGRAM_TEXT_MODE = (os.getenv("TELEGRAM_TEXT_MODE", "") or os.getenv("MODO_TEXTO_TELEGRAM", "") or "").strip().upper()
 DISCORD_TEXT_MODE = (os.getenv("DISCORD_TEXT_MODE", "") or "").strip().upper()
 PINTEREST_TEXT_MODE = (os.getenv("PINTEREST_TEXT_MODE", "") or "").strip().upper()
+
 VALID_TEXT_MODES = {"IMAGE_ONLY", "TEXT_AND_IMAGE", "TEXT_ONLY"}
 
 def get_text_mode(rede: str) -> str:
@@ -69,12 +70,14 @@ def get_text_mode(rede: str) -> str:
 # ===== X (Twitter) =====
 X_POST_IN_ALL_ACCOUNTS = os.getenv("X_POST_IN_ALL_ACCOUNTS", "true").strip().lower() == "true"
 POST_X_WITH_IMAGE = os.getenv("POST_X_WITH_IMAGE", "true").strip().lower() == "true"
-# Reply opcional com link + canais (abaixo da imagem)
-X_REPLY_WITH_LINK_BELOW = os.getenv("X_REPLY_WITH_LINK_BELOW", "false").strip().lower() == "true"
-LINKS_TELEGRAM = [s.strip() for s in os.getenv("LINKS_TELEGRAM", "").split(",") if s.strip()]
 COL_STATUS_X = int(os.getenv("COL_STATUS_X", "8"))  # H
 
-# ===== Facebook =====
+# NOVO: link abaixo (reply) e blocos de canais
+X_REPLY_WITH_LINK_BELOW = os.getenv("X_REPLY_WITH_LINK_BELOW", "true").strip().lower() == "true"
+TELEGRAM_CHANNELS_BELOW = os.getenv("TELEGRAM_CHANNELS_BELOW", "").strip()
+X_REPLY_FOOTER = os.getenv("X_REPLY_FOOTER", "").strip()
+
+# ===== Facebook (Páginas) =====
 POST_FB_WITH_IMAGE = os.getenv("POST_FB_WITH_IMAGE", "true").strip().lower() == "true"
 COL_STATUS_FACEBOOK = int(os.getenv("COL_STATUS_FACEBOOK", "15"))  # O
 FB_PAGE_IDS = [s.strip() for s in os.getenv("FB_PAGE_IDS", os.getenv("FB_PAGE_ID", "")).split(",") if s.strip()]
@@ -184,31 +187,6 @@ def _open_ws():
     sh = _gs_client().open_by_key(SHEET_ID)
     return sh.worksheet(SHEET_TAB)
 
-# ===== LOG: aba automática =====
-LOG_SHEET_NAME = "Log_Publicacoes"
-
-def _ensure_log_sheet(ss):
-    try:
-        sh = ss.worksheet(LOG_SHEET_NAME)
-        return sh
-    except Exception:
-        sh = ss.add_worksheet(title=LOG_SHEET_NAME, rows=2000, cols=12)
-        sh.append_row(["Timestamp", "Rede", "Conta/Canal", "Linha", "Loteria", "Concurso",
-                       "Data", "URL", "ID/Link", "Status", "Origem"], value_input_option="RAW")
-        return sh
-
-def _append_log(ss, rede, conta, rownum, row, content_id, status_txt):
-    try:
-        lot = row[COL_LOTERIA-1] if _safe_len(row, COL_LOTERIA) else ""
-        conc = row[COL_CONCURSO-1] if _safe_len(row, COL_CONCURSO) else ""
-        data = row[COL_DATA-1] if _safe_len(row, COL_DATA) else ""
-        url  = row[COL_URL-1] if _safe_len(row, COL_URL) else ""
-        logs = _ensure_log_sheet(ss)
-        logs.append_row([_ts_br(), rede, conta, rownum, lot, conc, data, url,
-                         str(content_id or ""), status_txt, BOT_ORIGEM], value_input_option="RAW")
-    except Exception as e:
-        _log(f"[LOG] erro ao registrar: {e}")
-
 def marcar_publicado(ws, rownum, rede, value=None):
     col = COL_STATUS_REDES.get(rede, None)
     if not col:
@@ -256,7 +234,7 @@ def _guess_slug(name: str) -> str:
     return _slugify(name or "loteria")
 
 # =========================
-# IMAGEM
+# IMAGEM: KIT / saída -> imagem oficial.py
 # =========================
 def _try_load_kit_image(row):
     if not USE_KIT_IMAGE_FIRST:
@@ -291,7 +269,7 @@ def _try_load_kit_image(row):
 def _build_image_from_row(row):
     buf = _try_load_kit_image(row)
     if buf:
-        return buf
+        return buf  # JPG/PNG do KIT
 
     loteria = row[COL_LOTERIA - 1] if _safe_len(row, COL_LOTERIA) else "Loteria"
     concurso = row[COL_CONCURSO - 1] if _safe_len(row, COL_CONCURSO) else "0000"
@@ -310,17 +288,20 @@ def montar_texto_base(row) -> str:
         return url
     return ""
 
-def _reply_text_with_links(row) -> str:
-    url = (row[COL_URL - 1] if _safe_len(row, COL_URL) else "").strip()
-    lines = []
-    if url:
-        lines.append(url)
-    if LINKS_TELEGRAM:
-        lines.append("")  # linha em branco
-        lines.append("Canais no Telegram:")
-        for link in LINKS_TELEGRAM:
-            lines.append(link)
-    return "\n".join(lines).strip()
+def _build_reply_block(row) -> str:
+    """
+    Texto do reply no X: link do resultado + blocos de canais do Telegram + rodapé opcional.
+    """
+    parts = []
+    link = montar_texto_base(row).strip()
+    if link:
+        parts.append(link)
+    tg = TELEGRAM_CHANNELS_BELOW
+    if tg:
+        parts.append(tg.strip())
+    if X_REPLY_FOOTER:
+        parts.append(X_REPLY_FOOTER.strip())
+    return "\n".join([p for p in parts if p])
 
 # =========================
 # Coleta de linhas candidatas (por REDE)
@@ -395,12 +376,22 @@ class XAccount:
 
 def build_x_accounts():
     accs = []
-    def ok(d): return all(d.get(k) for k in ("api_key", "api_secret", "access_token", "access_secret"))
-    if ok(TW1): accs.append(XAccount("ACC1", **TW1))
-    else: _log("Conta ACC1 incompleta nos Secrets — verifique *_1.")
-    if ok(TW2): accs.append(XAccount("ACC2", **TW2))
-    else: _log("Conta ACC2 incompleta nos Secrets — verifique *_2.")
-    if not accs: raise RuntimeError("Nenhuma conta X configurada.")
+
+    def ok(d):
+        return all(d.get(k) for k in ("api_key", "api_secret", "access_token", "access_secret"))
+
+    if ok(TW1):
+        accs.append(XAccount("ACC1", **TW1))
+    else:
+        _log("Conta ACC1 incompleta nos Secrets — verifique *_1.")
+
+    if ok(TW2):
+        accs.append(XAccount("ACC2", **TW2))
+    else:
+        _log("Conta ACC2 incompleta nos Secrets — verifique *_2.")
+
+    if not accs:
+        raise RuntimeError("Nenhuma conta X configurada.")
     return accs
 
 _recent_tweets_cache = defaultdict(set)
@@ -442,20 +433,29 @@ def x_upload_media_if_any(acc: XAccount, row):
         _log(f"[{acc.handle}] Erro imagem: {e}")
         return None
 
-def x_reply_with_links(acc: XAccount, reply_to_id: str, row):
+def x_reply_with_links(acc: XAccount, tweet_id: str, row):
+    """
+    Responde ao tweet com link + canais Telegram + footer (abaixo da imagem).
+    """
     try:
-        text = _reply_text_with_links(row)
+        text = _build_reply_block(row)
         if not text:
             return None
-        resp = acc.client_v2.create_tweet(text=text, in_reply_to_tweet_id=reply_to_id)
-        return resp.data.get("id") if resp and resp.data else None
+        if DRY_RUN:
+            _log(f"[X][{acc.handle}] DRY_RUN reply → {text[:60]}…")
+            return None
+        resp = acc.client_v2.create_tweet(
+            text=text,
+            in_reply_to_tweet_id=tweet_id
+        )
+        _log(f"[X][{acc.handle}] reply OK → {resp.data['id']}")
+        return resp.data["id"]
     except Exception as e:
-        _log(f"[{acc.handle}] erro ao responder com link/canais: {e}")
+        _log(f"[X][{acc.handle}] reply erro: {e}")
         return None
 
 def publicar_em_x(ws, candidatos):
     contas = build_x_accounts()
-    ss = ws.spreadsheet
     for acc in contas:
         _recent_tweets_cache[acc.label] = x_load_recent_texts(acc, 50)
         _log(f"[X] Conta conectada: {acc.handle}")
@@ -463,87 +463,88 @@ def publicar_em_x(ws, candidatos):
     publicados = 0
     acc_idx = 0
     limite = min(MAX_PUBLICACOES_RODADA, len(candidatos))
-    mode = get_text_mode("X")
+    mode_cfg = get_text_mode("X")
+    reply_below = X_REPLY_WITH_LINK_BELOW
 
     for rownum, row in candidatos[:limite]:
         texto_full = montar_texto_base(row)
+        # Se vamos responder com link abaixo, força imagem-only no tweet principal
+        mode = "IMAGE_ONLY" if reply_below else mode_cfg
         texto_para_postar = "" if mode == "IMAGE_ONLY" else texto_full
 
-        # Resultado por conta
-        resultados = []  # [(acc, sucesso_bool, tweet_id, status_txt)]
+        ok_all = True  # só marca quando TODAS as contas concluírem
+
         if X_POST_IN_ALL_ACCOUNTS:
             for acc in contas:
                 media_ids = x_upload_media_if_any(acc, row)
+                ok = False
                 try:
                     if DRY_RUN:
                         _log(f"[X][{acc.handle}] DRY_RUN — não enviou (teste).")
-                        resultados.append((acc, True, None, "dry-run"))
+                        ok = True
                     else:
                         if texto_para_postar and x_is_dup(acc, texto_para_postar):
                             _log(f"[X][{acc.handle}] SKIP duplicado.")
-                            resultados.append((acc, True, None, "duplicado"))
+                            ok = True  # tratado como OK
                         else:
                             resp = acc.client_v2.create_tweet(
                                 text=(texto_para_postar or None) if mode != "IMAGE_ONLY" else None,
                                 media_ids=media_ids if POST_X_WITH_IMAGE else None,
                             )
-                            tw_id = resp.data['id'] if resp and resp.data else None
+                            tweet_id = resp.data["id"]
+                            _log(f"[X][{acc.handle}] OK → {tweet_id}")
                             if texto_para_postar:
                                 _postados_nesta_execucao[acc.label].add(texto_para_postar)
                                 _recent_tweets_cache[acc.label].add(texto_para_postar)
-                            _log(f"[X][{acc.handle}] OK → {tw_id}")
-                            # Reply abaixo com link/canais (se habilitado e IMAGE_ONLY)
-                            if X_REPLY_WITH_LINK_BELOW and mode == "IMAGE_ONLY" and tw_id:
-                                rep_id = x_reply_with_links(acc, tw_id, row)
-                                if rep_id: _log(f"[X][{acc.handle}] reply → {rep_id}")
-                            resultados.append((acc, True, tw_id, "ok"))
+                            # reply com links/canais abaixo da imagem
+                            if reply_below:
+                                x_reply_with_links(acc, tweet_id, row)
+                            ok = True
                 except Exception as e:
                     _log(f"[X][{acc.handle}] erro: {e}")
-                    resultados.append((acc, False, None, f"erro: {e}"))
+                    ok = False
+
+                ok_all = ok_all and ok
                 time.sleep(0.7)
         else:
             acc = contas[acc_idx % len(contas)]
             acc_idx += 1
+            ok = False
             media_ids = x_upload_media_if_any(acc, row)
             try:
                 if DRY_RUN:
                     _log(f"[X][{acc.handle}] DRY_RUN — não enviou (teste).")
-                    resultados.append((acc, True, None, "dry-run"))
+                    ok = True
                 else:
                     if texto_para_postar and x_is_dup(acc, texto_para_postar):
                         _log(f"[X][{acc.handle}] SKIP duplicado.")
-                        resultados.append((acc, True, None, "duplicado"))
+                        ok = True
                     else:
                         resp = acc.client_v2.create_tweet(
                             text=(texto_para_postar or None) if mode != "IMAGE_ONLY" else None,
                             media_ids=media_ids if POST_X_WITH_IMAGE else None,
                         )
-                        tw_id = resp.data['id'] if resp and resp.data else None
+                        tweet_id = resp.data["id"]
+                        _log(f"[X][{acc.handle}] OK → {tweet_id}")
                         if texto_para_postar:
                             _postados_nesta_execucao[acc.label].add(texto_para_postar)
                             _recent_tweets_cache[acc.label].add(texto_para_postar)
-                        _log(f"[X][{acc.handle}] OK → {tw_id}")
-                        if X_REPLY_WITH_LINK_BELOW and mode == "IMAGE_ONLY" and tw_id:
-                            rep_id = x_reply_with_links(acc, tw_id, row)
-                            if rep_id: _log(f"[X][{acc.handle}] reply → {rep_id}")
-                        resultados.append((acc, True, tw_id, "ok"))
+                        if reply_below:
+                            x_reply_with_links(acc, tweet_id, row)
+                        ok = True
             except Exception as e:
                 _log(f"[X][{acc.handle}] erro: {e}")
-                resultados.append((acc, False, None, f"erro: {e}"))
+                ok = False
 
-        # LOG por conta
-        for acc, ok, tid, st in resultados:
-            _append_log(ss, "X", acc.handle, rownum, row, tid, st)
+            ok_all = ok_all and ok
 
-        # Marcar publicado apenas se TODAS as contas (ou a única) estiverem OK (duplicado conta como OK)
-        ok_all = all(ok for (_, ok, _, _) in resultados) if resultados else False
         if ok_all and not DRY_RUN:
             marcar_publicado(ws, rownum, "X")
             publicados += 1
 
         time.sleep(PAUSA_ENTRE_POSTS)
 
-    _log(f"[X] Publicados (linhas marcadas): {publicados}")
+    _log(f"[X] Publicados: {publicados}")
     return publicados
 
 # --- Facebook ---
@@ -568,7 +569,6 @@ def publicar_em_facebook(ws, candidatos):
     if not FB_PAGE_IDS or not FB_PAGE_TOKENS or len(FB_PAGE_IDS) != len(FB_PAGE_TOKENS):
         raise RuntimeError("Facebook: configure FB_PAGE_IDS e FB_PAGE_TOKENS (mesmo tamanho).")
 
-    ss = ws.spreadsheet
     publicados = 0
     limite = min(MAX_PUBLICACOES_RODADA, len(candidatos))
     mode = get_text_mode("FACEBOOK")
@@ -582,7 +582,6 @@ def publicar_em_facebook(ws, candidatos):
             try:
                 if DRY_RUN:
                     _log(f"[Facebook][{pid}] DRY_RUN — não enviou (teste).")
-                    _append_log(ss, "FACEBOOK", pid, rownum, row, None, "dry-run")
                     ok = True
                 else:
                     if POST_FB_WITH_IMAGE:
@@ -592,11 +591,9 @@ def publicar_em_facebook(ws, candidatos):
                         url_post = (row[COL_URL - 1] if _safe_len(row, COL_URL) else "").strip()
                         fb_id = _fb_post_text(pid, ptoken, msg, link=url_post or None)
                     _log(f"[Facebook][{pid}] OK → {fb_id}")
-                    _append_log(ss, "FACEBOOK", pid, rownum, row, fb_id, "ok")
                     ok = True
             except Exception as e:
                 _log(f"[Facebook][{pid}] erro: {e}")
-                _append_log(ss, "FACEBOOK", pid, rownum, row, None, f"erro: {e}")
                 ok = False
 
             ok_any = ok_any or ok
@@ -631,7 +628,6 @@ def publicar_em_telegram(ws, candidatos):
     if not TG_BOT_TOKEN or not TG_CHAT_IDS:
         raise RuntimeError("Telegram: configure TG_BOT_TOKEN e TG_CHAT_IDS.")
 
-    ss = ws.spreadsheet
     publicados = 0
     limite = min(MAX_PUBLICACOES_RODADA, len(candidatos))
     mode = get_text_mode("TELEGRAM")
@@ -645,7 +641,6 @@ def publicar_em_telegram(ws, candidatos):
             try:
                 if DRY_RUN:
                     _log(f"[Telegram][{chat_id}] DRY_RUN — não enviou (teste).")
-                    _append_log(ss, "TELEGRAM", chat_id, rownum, row, None, "dry-run")
                     ok = True
                 else:
                     if POST_TG_WITH_IMAGE:
@@ -660,11 +655,9 @@ def publicar_em_telegram(ws, candidatos):
                             final_msg = url_post
                         msg_id = _tg_send_text(TG_BOT_TOKEN, chat_id, final_msg or "")
                     _log(f"[Telegram][{chat_id}] OK → {msg_id}")
-                    _append_log(ss, "TELEGRAM", chat_id, rownum, row, msg_id, "ok")
                     ok = True
             except Exception as e:
                 _log(f"[Telegram][{chat_id}] erro: {e}")
-                _append_log(ss, "TELEGRAM", chat_id, rownum, row, None, f"erro: {e}")
                 ok = False
 
             ok_any = ok_any or ok
@@ -693,7 +686,6 @@ def publicar_em_discord(ws, candidatos):
     if not DISCORD_WEBHOOKS:
         raise RuntimeError("Discord: defina DISCORD_WEBHOOKS (um ou mais, separados por vírgula).")
 
-    ss = ws.spreadsheet
     publicados = 0
     limite = min(MAX_PUBLICACOES_RODADA, len(candidatos))
     mode = get_text_mode("DISCORD")
@@ -707,7 +699,6 @@ def publicar_em_discord(ws, candidatos):
             if DRY_RUN:
                 for wh in DISCORD_WEBHOOKS:
                     _log(f"[Discord] DRY_RUN — não enviou (teste) → {wh[-18:]}")
-                    _append_log(ss, "DISCORD", wh[-18:], rownum, row, None, "dry-run")
                 ok_any = True
             else:
                 buf = _build_image_from_row(row)
@@ -721,11 +712,9 @@ def publicar_em_discord(ws, candidatos):
                         payload = url_post
                     _discord_send(wh, content=(payload or None), image_bytes=img_bytes)
                     _log(f"[Discord] OK → {wh[-18:]}")
-                    _append_log(ss, "DISCORD", wh[-18:], rownum, row, "(webhook)", "ok")
                 ok_any = True
         except Exception as e:
             _log(f"[Discord] erro: {e}")
-            _append_log(ss, "DISCORD", "—", rownum, row, None, f"erro: {e}")
             ok_any = False
 
         if ok_any and not DRY_RUN:
@@ -776,7 +765,6 @@ def publicar_em_pinterest(ws, candidatos):
     if not (PINTEREST_ACCESS_TOKEN and PINTEREST_BOARD_ID):
         raise RuntimeError("Pinterest: defina PINTEREST_ACCESS_TOKEN e PINTEREST_BOARD_ID.")
 
-    ss = ws.spreadsheet
     publicados = 0
     limite = min(MAX_PUBLICACOES_RODADA, len(candidatos))
     mode = get_text_mode("PINTEREST")
@@ -792,7 +780,6 @@ def publicar_em_pinterest(ws, candidatos):
         try:
             if DRY_RUN:
                 _log(f"[Pinterest] DRY_RUN — não enviou (teste): {title}")
-                _append_log(ss, "PINTEREST", PINTEREST_BOARD_ID, rownum, row, None, "dry-run")
                 ok = True
             else:
                 if POST_PINTEREST_WITH_IMAGE:
@@ -815,11 +802,9 @@ def publicar_em_pinterest(ws, candidatos):
                         image_url=url_post or None,
                     )
                 _log(f"[Pinterest] OK → {pin_id}")
-                _append_log(ss, "PINTEREST", PINTEREST_BOARD_ID, rownum, row, pin_id, "ok")
                 ok = True
         except Exception as e:
             _log(f"[Pinterest] erro: {e}")
-            _append_log(ss, "PINTEREST", PINTEREST_BOARD_ID, rownum, row, None, f"erro: {e}")
             ok = False
 
         if ok and not DRY_RUN:
@@ -864,15 +849,14 @@ def main():
     _log(
         "Iniciando bot...",
         f"Origem={BOT_ORIGEM} | Redes={','.join(TARGET_NETWORKS)} | DRY_RUN={DRY_RUN} | "
-        f"GLOBAL_TEXT_MODE={GLOBAL_TEXT_MODE or '-'} | KIT_FIRST={USE_KIT_IMAGE_FIRST}"
+        f"GLOBAL_TEXT_MODE={GLOBAL_TEXT_MODE or '-'} | KIT_FIRST={USE_KIT_IMAGE_FIRST} | "
+        f"X_REPLY_WITH_LINK_BELOW={X_REPLY_WITH_LINK_BELOW}"
     )
 
     keepalive_thread = iniciar_keepalive() if ENABLE_KEEPALIVE else None
 
     try:
         ws = _open_ws()
-        # garante aba de log
-        _ensure_log_sheet(ws.spreadsheet)
 
         for rede in TARGET_NETWORKS:
             if rede not in COL_STATUS_REDES:
