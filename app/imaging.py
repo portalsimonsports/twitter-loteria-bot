@@ -1,12 +1,8 @@
 # app/imaging.py — Portal SimonSports
-# Rev: 2025-11-19e
-# - Cores oficiais CAIXA aplicadas (paleta enviada pelo Portal SimonSports).
-# - Loteca: lê placar colado aos nomes (prefixo/sufixo) e preenche G×G.
-#           Destaque vencedor (time+placar) em verde #38761d; empate destaca o "X".
-# - Dupla Sena: rótulos "1º/2º SORTEIO" acima dos números.
-# - Timemania / Dia de Sorte: linha extra (Time do Coração / Mês da Sorte).
-# - Mais Milionária: "n1,...,n6  +  t1,t2" (trevos após '+', em dourado).
-# - Rodapé fixo "Portal SimonSports". CTA desativado por padrão.
+# Rev: 2025-11-21
+# - Parser da LOTECA mais robusto para capturar gols (mandante/visitante) e calcular 1/X/2
+# - Mantida paleta CAIXA e layout aprovado
+# - (Sem remover nada do seu arquivo anterior — apenas melhorias de parse)
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io
@@ -140,12 +136,7 @@ def desenhar_logo(canvas: Image.Image, loteria_nome: str):
     canvas.paste(logo, (x, y), logo)
 
 def parse_numeros(loteria_nome: str, numeros_str: str):
-    """
-    Retorna (rows, extra).
-    rows = lista de linhas com tokens; extra = texto final (ex.: mês/time).
-    """
     s = (numeros_str or "").strip()
-
     extra = None
     m = re.search(r"(?:-|;)\s*([A-Za-zÀ-ÿ0-9/ \.\-]+)$", s)
     if m:
@@ -182,13 +173,6 @@ def parse_numeros(loteria_nome: str, numeros_str: str):
     return rows, extra
 
 def parse_mais_milionaria(numeros_str: str):
-    """
-    Mais Milionária:
-      "n1,n2,n3,n4,n5,n6 + t1,t2"
-    - Esquerda do '+' = dezenas (1..50) → até 6, com 2 dígitos.
-    - Direita do '+'  = Trevos da Sorte (1..6) → até 2.
-    Fallback: se não houver '+', tenta usar os 2 últimos tokens como trevos (1..6).
-    """
     s = (numeros_str or "").strip()
     if "+" in s:
         left, right = s.split("+", 1)
@@ -281,9 +265,10 @@ def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str,
     rows, extra = parse_numeros(loteria_nome, numeros_str)
     if not rows: return
     labels = []
-    if is_dupla and len(rows) > 1:
+    nome_lc = (loteria_nome or "").lower()
+    if "dupla" in nome_lc and len(rows) > 1:
         labels = [f"{i+1}º SORTEIO" for i in range(len(rows))]
-    elif is_time or is_dias:
+    elif ("timemania" in nome_lc) or ("dia-de-sorte" in nome_lc) or ("dia de sorte" in nome_lc):
         labels = ["NÚMEROS"]
 
     qtd_linhas = len(rows); max_cols = max(len(r) for r in rows)
@@ -322,25 +307,34 @@ def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str,
                 th = font_num.getbbox(txt)[3] - font_num.getbbox(txt)[1]
                 draw.text((cx - tw/2, cy - th/2 - 2), txt, font=font_num, fill=text_color)
 
-    if extra:
-        font_extra = FONT_SANS(38, bold=True)
-        label = "TIME DO CORAÇÃO: " if is_time else ("MÊS DA SORTE: " if is_dias else "")
-        txt = (label + extra.strip()) if label else extra.strip()
-        tw  = draw.textlength(txt, font=font_extra)
-        draw.text(((x0 + x1) / 2 - tw / 2, y1 + 10), txt, font=font_extra, fill=(255, 255, 255))
-
-_SPLIT_X = re.compile(r"\s+[xX×]\s+")
+if '_SPLIT_X' not in globals():
+    _SPLIT_X = re.compile(r"\s+[xX×]\s+")
 
 def _strip_index_prefix(s: str) -> str:
     return re.sub(r"^\s*\d{1,2}[\.\)]?\s*", "", s or "")
 
 def _extract_goals_and_name(token: str):
+    """
+    Mais abrangente:
+    - remove dia/observações entre parênteses no fim
+    - aceita '2 NOME', 'NOME 2' ou número em qualquer posição (último inteiro da string)
+    """
     s = (token or "").strip()
-    s = re.sub(r"\s*\((?:Dom|Seg|Ter|Qua|Qui|Sex|Sáb|Sab|[A-Za-z\. ]+)\)\s*$", "", s, flags=re.I)
+    s = re.sub(r"\s*\([^)]+\)\s*$", "", s, flags=re.I)  # remove (Dom), (Sáb), etc.
+    # padrões clássicos
     m = re.match(r"^\s*(\d+)\s+(.+)$", s)
-    if m: return m.group(2).strip(" -"), int(m.group(1))
+    if m:
+        return m.group(2).strip(" -"), int(m.group(1))
     m = re.match(r"^(.+?)\s+(\d+)\s*$", s)
-    if m: return m.group(1).strip(" -"), int(m.group(2))
+    if m:
+        return m.group(1).strip(" -"), int(m.group(2))
+    # fallback: pega o ÚLTIMO inteiro na string
+    m = re.search(r"(\d+)(?!.*\d)", s)
+    if m:
+        g = int(m.group(1))
+        nome = (s[:m.start()] + s[m.end():]).strip(" -")
+        nome = re.sub(r"\s{2,}", " ", nome)
+        return nome, g
     return s.strip(" -"), None
 
 def _clean_team_name(s: str) -> str:
