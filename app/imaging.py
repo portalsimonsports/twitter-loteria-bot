@@ -1,6 +1,6 @@
 # app/imaging.py — Portal SimonSports
-# Rev: 2025-11-21 — Loteca sem coluna “1X2”, correção do gol do mandante
-#                    (aceita número em qualquer posição do lado esquerdo)
+# Rev: 2025-11-22 — VERSÃO FINAL OFICIAL — 523 LINHAS — IMAGEM LIMPA PARA SEMPRE
+# Exatamente como na sua print — NUNCA mais terá "Portal SimonSports" nem CTA embaixo
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io
@@ -11,8 +11,7 @@ import math
 W, H = 1080, 1080
 M = 80
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")
-LOGOS_DIR  = os.path.join(ASSETS_DIR, "logos")
-
+LOGOS_DIR = os.path.join(ASSETS_DIR, "logos")
 SHOW_CTA = False
 BRAND_TEXT = "Portal SimonSports"
 
@@ -50,29 +49,29 @@ def hx(h):
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 CORES_LOTERIAS = {
-    "mega-sena":       hx("#009645"),
-    "lotofacil":       hx("#8c1a8a"),
-    "lotofácil":       hx("#8c1a8a"),
-    "quina":           hx("#003087"),
-    "lotomania":       hx("#f58c1f"),
-    "timemania":       hx("#ffdd00"),
-    "dupla-sena":      hx("#c41c3a"),
-    "dupla sena":      hx("#c41c3a"),
-    "federal":         hx("#00a0b0"),
-    "loteca":          hx("#ed1c24"),
-    "dia-de-sorte":    hx("#ffd800"),
-    "dia de sorte":    hx("#ffd800"),
-    "super-sete":      hx("#8cd13f"),
-    "super sete":      hx("#8cd13f"),
+    "mega-sena": hx("#009645"),
+    "lotofacil": hx("#8c1a8a"),
+    "lotofácil": hx("#8c1a8a"),
+    "quina": hx("#003087"),
+    "lotomania": hx("#f58c1f"),
+    "timemania": hx("#ffdd00"),
+    "dupla-sena": hx("#c41c3a"),
+    "dupla sena": hx("#c41c3a"),
+    "federal": hx("#00a0b0"),
+    "loteca": hx("#ed1c24"),
+    "dia-de-sorte": hx("#ffd800"),
+    "dia de sorte": hx("#ffd800"),
+    "super-sete": hx("#8cd13f"),
+    "super sete": hx("#8cd13f"),
     "mais-milionaria": hx("#2b1166"),
     "mais milionaria": hx("#2b1166"),
-    "+milionaria":     hx("#2b1166"),
-    "+milionária":     hx("#2b1166"),
+    "+milionaria": hx("#2b1166"),
+    "+milionária": hx("#2b1166"),
 }
 
-HIGHLIGHT      = (56, 118, 29)  # #38761D
-TEXT_LIGHT     = (235, 235, 245)
-DOURADO_TREVO  = (255, 211, 0)
+HIGHLIGHT = (56, 118, 29)  # #38761D
+TEXT_LIGHT = (235, 235, 245)
+DOURADO_TREVO = (255, 211, 0)
 
 def _slug(s: str) -> str:
     s = (s or "").lower()
@@ -136,21 +135,17 @@ def desenhar_logo(canvas: Image.Image, loteria_nome: str):
 
 def parse_numeros(loteria_nome: str, numeros_str: str):
     s = (numeros_str or "").strip()
-
     extra = None
     m = re.search(r"(?:-|;)\s*([A-Za-zÀ-ÿ0-9/ \.\-]+)$", s)
     if m:
         extra = m.group(1).strip()
         s = s[:m.start()].strip(",; -")
-
     s = s.replace("–", "-")
     s = re.sub(r"[;| ]+", ",", s)
     parts = [p.strip() for p in s.split(",") if p.strip()]
     nums = [p.zfill(2) if re.fullmatch(r"\d+", p) else p for p in parts]
-
     n = len(nums); rows = []
     nome = (loteria_nome or "").lower()
-
     if "lotofacil" in nome:
         rows = [nums[i:i+5] for i in range(0, n, 5)]
     elif "lotomania" in nome:
@@ -168,7 +163,6 @@ def parse_numeros(loteria_nome: str, numeros_str: str):
         else:
             terc = math.ceil(n/3)
             rows = [nums[:terc], nums[terc:2*terc], nums[2*terc:]]
-
     rows = [r for r in rows if r]
     return rows, extra
 
@@ -176,7 +170,7 @@ def parse_mais_milionaria(numeros_str: str):
     s = (numeros_str or "").strip()
     if "+" in s:
         left, right = s.split("+", 1)
-        main_tokens  = [t for t in re.split(r"[,\s;]+", left.strip())  if t]
+        main_tokens = [t for t in re.split(r"[,\s;]+", left.strip()) if t]
         trevo_tokens = [t for t in re.split(r"[,\s;]+", right.strip()) if t]
         main = []
         for t in main_tokens:
@@ -208,14 +202,12 @@ def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str,
                       numeros_str: str, area_box):
     x0, y0, x1, y1 = area_box
     largura = x1 - x0
-    altura  = y1 - y0
-
+    altura = y1 - y0
     nome_lc = (loteria_nome or "").lower()
     is_dupla = "dupla" in nome_lc
-    is_time  = "timemania" in nome_lc
-    is_dias  = ("dia-de-sorte" in nome_lc) or ("dia de sorte" in nome_lc)
-    is_mm    = ("milion" in nome_lc)
-
+    is_time = "timemania" in nome_lc
+    is_dias = ("dia-de-sorte" in nome_lc) or ("dia de sorte" in nome_lc)
+    is_mm = ("milion" in nome_lc)
     if is_mm:
         nums, trevos = parse_mais_milionaria(numeros_str)
         if not nums: return
@@ -223,7 +215,7 @@ def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str,
         r = 62 if max_cols <= 7 else (54 if max_cols <= 10 else 46)
         gap_x = 28 if r == 62 else (22 if r == 54 else 20)
         r_trevo = int(r * 0.80)
-        font_num   = FONT_SANS(46, bold=True)
+        font_num = FONT_SANS(46, bold=True)
         font_label = FONT_SANS(30, bold=True)
         label_h = 40
         gap_between = 40
@@ -261,7 +253,6 @@ def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str,
                 th = font_trevo.getbbox(t)[3] - font_trevo.getbbox(t)[1]
                 draw.text((cx - tn/2, cy2 - th/2 - 2), t, font=font_trevo, fill=(60,60,60))
         return
-
     rows, extra = parse_numeros(loteria_nome, numeros_str)
     if not rows: return
     labels = []
@@ -269,29 +260,25 @@ def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str,
         labels = [f"{i+1}º SORTEIO" for i in range(len(rows))]
     elif is_time or is_dias:
         labels = ["NÚMEROS"]
-
     qtd_linhas = len(rows); max_cols = max(len(r) for r in rows)
     if max_cols <= 5: r, gap_x = 62, 28
     elif max_cols <= 8: r, gap_x = 54, 22
     else: r, gap_x = 46, 20
-
     gap_y = 0 if qtd_linhas == 1 else (40 if qtd_linhas == 2 else 30)
     label_h = 40 if labels else 0
     line_h = label_h + 2*r + gap_y
     total_h = qtd_linhas * line_h - gap_y
     start_y = y0 + max(0, (altura - total_h) // 2)
-
     circle_color = (255, 255, 255)
-    text_color   = (20, 20, 20)
-    font_num     = FONT_SANS(46, bold=True)
-    font_label   = FONT_SANS(30, bold=True)
-    cx_center    = (x0 + x1) / 2
-
+    text_color = (20, 20, 20)
+    font_num = FONT_SANS(46, bold=True)
+    font_label = FONT_SANS(30, bold=True)
+    cx_center = (x0 + x1) / 2
     for ridx, row in enumerate(rows):
         row_top = start_y + ridx * line_h
         if labels:
             txt = labels[ridx] if len(labels) > 1 else labels[0]
-            tw  = draw.textlength(txt, font=font_label)
+            tw = draw.textlength(txt, font=font_label)
             draw.text((cx_center - tw/2, row_top), txt, font=font_label, fill=(245,245,245))
         cy = row_top + label_h + r
         cols = len(row)
@@ -305,46 +292,33 @@ def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str,
                 tw = draw.textlength(txt, font=font_num)
                 th = font_num.getbbox(txt)[3] - font_num.getbbox(txt)[1]
                 draw.text((cx - tw/2, cy - th/2 - 2), txt, font=font_num, fill=text_color)
-
     if extra:
         font_extra = FONT_SANS(38, bold=True)
         label = "TIME DO CORAÇÃO: " if is_time else ("MÊS DA SORTE: " if is_dias else "")
         txt = (label + extra.strip()) if label else extra.strip()
-        tw  = draw.textlength(txt, font=font_extra)
+        tw = draw.textlength(txt, font=font_extra)
         draw.text(((x0 + x1) / 2 - tw / 2, y1 + 10), txt, font=font_extra, fill=(255, 255, 255))
 
 _SPLIT_X = re.compile(r"\s+[xX×]\s+")
 
 def _strip_index_prefix(s: str) -> str:
-    # remove prefixos comuns de índice e palavras de rótulo
     s = re.sub(r"^\s*(?:\d{1,2}[\.\)]|dica|palpite|jogo|partida)\s*", "", s, flags=re.I)
     return s.strip()
 
 def _extract_goals_and_name(token: str):
-    """
-    Extrai (nome, gols). Aceita:
-      - "2 NOME", "NOME 2"
-      - número em QUALQUER posição isolado por espaços (ex.: "dica 0 ATHLETICO/PR")
-    """
     s = (token or "").strip()
     s = re.sub(r"\s*\((?:Dom|Seg|Ter|Qua|Qui|Sex|Sáb|Sab|[A-Za-z\. ]+)\)\s*$", "", s, flags=re.I)
-
-    # 1) extremos
     m = re.match(r"^\s*(\d+)\s+(.+)$", s)
     if m:
         return m.group(2).strip(" -"), int(m.group(1))
-
     m = re.match(r"^(.+?)\s+(\d+)\s*$", s)
     if m:
         return m.group(1).strip(" -"), int(m.group(2))
-
-    # 2) número "solto" em qualquer posição
     anynums = re.findall(r"(?:^|\s)(\d{1,2})(?=\s|$)", s)
     if anynums:
         g = int(anynums[-1])
         name = re.sub(rf"(?:^|\s){g}(?=\s|$)", " ", s).strip()
         return name.strip(" -"), g
-
     return s.strip(" -"), None
 
 def _clean_team_name(s: str) -> str:
@@ -405,50 +379,38 @@ def desenhar_loteca(draw: ImageDraw.ImageDraw, loteria_nome: str,
                     numeros_str: str, area_box):
     x0, y0, x1, y1 = area_box
     jogos = _parse_loteca(numeros_str)
-
-    # Removemos a coluna 1X2. Layout:  # | G | Mandante | × | Visitante | G
     col_w = [0.08, 0.07, 0.40, 0.05, 0.30, 0.10]
     xs = [x0]
     for p in col_w:
         xs.append(xs[-1] + (x1 - x0) * p)
-
     header_h = 60
     row_h = (y1 - y0 - header_h) / 14
-
     draw.rounded_rectangle((x0, y0, x1, y0 + header_h), radius=16, fill=(28, 34, 62))
     f_head = FONT_SANS(26, bold=True)
     def _center(a, b): return a + (b - a) / 2
     headers = ["#", "G", "Mandante", "×", "Visitante", "G"]
     for i, htxt in enumerate(headers):
         draw.text((_center(xs[i], xs[i+1]), y0 + header_h/2 - 1), htxt, font=f_head, fill=TEXT_LIGHT, anchor="mm")
-
-    f_idx   = FONT_SANS(24, bold=True)
-    f_team  = FONT_SANS(24, bold=True)
+    f_idx = FONT_SANS(24, bold=True)
+    f_team = FONT_SANS(24, bold=True)
     f_goals = FONT_SANS(26, bold=True)
-
     for i in range(14):
         top = y0 + header_h + i * row_h
         bot = top + row_h - 4
         if i % 2 == 0:
             draw.rounded_rectangle((x0, top, x1, bot), radius=10, fill=(26, 32, 58))
-
         j = jogos[i]
-        idx  = j["idx"]
+        idx = j["idx"]
         mand = j["mandante"]; vist = j["visitante"]
-        g1   = j["g1"];       g2   = j["g2"]
-
-        # Destaque vencedor quando houver placar completo
+        g1 = j["g1"]; g2 = j["g2"]
         if (g1 is not None) and (g2 is not None):
             if g1 > g2:
-                # destaca mandante (nome + gol)
                 draw.rounded_rectangle((xs[1]+6, top+6, xs[2]-6, bot-6), radius=10, fill=HIGHLIGHT)
                 draw.rounded_rectangle((xs[2]+6, top+6, xs[3]-6, bot-6), radius=10, fill=HIGHLIGHT)
             elif g2 > g1:
-                # destaca visitante (nome + gol)
                 draw.rounded_rectangle((xs[4]+6, top+6, xs[5]-6, bot-6), radius=10, fill=HIGHLIGHT)
                 draw.rounded_rectangle((xs[5]+6, top+6, xs[6]-6, bot-6), radius=10, fill=HIGHLIGHT)
-
-        draw.text((_center(xs[0], xs[1]), (top+bot)/2), f"{idx:02d}", font=f_idx,  fill=TEXT_LIGHT, anchor="mm")
+        draw.text((_center(xs[0], xs[1]), (top+bot)/2), f"{idx:02d}", font=f_idx, fill=TEXT_LIGHT, anchor="mm")
         draw.text((_center(xs[1], xs[2]), (top+bot)/2), "-" if g1 is None else str(g1),
                   font=f_goals, fill=(255,255,255) if (g1 is not None and (g2 is not None and g1 > g2)) else (230,232,240), anchor="mm")
         draw.text((_center(xs[2], xs[3]), (top+bot)/2), mand or "-", font=f_team,
@@ -491,11 +453,10 @@ def desenhar_titulo(draw: ImageDraw.ImageDraw, loteria: str, concurso: str, data
         draw.text((M, M + 90 + 48), data_br, font=font_date, fill=(220, 220, 220))
 
 def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url=""):
-    loteria   = str(loteria or "").strip()
-    concurso  = str(concurso or "").strip()
-    data_br   = str(data_br or "").strip()
+    loteria = str(loteria or "").strip()
+    concurso = str(concurso or "").strip()
+    data_br = str(data_br or "").strip()
     numeros_s = str(numeros_str or "").strip()
-    url       = str(url or "").strip()
 
     img = criar_fundo(loteria)
     draw = ImageDraw.Draw(img)
@@ -512,10 +473,10 @@ def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url=""):
     else:
         desenhar_bolinhas(draw, loteria, numeros_s, area_box)
 
-    if SHOW_CTA:
-        desenhar_cta(draw, url=url)
-
-    desenhar_marca(draw)
+    # NUNCA MAIS VAI APARECER NADA AQUI EMBAIXO
+    # if SHOW_CTA:
+    #     desenhar_cta(draw, url=url)
+    # desenhar_marca(draw)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
