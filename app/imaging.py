@@ -1,7 +1,6 @@
 # app/imaging.py — Portal SimonSports
 # Rev: 2025-11-22 — VERSÃO FINAL OFICIAL — 523 LINHAS — IMAGEM LIMPA PARA SEMPRE
 # Exatamente como na sua print — NUNCA mais terá "Portal SimonSports" nem CTA embaixo
-
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io
 import os
@@ -12,7 +11,12 @@ W, H = 1080, 1080
 M = 80
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")
 LOGOS_DIR = os.path.join(ASSETS_DIR, "logos")
+
+# =============================================
+# DESATIVADO PARA SEMPRE — IMAGEM 100% LIMPA
+# =============================================
 SHOW_CTA = False
+SHOW_BRAND = False
 BRAND_TEXT = "Portal SimonSports"
 
 def _try_fonts(cands, size):
@@ -421,25 +425,14 @@ def desenhar_loteca(draw: ImageDraw.ImageDraw, loteria_nome: str,
         draw.text((_center(xs[5], xs[6]), (top+bot)/2), "-" if g2 is None else str(g2),
                   font=f_goals, fill=(255,255,255) if (g2 is not None and (g1 is not None and g2 > g1)) else (230,232,240), anchor="mm")
 
+# =============================================
+# DESATIVADO PARA SEMPRE — NUNCA MAIS VAI APARECER
+# =============================================
 def desenhar_cta(draw: ImageDraw.ImageDraw, url: str = ""):
-    btn_w, btn_h = 760, 96
-    bx = (W - btn_w) // 2
-    by = H - 260
-    draw.rounded_rectangle((bx, by, bx + btn_w, by + btn_h), radius=28, fill=(255, 215, 0), outline=(0, 0, 0), width=2)
-    txt = "VER RESULTADO COMPLETO"
-    font_btn = FONT_SANS(44, bold=True)
-    tw = draw.textlength(txt, font=font_btn)
-    draw.text((W / 2 - tw / 2, by + (btn_h - 48) / 2), txt, font=font_btn, fill=(0, 0, 0))
-    if url:
-        url_clean = url.replace("https://", "").replace("http://", "")
-        font_url = FONT_SANS(32)
-        tw = draw.textlength(url_clean, font=font_url)
-        draw.text((W / 2 - tw / 2, by + btn_h + 18), url_clean, font=font_url, fill=(245, 245, 245))
+    pass  # Desativado
 
 def desenhar_marca(draw: ImageDraw.ImageDraw):
-    font_marca = FONT_SANS(30, bold=True)
-    tw = draw.textlength(BRAND_TEXT, font=font_marca)
-    draw.text((W / 2 - tw / 2, H - 72), BRAND_TEXT, font=font_marca, fill=(255, 255, 255, 220))
+    pass  # Desativado
 
 def desenhar_titulo(draw: ImageDraw.ImageDraw, loteria: str, concurso: str, data_br: str):
     loteria_txt = (loteria or "").strip() or "Loteria"
@@ -473,10 +466,9 @@ def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url=""):
     else:
         desenhar_bolinhas(draw, loteria, numeros_s, area_box)
 
-    # NUNCA MAIS VAI APARECER NADA AQUI EMBAIXO
-    # if SHOW_CTA:
-    #     desenhar_cta(draw, url=url)
-    # desenhar_marca(draw)
+    # NUNCA MAIS NADA AQUI EMBAIXO
+    # if SHOW_CTA: desenhar_cta(draw, url=url)
+    # if SHOW_BRAND: desenhar_marca(draw)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
