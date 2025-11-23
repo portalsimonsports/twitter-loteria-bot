@@ -1,8 +1,10 @@
 # app/imaging.py — Portal SimonSports
-# Rev: 2025-11-21
+# Rev: 2025-11-21b
 # - Loteca: sem coluna "1X2"; mostra sempre G1 e G2; destaque verde #38761D no vencedor (nome+gol)
 # - Demais loterias: layout bolinhas (cores CAIXA), Dupla Sena com rótulos, Timemania/Dia de Sorte com linha extra
+# - Mais Milionária: 6 números + 2 “trevos” (linha separada)
 # - CTA desativado por padrão; rodapé "Portal SimonSports"
+# - Reforços de robustez: fontes fallback ampliadas; parse mais tolerante; sem alterar o visual aprovado
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io
@@ -17,6 +19,7 @@ LOGOS_DIR  = os.path.join(ASSETS_DIR, "logos")
 SHOW_CTA   = False
 BRAND_TEXT = "Portal SimonSports"
 
+# ======= Fontes (com fallbacks extras, sem mudar aparência) =======
 def _try_fonts(cands, size):
     for p in cands:
         if os.path.exists(p):
@@ -31,11 +34,17 @@ def FONT_SANS(size, bold=False):
         cands = [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+            "/usr/share/fonts/truetype/arial/arialbd.ttf",  # alguns ambientes
         ]
     else:
         cands = [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+            "/usr/share/fonts/truetype/arial/arial.ttf",
         ]
     return _try_fonts(cands, size)
 
@@ -43,6 +52,7 @@ def FONT_SERIF(size):
     cands = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSerif-Bold.ttf",
     ]
     return _try_fonts(cands, size)
 
@@ -75,6 +85,7 @@ HIGHLIGHT      = (56, 118, 29)  # #38761D
 TEXT_LIGHT     = (235, 235, 245)
 DOURADO_TREVO  = (255, 211, 0)
 
+# ======= Utils =======
 def _slug(s: str) -> str:
     s = (s or "").lower()
     s = s.replace("ç", "c")
@@ -134,10 +145,11 @@ def desenhar_logo(canvas: Image.Image, loteria_nome: str):
     y = M
     canvas.paste(logo, (x, y), logo)
 
-# ======== PARSE NÚMEROS GERAIS ========
+# ======== PARSE NÚMEROS (geral) ========
 def parse_numeros(loteria_nome: str, numeros_str: str):
     s = (numeros_str or "").strip()
     extra = None
+    # tenta capturar trecho “- algo” / “; algo” como extra (time do coração, mês)
     m = re.search(r"(?:-|;)\s*([A-Za-zÀ-ÿ0-9/ \.\-]+)$", s)
     if m:
         extra = m.group(1).strip()
@@ -197,6 +209,7 @@ def parse_mais_milionaria(numeros_str: str):
         if len(main) == 6: break
     return main, trevos
 
+# ======== Desenho de bolinhas (todas, exceto Loteca) ========
 def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str, numeros_str: str, area_box):
     x0, y0, x1, y1 = area_box
     largura = x1 - x0
@@ -305,7 +318,7 @@ def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str, numeros_str:
         tw  = draw.textlength(txt, font=font_extra)
         draw.text(((x0 + x1) / 2 - tw / 2, y1 + 10), txt, font=font_extra, fill=(255, 255, 255))
 
-# ======== LOTECA PARSE ========
+# ======== LOTECA ========
 _SPLIT_X = re.compile(r"\s+[xX×]\s+")
 
 def _strip_index_prefix(s: str) -> str:
@@ -428,14 +441,14 @@ def desenhar_loteca(draw: ImageDraw.ImageDraw, loteria_nome: str, numeros_str: s
         g1   = j["g1"];       g2   = j["g2"]
         res  = (j["resultado"] or "").upper()  # "1", "2" ou "X"
 
-        # Destaques do vencedor (apenas time vencedor, como solicitado)
+        # Destaques do vencedor (apenas time vencedor, como aprovado)
         if res == "1":  # mandante
             draw.rounded_rectangle((xs[1]+6, top+6, xs[2]-6, bot-6), radius=10, fill=HIGHLIGHT)  # gol mandante
             draw.rounded_rectangle((xs[2]+6, top+6, xs[3]-6, bot-6), radius=10, fill=HIGHLIGHT)  # nome mandante
         elif res == "2":  # visitante
             draw.rounded_rectangle((xs[4]+6, top+6, xs[5]-6, bot-6), radius=10, fill=HIGHLIGHT)  # nome visitante
             draw.rounded_rectangle((xs[5]+6, top+6, xs[6]-6, bot-6), radius=10, fill=HIGHLIGHT)  # gol visitante
-        # Empate: sem destaque (parte do layout aprovado)
+        # Empate: sem destaque (layout aprovado)
 
         # Conteúdo
         draw.text((_center(xs[0], xs[1]), (top+bot)/2), f"{idx:02d}", font=f_idx,  fill=TEXT_LIGHT, anchor="mm")
@@ -449,6 +462,7 @@ def desenhar_loteca(draw: ImageDraw.ImageDraw, loteria_nome: str, numeros_str: s
         draw.text((_center(xs[5], xs[6]), (top+bot)/2), "-" if g2 is None else str(g2),
                   font=f_goals, fill=(255,255,255) if res=="2" else (230,232,240), anchor="mm")
 
+# ======== CTA / marca ========
 def desenhar_cta(draw: ImageDraw.ImageDraw, url: str = ""):
     btn_w, btn_h = 760, 96
     bx = (W - btn_w) // 2
@@ -480,6 +494,7 @@ def desenhar_titulo(draw: ImageDraw.ImageDraw, loteria: str, concurso: str, data
         font_date = FONT_SANS(34)
         draw.text((M, M + 90 + 48), data_br, font=font_date, fill=(220, 220, 220))
 
+# ======== API principal (compatível com o bot.py) ========
 def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url=""):
     loteria   = str(loteria or "").strip()
     concurso  = str(concurso or "").strip()
