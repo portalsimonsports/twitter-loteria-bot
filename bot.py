@@ -1,5 +1,5 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-21b — “Tudo em 1 publicação”: imagem + texto com E/P/Q
+# Rev: 2025-11-21c — “Tudo em 1 publicação”: imagem + bloco E/P/Q com texto completo
 #  - Mantém: SEM filtro de datas | Ignora “Enfileirado” | Marca planilha por rede
 #  - X: pode postar em 1 ou 2 contas o MESMO conteúdo; evita duplicados por cache
 #  - Facebook / Telegram / Discord / Pinterest: legenda usa o mesmo texto (quando não IMAGE_ONLY)
@@ -72,7 +72,7 @@ X_POST_IN_ALL_ACCOUNTS = os.getenv("X_POST_IN_ALL_ACCOUNTS", "true").strip().low
 POST_X_WITH_IMAGE      = os.getenv("POST_X_WITH_IMAGE", "true").strip().lower() == "true"
 COL_STATUS_X           = int(os.getenv("COL_STATUS_X", "8"))  # H
 
-# (Mantido para compat – mas desativamos reply abaixo para “tudo em 1 post”)
+# (Mantido para compat – mas desativado: “tudo em 1 post”)
 X_REPLY_WITH_LINK_BELOW = os.getenv("X_REPLY_WITH_LINK_BELOW", "false").strip().lower() == "true"
 TELEGRAM_CHANNELS_BELOW = os.getenv("TELEGRAM_CHANNELS_BELOW", "").strip()
 X_REPLY_FOOTER          = os.getenv("X_REPLY_FOOTER", "").strip()
@@ -94,9 +94,9 @@ COL_STATUS_DISCORD   = int(os.getenv("COL_STATUS_DISCORD", "13"))  # M
 DISCORD_WEBHOOKS     = [s.strip() for s in os.getenv("DISCORD_WEBHOOKS", "").split(",") if s.strip()]
 
 # ===== Pinterest =====
-COL_STATUS_PINTEREST   = int(os.getenv("COL_STATUS_PINTEREST", "14"))  # N
-PINTEREST_ACCESS_TOKEN = os.getenv("PINTEREST_ACCESS_TOKEN", "").strip()
-PINTEREST_BOARD_ID     = os.getenv("PINTEREST_BOARD_ID", "").strip()
+COL_STATUS_PINTEREST     = int(os.getenv("COL_STATUS_PINTEREST", "14"))  # N
+PINTEREST_ACCESS_TOKEN   = os.getenv("PINTEREST_ACCESS_TOKEN", "").strip()
+PINTEREST_BOARD_ID       = os.getenv("PINTEREST_BOARD_ID", "").strip()
 POST_PINTEREST_WITH_IMAGE = os.getenv("POST_PINTEREST_WITH_IMAGE", "true").strip().lower() == "true"
 
 # ===== KIT (HTML/CSS) / saída =====
@@ -131,7 +131,7 @@ BOT_ORIGEM = _detect_origem()
 COL_LOTERIA, COL_CONCURSO, COL_DATA, COL_NUMEROS, COL_URL = 1, 2, 3, 4, 5
 COL_URL_IMAGEM, COL_IMAGEM = 6, 7  # opcionais
 
-# >>> NOVO: Canais do Telegram (P e Q)
+# Canais do Telegram (P e Q)
 COL_TG_DICAS  = 16  # P = "Dicas esportivas"
 COL_TG_PORTAL = 17  # Q = "Portal SimonSports"
 
@@ -165,9 +165,6 @@ def _is_empty_status(v):
     for ch in ["\u200B", "\u200C", "\u200D", "\uFEFF", "\u2060"]:
         s = s.replace(ch, "")
     return s == ""
-
-def _join_nonempty(lines):
-    return "\n".join([str(s) for s in lines if s and str(s).strip()])
 
 # =========================
 # Planilhas Google
@@ -289,30 +286,42 @@ def _build_image_from_row(row):
 # =========================
 # Texto (tweet/post/legenda) — TUDO EM 1 POST
 # =========================
+DEFAULT_TG_DICAS   = "t.me/portalsimonsportsdicasesportivas"
+DEFAULT_TG_PORTAL  = "t.me/portalsimonsports"
+
 def montar_texto_base(row) -> str:
     """
-    Texto ÚNICO da publicação (vai junto da imagem):
-      Linha 1: 'Resultado completo aqui >>>'
-      Linha 2: link do resultado (coluna E)
-      Linha 3: link do canal 'Dicas esportivas' (coluna P), se houver
-      Linha 4: link do canal 'Portal SimonSports' (coluna Q), se houver
+    Texto ÚNICO da publicação (vai junto da imagem) — EXACT wording:
+    Resultado completo aqui >>>>
+    {url}
 
-    OBS: Protege o limite do X (280 chars) preservando header + E; corta P/Q se necessário.
+    Palpites quentes soltos AGORA
+    Inscreva-se no canal de dicas:
+    {dicas}
+
+    Todas as notícias e resultados do portal
+    Inscreva-se no canal oficial:
+    {portal}
+
+    Tá rolando palpite quente agora!
     """
     url    = (row[COL_URL - 1]       if _safe_len(row, COL_URL)       else "").strip()
-    dicas  = (row[COL_TG_DICAS - 1]  if _safe_len(row, COL_TG_DICAS)  else "").strip()
-    portal = (row[COL_TG_PORTAL - 1] if _safe_len(row, COL_TG_PORTAL) else "").strip()
+    dicas  = (row[COL_TG_DICAS - 1]  if _safe_len(row, COL_TG_DICAS)  else "").strip() or DEFAULT_TG_DICAS
+    portal = (row[COL_TG_PORTAL - 1] if _safe_len(row, COL_TG_PORTAL) else "").strip() or DEFAULT_TG_PORTAL
 
-    header = "Resultado completo aqui >>>" if url else ""
-    full   = _join_nonempty([header, url, dicas, portal]).strip()
+    bloco = f"""Resultado completo aqui >>>>
+{url}
 
-    if len(full) > 270:  # margem de segurança
-        base  = _join_nonempty([header, url])
-        resto = _join_nonempty([dicas, portal])
-        keep  = 270 - len(base) - 1
-        full  = base if keep <= 0 or not resto else base + "\n" + resto[:keep]
+Palpites quentes soltos AGORA
+Inscreva-se no canal de dicas:
+{dicas}
 
-    return full
+Todas as notícias e resultados do portal
+Inscreva-se no canal oficial:
+{portal}
+
+Tá rolando palpite quente agora!"""
+    return bloco.strip()
 
 def _build_reply_block(row) -> str:
     """
@@ -479,7 +488,7 @@ def publicar_em_x(ws, candidatos):
     acc_idx = 0
     limite = min(MAX_PUBLICACOES_RODADA, len(candidatos))
     mode_cfg = get_text_mode("X")
-    # >>> Força “tudo em 1 post” (imagem + texto). Se quiser voltar ao reply, troque para: X_REPLY_WITH_LINK_BELOW
+    # Força “tudo em 1 post” (imagem + texto). Para voltar ao reply, troque a flag abaixo.
     reply_below = False
 
     for rownum, row in candidatos[:limite]:
@@ -905,3 +914,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+```0
