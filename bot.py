@@ -1,4 +1,4 @@
-# bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
+de# bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
 # Rev: 2025-11-21c — “Tudo em 1 publicação”: imagem + bloco E/P/Q com texto completo
 #  - Mantém: SEM filtro de datas | Ignora “Enfileirado” | Marca planilha por rede
 #  - X: pode postar em 1 ou 2 contas o MESMO conteúdo; evita duplicados por cache
@@ -914,4 +914,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```0
