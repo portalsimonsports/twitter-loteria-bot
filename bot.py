@@ -1,9 +1,8 @@
-de# bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-21c — “Tudo em 1 publicação”: imagem + bloco E/P/Q com texto completo
-#  - Mantém: SEM filtro de datas | Ignora “Enfileirado” | Marca planilha por rede
-#  - X: pode postar em 1 ou 2 contas o MESMO conteúdo; evita duplicados por cache
-#  - Facebook / Telegram / Discord / Pinterest: legenda usa o mesmo texto (quando não IMAGE_ONLY)
-#  - Imagem: prioriza KIT (/output) se USE_KIT_IMAGE_FIRST=true; senão usa app.imaging.gerar_imagem_loteria()
+# bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
+# Rev: 2025-11-21c — Texto único na publicação (E/P/Q) + arquivo sanitizado (sem caracteres invisíveis)
+# - Mantém: SEM filtro de datas | Ignora “Enfileirado” | Marca planilha por rede
+# - X: posta igual em 1 ou 2 contas; só marca quando TODAS concluírem; evita duplicados por cache
+# - Imagem: prioriza KIT (/output) se USE_KIT_IMAGE_FIRST=true; senão usa app.imaging.gerar_imagem_loteria()
 
 import os
 import re
@@ -20,15 +19,15 @@ from threading import Thread
 from collections import defaultdict
 from dotenv import load_dotenv
 
-# Planilhas Google
+# Google Sheets
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Imagem oficial (padrão aprovado)
+# Imagem oficial (layout aprovado)
 from app.imaging import gerar_imagem_loteria
 
 # =========================
-# CONFIGURAÇÃO / AMBIENTE
+# CONFIG / AMBIENTE
 # =========================
 
 load_dotenv()
@@ -37,18 +36,16 @@ TZ = pytz.timezone("America/Sao_Paulo")
 SHEET_ID  = os.getenv("GOOGLE_SHEET_ID", "").strip()
 SHEET_TAB = os.getenv("SHEET_TAB", "ImportadosBlogger2").strip()
 
-# Redes alvo (X, FACEBOOK, TELEGRAM, DISCORD, PINTEREST)
 TARGET_NETWORKS = [
     s.strip().upper()
     for s in os.getenv("TARGET_NETWORKS", "X").split(",")
     if s.strip()
 ]
 
-# Compat / flags
 DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
 
-# ===== Modo de TEXTO (GLOBAL e por rede) =====
-GLOBAL_TEXT_MODE      = (os.getenv("GLOBAL_TEXT_MODE", "") or "").strip().upper()  # opcional
+# ===== Modo de TEXTO
+GLOBAL_TEXT_MODE      = (os.getenv("GLOBAL_TEXT_MODE", "") or "").strip().upper()
 X_TEXT_MODE           = (os.getenv("X_TEXT_MODE", "") or "").strip().upper()
 FACEBOOK_TEXT_MODE    = (os.getenv("FACEBOOK_TEXT_MODE", "") or "").strip().upper()
 TELEGRAM_TEXT_MODE    = (os.getenv("TELEGRAM_TEXT_MODE", "") or os.getenv("MODO_TEXTO_TELEGRAM", "") or "").strip().upper()
@@ -67,44 +64,44 @@ def get_text_mode(rede: str) -> str:
     mode = (specific or GLOBAL_TEXT_MODE or "TEXT_AND_IMAGE").upper()
     return mode if mode in VALID_TEXT_MODES else "TEXT_AND_IMAGE"
 
-# ===== X (Twitter) =====
+# ===== X (Twitter)
 X_POST_IN_ALL_ACCOUNTS = os.getenv("X_POST_IN_ALL_ACCOUNTS", "true").strip().lower() == "true"
 POST_X_WITH_IMAGE      = os.getenv("POST_X_WITH_IMAGE", "true").strip().lower() == "true"
 COL_STATUS_X           = int(os.getenv("COL_STATUS_X", "8"))  # H
 
-# (Mantido para compat – mas desativado: “tudo em 1 post”)
-X_REPLY_WITH_LINK_BELOW = os.getenv("X_REPLY_WITH_LINK_BELOW", "false").strip().lower() == "true"
-TELEGRAM_CHANNELS_BELOW = os.getenv("TELEGRAM_CHANNELS_BELOW", "").strip()
-X_REPLY_FOOTER          = os.getenv("X_REPLY_FOOTER", "").strip()
+# Mantido por compat (reply desativado, “tudo em 1 post”)
+X_REPLY_WITH_LINK_BELOW = False
+TELEGRAM_CHANNELS_BELOW = (os.getenv("TELEGRAM_CHANNELS_BELOW", "") or "").strip()
+X_REPLY_FOOTER          = (os.getenv("X_REPLY_FOOTER", "") or "").strip()
 
-# ===== Facebook (Páginas) =====
+# ===== Facebook
 POST_FB_WITH_IMAGE   = os.getenv("POST_FB_WITH_IMAGE", "true").strip().lower() == "true"
 COL_STATUS_FACEBOOK  = int(os.getenv("COL_STATUS_FACEBOOK", "15"))  # O
 FB_PAGE_IDS          = [s.strip() for s in os.getenv("FB_PAGE_IDS", os.getenv("FB_PAGE_ID", "")).split(",") if s.strip()]
 FB_PAGE_TOKENS       = [s.strip() for s in os.getenv("FB_PAGE_TOKENS", os.getenv("FB_PAGE_TOKEN", "")).split(",") if s.strip()]
 
-# ===== Telegram =====
+# ===== Telegram
 POST_TG_WITH_IMAGE   = os.getenv("POST_TG_WITH_IMAGE", "true").strip().lower() == "true"
 COL_STATUS_TELEGRAM  = int(os.getenv("COL_STATUS_TELEGRAM", "10"))  # J
 TG_BOT_TOKEN         = os.getenv("TG_BOT_TOKEN", "").strip()
 TG_CHAT_IDS          = [s.strip() for s in os.getenv("TG_CHAT_IDS", "").split(",") if s.strip()]
 
-# ===== Discord =====
+# ===== Discord
 COL_STATUS_DISCORD   = int(os.getenv("COL_STATUS_DISCORD", "13"))  # M
 DISCORD_WEBHOOKS     = [s.strip() for s in os.getenv("DISCORD_WEBHOOKS", "").split(",") if s.strip()]
 
-# ===== Pinterest =====
-COL_STATUS_PINTEREST     = int(os.getenv("COL_STATUS_PINTEREST", "14"))  # N
-PINTEREST_ACCESS_TOKEN   = os.getenv("PINTEREST_ACCESS_TOKEN", "").strip()
-PINTEREST_BOARD_ID       = os.getenv("PINTEREST_BOARD_ID", "").strip()
+# ===== Pinterest
+COL_STATUS_PINTEREST   = int(os.getenv("COL_STATUS_PINTEREST", "14"))  # N
+PINTEREST_ACCESS_TOKEN = os.getenv("PINTEREST_ACCESS_TOKEN", "").strip()
+PINTEREST_BOARD_ID     = os.getenv("PINTEREST_BOARD_ID", "").strip()
 POST_PINTEREST_WITH_IMAGE = os.getenv("POST_PINTEREST_WITH_IMAGE", "true").strip().lower() == "true"
 
-# ===== KIT (HTML/CSS) / saída =====
+# ===== KIT (HTML/CSS) / saída
 USE_KIT_IMAGE_FIRST = os.getenv("USE_KIT_IMAGE_FIRST", "false").strip().lower() == "true"
 KIT_OUTPUT_DIR      = os.getenv("KIT_OUTPUT_DIR", "output").strip()
 PUBLIC_BASE_URL     = os.getenv("PUBLIC_BASE_URL", "").strip()  # reservado
 
-# ===== Keepalive =====
+# ===== Keepalive
 ENABLE_KEEPALIVE = os.getenv("ENABLE_KEEPALIVE", "false").strip().lower() == "true"
 KEEPALIVE_PORT   = int(os.getenv("KEEPALIVE_PORT", "8080"))
 
@@ -132,8 +129,8 @@ COL_LOTERIA, COL_CONCURSO, COL_DATA, COL_NUMEROS, COL_URL = 1, 2, 3, 4, 5
 COL_URL_IMAGEM, COL_IMAGEM = 6, 7  # opcionais
 
 # Canais do Telegram (P e Q)
-COL_TG_DICAS  = 16  # P = "Dicas esportivas"
-COL_TG_PORTAL = 17  # Q = "Portal SimonSports"
+COL_TG_DICAS  = 16  # P
+COL_TG_PORTAL = 17  # Q
 
 COL_STATUS_REDES = {
     "X": COL_STATUS_X,               # H
@@ -142,6 +139,10 @@ COL_STATUS_REDES = {
     "DISCORD": COL_STATUS_DISCORD,   # M
     "PINTEREST": COL_STATUS_PINTEREST# N
 }
+
+# Defaults dos canais (se P/Q estiverem vazios)
+DEFAULT_TG_DICAS  = "t.me/portalsimonsportsdicasesportivas"
+DEFAULT_TG_PORTAL = "t.me/portalsimonsports"
 
 # =========================
 # Utilitários
@@ -166,8 +167,11 @@ def _is_empty_status(v):
         s = s.replace(ch, "")
     return s == ""
 
+def _join_nonempty(lines):
+    return "\n".join([str(s) for s in lines if s and str(s).strip()])
+
 # =========================
-# Planilhas Google
+# Google Sheets
 # =========================
 def _gs_client():
     sa_json = os.getenv("GOOGLE_SERVICE_JSON", "").strip()
@@ -238,7 +242,7 @@ def _guess_slug(name: str) -> str:
     return _slugify(name or "loteria")
 
 # =========================
-# IMAGEM: KIT / saída -> imagem oficial.py
+# IMAGEM: KIT / oficial
 # =========================
 def _try_load_kit_image(row):
     if not USE_KIT_IMAGE_FIRST:
@@ -284,24 +288,22 @@ def _build_image_from_row(row):
     return gerar_imagem_loteria(str(loteria), str(concurso), str(data_br), str(numeros), str(url_res))
 
 # =========================
-# Texto (tweet/post/legenda) — TUDO EM 1 POST
+# Texto ÚNICO (vai junto da imagem) — E/P/Q
 # =========================
-DEFAULT_TG_DICAS   = "t.me/portalsimonsportsdicasesportivas"
-DEFAULT_TG_PORTAL  = "t.me/portalsimonsports"
-
 def montar_texto_base(row) -> str:
     """
-    Texto ÚNICO da publicação (vai junto da imagem) — EXACT wording:
+    Bloco único exigido pelo Portal SimonSports:
+
     Resultado completo aqui >>>>
     {url}
 
     Palpites quentes soltos AGORA
     Inscreva-se no canal de dicas:
-    {dicas}
+    {canal_dicas}
 
     Todas as notícias e resultados do portal
     Inscreva-se no canal oficial:
-    {portal}
+    {canal_portal}
 
     Tá rolando palpite quente agora!
     """
@@ -309,24 +311,27 @@ def montar_texto_base(row) -> str:
     dicas  = (row[COL_TG_DICAS - 1]  if _safe_len(row, COL_TG_DICAS)  else "").strip() or DEFAULT_TG_DICAS
     portal = (row[COL_TG_PORTAL - 1] if _safe_len(row, COL_TG_PORTAL) else "").strip() or DEFAULT_TG_PORTAL
 
-    bloco = f"""Resultado completo aqui >>>>
-{url}
+    # Monta com as quebras exatamente como solicitado
+    txt = (
+        "Resultado completo aqui >>>>\n"
+        f"{url}\n\n"
+        "Palpites quentes soltos AGORA\n"
+        "Inscreva-se no canal de dicas:\n"
+        f"{dicas}\n\n"
+        "Todas as notícias e resultados do portal\n"
+        "Inscreva-se no canal oficial:\n"
+        f"{portal}\n\n"
+        "Tá rolando palpite quente agora!"
+    ).strip()
 
-Palpites quentes soltos AGORA
-Inscreva-se no canal de dicas:
-{dicas}
-
-Todas as notícias e resultados do portal
-Inscreva-se no canal oficial:
-{portal}
-
-Tá rolando palpite quente agora!"""
-    return bloco.strip()
+    # Segurança: se o texto estourar o limite do X por algum motivo (ex.: URL muito longa),
+    # cortamos o final mantendo o bloco principal.
+    if len(txt) > 275:  # margem
+        txt = txt[:275]
+    return txt
 
 def _build_reply_block(row) -> str:
-    """
-    (Mantido por compat; não usado quando “tudo em 1 post”)
-    """
+    # Mantido por compat (não usado quando “tudo em 1 post”)
     parts = []
     link = (row[COL_URL - 1] if _safe_len(row, COL_URL) else "").strip()
     if link:
@@ -338,7 +343,7 @@ def _build_reply_block(row) -> str:
     return "\n".join([p for p in parts if p])
 
 # =========================
-# Coleta de linhas candidatas (por REDE)
+# Coleta candidatas
 # =========================
 def coleta_candidatos_para(ws, rede: str):
     linhas = ws.get_all_values()
@@ -373,7 +378,7 @@ def coleta_candidatos_para(ws, rede: str):
     return cand
 
 # =========================
-# Publicadores por REDE
+# Publicadores
 # =========================
 # --- X (Twitter) ---
 TW1 = {
@@ -488,8 +493,7 @@ def publicar_em_x(ws, candidatos):
     acc_idx = 0
     limite = min(MAX_PUBLICACOES_RODADA, len(candidatos))
     mode_cfg = get_text_mode("X")
-    # Força “tudo em 1 post” (imagem + texto). Para voltar ao reply, troque a flag abaixo.
-    reply_below = False
+    reply_below = X_REPLY_WITH_LINK_BELOW  # False (tudo em 1 post)
 
     for rownum, row in candidatos[:limite]:
         texto_full = montar_texto_base(row)
@@ -871,7 +875,7 @@ def main():
         "Iniciando bot...",
         f"Origem={BOT_ORIGEM} | Redes={','.join(TARGET_NETWORKS)} | DRY_RUN={DRY_RUN} | "
         f"GLOBAL_TEXT_MODE={GLOBAL_TEXT_MODE or '-'} | KIT_FIRST={USE_KIT_IMAGE_FIRST} | "
-        f"X_REPLY_WITH_LINK_BELOW={'false (forçado 1 post)' if not X_REPLY_WITH_LINK_BELOW else 'true'}"
+        f"X_REPLY_WITH_LINK_BELOW={'true' if X_REPLY_WITH_LINK_BELOW else 'false (1 post)'}"
     )
 
     keepalive_thread = iniciar_keepalive() if ENABLE_KEEPALIVE else None
