@@ -315,13 +315,13 @@ def montar_texto_base(row) -> str:
     txt = (
         "Resultado completo aqui >>>>\n"
         f"{url}\n\n"
-        "Palpites quentes soltos AGORA\n"
-        "Inscreva-se no canal de dicas:\n"
+        "Palpites quentes AGORA\n"
+        "Inscreva-se :\n"
         f"{dicas}\n\n"
-        "Todas as notícias e resultados do portal\n"
+        "Todas as notícias do portal\n"
         "Inscreva-se no canal oficial:\n"
         f"{portal}\n\n"
-        "Tá rolando palpite quente agora!"
+        "" 
     ).strip()
 
     # Segurança: se o texto estourar o limite do X por algum motivo (ex.: URL muito longa),
