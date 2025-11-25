@@ -17,6 +17,7 @@ import requests
 import datetime as dt
 from threading import Thread
 from collections import defaultdict
+from typing import Optional
 from dotenv import load_dotenv
 
 # Google Sheets
@@ -297,21 +298,18 @@ def montar_texto_base(row) -> str:
     Resultado completo aqui >>>>
     {url}
 
-    Palpites quentes soltos AGORA
-    Inscreva-se no canal de dicas:
+    Palpites quentes AGORA
+    Inscreva-se :
     {canal_dicas}
 
-    Todas as notícias e resultados do portal
+    Todas as notícias do portal
     Inscreva-se no canal oficial:
     {canal_portal}
-
-    Tá rolando palpite quente agora!
     """
     url    = (row[COL_URL - 1]       if _safe_len(row, COL_URL)       else "").strip()
     dicas  = (row[COL_TG_DICAS - 1]  if _safe_len(row, COL_TG_DICAS)  else "").strip() or DEFAULT_TG_DICAS
     portal = (row[COL_TG_PORTAL - 1] if _safe_len(row, COL_TG_PORTAL) else "").strip() or DEFAULT_TG_PORTAL
 
-    # Monta com as quebras exatamente como solicitado
     txt = (
         "Resultado completo aqui >>>>\n"
         f"{url}\n\n"
@@ -320,13 +318,11 @@ def montar_texto_base(row) -> str:
         f"{dicas}\n\n"
         "Todas as notícias do portal\n"
         "Inscreva-se no canal oficial:\n"
-        f"{portal}\n\n"
-        "" 
+        f"{portal}"
     ).strip()
 
-    # Segurança: se o texto estourar o limite do X por algum motivo (ex.: URL muito longa),
-    # cortamos o final mantendo o bloco principal.
-    if len(txt) > 275:  # margem
+    # Segurança: garante limite do X
+    if len(txt) > 275:
         txt = txt[:275]
     return txt
 
@@ -573,7 +569,7 @@ def publicar_em_x(ws, candidatos):
     return publicados
 
 # --- Facebook ---
-def _fb_post_text(page_id, page_token, message: str, link: str | None = None):
+def _fb_post_text(page_id, page_token, message: str, link: Optional[str] = None):
     url = f"https://graph.facebook.com/v19.0/{page_id}/feed"
     data = {"message": message, "access_token": page_token}
     if link:
@@ -753,13 +749,13 @@ def publicar_em_discord(ws, candidatos):
 
 # --- Pinterest ---
 def _pinterest_create_pin(
-    token,
-    board_id,
-    title,
-    description,
-    link,
-    image_bytes=None,
-    image_url=None,
+    token: str,
+    board_id: str,
+    title: str,
+    description: str,
+    link: Optional[str],
+    image_bytes: Optional[bytes] = None,
+    image_url: Optional[str] = None,
 ):
     url = "https://api.pinterest.com/v5/pins"
     headers = {"Authorization": f"Bearer {token}"}
@@ -816,6 +812,7 @@ def publicar_em_pinterest(ws, candidatos):
                         desc,
                         url_post,
                         image_bytes=buf.getvalue(),
+                        image_url=None,
                     )
                 else:
                     pin_id = _pinterest_create_pin(
@@ -824,6 +821,7 @@ def publicar_em_pinterest(ws, candidatos):
                         title,
                         desc,
                         url_post,
+                        image_bytes=None,
                         image_url=url_post or None,
                     )
                 _log(f"[Pinterest] OK → {pin_id}")
