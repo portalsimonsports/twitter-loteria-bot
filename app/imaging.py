@@ -1,10 +1,10 @@
 # app/imaging.py — Portal SimonSports
-# Rev: 2025-11-21b
-# - Loteca: sem coluna "1X2"; mostra sempre G1 e G2; destaque verde #38761D no vencedor (nome+gol)
-# - Demais loterias: layout bolinhas (cores CAIXA), Dupla Sena com rótulos, Timemania/Dia de Sorte com linha extra
-# - Mais Milionária: 6 números + 2 “trevos” (linha separada)
-# - CTA desativado por padrão; rodapé "Portal SimonSports"
-# - Reforços de robustez: fontes fallback ampliadas; parse mais tolerante; sem alterar o visual aprovado
+# Rev: 2025-11-22
+# - Novo: Modo "Loteria Federal" (5 prêmios em milhar, zero-pad 5 dígitos)
+# - Logo/cores da Federal com nomes alternativos (federal / loteria-federal)
+# - Mantém: Loteca (sem 1X2, destaque no vencedor), Mais Milionária (6+2),
+#           Dupla Sena com rótulos; Timemania/Dia de Sorte com linha extra
+# - CTA off por padrão; rodapé "Portal SimonSports"; fontes com fallback
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io
@@ -19,7 +19,7 @@ LOGOS_DIR  = os.path.join(ASSETS_DIR, "logos")
 SHOW_CTA   = False
 BRAND_TEXT = "Portal SimonSports"
 
-# ======= Fontes (com fallbacks extras, sem mudar aparência) =======
+# ======= Fontes (com fallbacks, sem mudar aparência) =======
 def _try_fonts(cands, size):
     for p in cands:
         if os.path.exists(p):
@@ -36,7 +36,7 @@ def FONT_SANS(size, bold=False):
             "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
             "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
             "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-            "/usr/share/fonts/truetype/arial/arialbd.ttf",  # alguns ambientes
+            "/usr/share/fonts/truetype/arial/arialbd.ttf",
         ]
     else:
         cands = [
@@ -60,6 +60,7 @@ def hx(h):
     h = h.lstrip('#')
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
+# ======= Cores por loteria (mantidas) =======
 CORES_LOTERIAS = {
     "mega-sena":       hx("#009645"),
     "lotofacil":       hx("#8c1a8a"),
@@ -69,7 +70,10 @@ CORES_LOTERIAS = {
     "timemania":       hx("#ffdd00"),
     "dupla-sena":      hx("#c41c3a"),
     "dupla sena":      hx("#c41c3a"),
+    # Federal: inclui sinônimos/slugs para pegar cor certa independente do texto/arquivo
     "federal":         hx("#00a0b0"),
+    "loteria-federal": hx("#00a0b0"),
+    "loteria federal": hx("#00a0b0"),
     "loteca":          hx("#ed1c24"),
     "dia-de-sorte":    hx("#ffd800"),
     "dia de sorte":    hx("#ffd800"),
@@ -99,9 +103,16 @@ def _slug(s: str) -> str:
     return s
 
 def cor_loteria(nome: str):
-    if (nome or "").lower() in CORES_LOTERIAS:
-        return CORES_LOTERIAS[nome.lower()]
-    return CORES_LOTERIAS.get(_slug(nome or "loteria"), (30, 30, 30))
+    nlc = (nome or "").lower()
+    if nlc in CORES_LOTERIAS:
+        return CORES_LOTERIAS[nlc]
+    sl = _slug(nome or "loteria")
+    if sl in CORES_LOTERIAS:
+        return CORES_LOTERIAS[sl]
+    # Tratamento especial: "loteria federal" → "federal"
+    if "federal" in nlc:
+        return CORES_LOTERIAS["federal"]
+    return (30, 30, 30)
 
 def _gradient_vertical(w, h, top_rgb, bottom_rgb):
     base = Image.new("RGB", (w, h), top_rgb)
@@ -126,14 +137,26 @@ def criar_fundo(loteria_nome: str):
     return g
 
 def load_logo(loteria_nome: str):
+    # tenta múltiplos candidatos para garantir a Federal, etc.
     slug = _slug(loteria_nome)
-    for ext in ("png", "jpg", "jpeg"):
-        p = os.path.join(LOGOS_DIR, f"{slug}.{ext}")
-        if os.path.exists(p):
-            try:
-                return Image.open(p).convert("RGBA")
-            except Exception:
-                pass
+    candidates = [slug]
+    if slug.startswith("loteria-"):
+        candidates.append(slug.replace("loteria-", "", 1))  # ex: loteria-federal -> federal
+    candidates.append(slug.replace("-", ""))               # ex: loteriafederal
+    if "federal" in (loteria_nome or "").lower():
+        candidates.append("federal")
+    seen = []
+    for cand in candidates:
+        if cand and cand not in seen:
+            seen.append(cand)
+    for name in seen:
+        for ext in ("png", "jpg", "jpeg"):
+            p = os.path.join(LOGOS_DIR, f"{name}.{ext}")
+            if os.path.exists(p):
+                try:
+                    return Image.open(p).convert("RGBA")
+                except Exception:
+                    pass
     return None
 
 def desenhar_logo(canvas: Image.Image, loteria_nome: str):
@@ -209,7 +232,50 @@ def parse_mais_milionaria(numeros_str: str):
         if len(main) == 6: break
     return main, trevos
 
-# ======== Desenho de bolinhas (todas, exceto Loteca) ========
+# ======== Loteria Federal (novo) ========
+def parse_federal_milhar(numeros_str: str):
+    """
+    Aceita: "86412 | 68536 | 74190 | 05574 | 15039"
+    ou com vírgulas, ponto e vírgula, espaços, quebras de linha.
+    Retorna até 5 strings zero-padded com 5 dígitos.
+    """
+    s = (numeros_str or "").strip()
+    if not s: return []
+    parts = re.split(r"[|\n,; ]+", s)
+    parts = [p for p in parts if p.strip()]
+    out = []
+    for p in parts[:5]:
+        digits = re.sub(r"\D", "", p)[:5]
+        out.append(digits.zfill(5))
+    return out
+
+def desenhar_federal(draw: ImageDraw.ImageDraw, numeros_str: str, area_box):
+    x0, y0, x1, y1 = area_box
+    premios = parse_federal_milhar(numeros_str)
+    if not premios:
+        return
+    header_font = FONT_SANS(40, bold=True)
+    line_font   = FONT_SANS(56, bold=True)
+
+    # Título da área
+    titulo = "RESULTADOS (MILHAR)"
+    tw = draw.textlength(titulo, font=header_font)
+    draw.text(((x0+x1)/2 - tw/2, y0), titulo, font=header_font, fill=(245,245,245))
+
+    # Espaçamento
+    y = y0 + 60
+    left_x  = x0 + 20
+    right_x = x1 - 20
+    for idx, milhar in enumerate(premios[:5], start=1):
+        etiqueta = f"{idx}º Prêmio"
+        # esquerda: etiqueta
+        draw.text((left_x, y), etiqueta, font=line_font, fill=(255,255,255))
+        # direita: número (alinhado à direita)
+        tw = draw.textlength(milhar, font=line_font)
+        draw.text((right_x - tw, y), milhar, font=line_font, fill=(255,255,255))
+        y += 72
+
+# ======== Desenho de bolinhas (todas, exceto Loteca/Federal) ========
 def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str, numeros_str: str, area_box):
     x0, y0, x1, y1 = area_box
     largura = x1 - x0
@@ -318,7 +384,7 @@ def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str, numeros_str:
         tw  = draw.textlength(txt, font=font_extra)
         draw.text(((x0 + x1) / 2 - tw / 2, y1 + 10), txt, font=font_extra, fill=(255, 255, 255))
 
-# ======== LOTECA ========
+# ======== LOTECA (mantida) ========
 _SPLIT_X = re.compile(r"\s+[xX×]\s+")
 
 def _strip_index_prefix(s: str) -> str:
@@ -512,8 +578,11 @@ def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url=""):
     area_bottom = H - 320
     area_box = (M, area_top, W - M, area_bottom)
 
-    if "loteca" in loteria.lower():
+    lot_lc = loteria.lower()
+    if "loteca" in lot_lc:
         desenhar_loteca(draw, loteria, numeros_s, area_box)
+    elif "federal" in lot_lc:
+        desenhar_federal(draw, numeros_s, area_box)
     else:
         desenhar_bolinhas(draw, loteria, numeros_s, area_box)
 
