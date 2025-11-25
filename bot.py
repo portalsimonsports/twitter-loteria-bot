@@ -1,5 +1,5 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-21c — Texto único na publicação (E/P/Q) + arquivo sanitizado (sem caracteres invisíveis)
+# Rev: 2025-11-25 — Filtro de payload mínimo (A/D/E) + saneamento + checagem extra por rede
 # - Mantém: SEM filtro de datas | Ignora “Enfileirado” | Marca planilha por rede
 # - X: posta igual em 1 ou 2 contas; só marca quando TODAS concluírem; evita duplicados por cache
 # - Imagem: prioriza KIT (/output) se USE_KIT_IMAGE_FIRST=true; senão usa app.imaging.gerar_imagem_loteria()
@@ -167,6 +167,27 @@ def _is_empty_status(v):
     for ch in ["\u200B", "\u200C", "\u200D", "\uFEFF", "\u2060"]:
         s = s.replace(ch, "")
     return s == ""
+
+def _clean_invisible(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s)
+    for ch in ["\u200B", "\u200C", "\u200D", "\uFEFF", "\u2060"]:
+        s = s.replace(ch, "")
+    return s.strip()
+
+def _row_has_min_payload(row) -> bool:
+    """Exige Loteria (A), Números (D) e URL (E) válidos."""
+    loteria = _clean_invisible(row[COL_LOTERIA  - 1]) if _safe_len(row, COL_LOTERIA)  else ""
+    numeros = _clean_invisible(row[COL_NUMEROS  - 1]) if _safe_len(row, COL_NUMEROS)  else ""
+    url     = _clean_invisible(row[COL_URL      - 1]) if _safe_len(row, COL_URL)      else ""
+    if not (loteria and numeros and url):
+        return False
+    if not re.match(r"^https?://[^ ]+\.[^ ]+", url):
+        return False
+    if not re.search(r"\d", numeros):  # impede strings só com separadores
+        return False
+    return True
 
 def _join_nonempty(lines):
     return "\n".join([str(s) for s in lines if s and str(s).strip()])
@@ -357,20 +378,27 @@ def coleta_candidatos_para(ws, rede: str):
     total = len(data)
     vazios = 0
     preenchidas = 0
+    ignoradas_sem_payload = 0
 
     for rindex, row in enumerate(data, start=2):
         status_val = row[col_status - 1] if len(row) >= col_status else ""
         tem_status = not _is_empty_status(status_val)
 
-        if not tem_status:
-            cand.append((rindex, row))
-            vazios += 1
-        else:
+        if tem_status:
             preenchidas += 1
             preview = str(status_val).replace("\n", "\\n")
             _log(f"[{rede}] SKIP L{rindex}: status col {col_status} preenchido ({preview[:40]})")
+            continue
 
-    _log(f"[{rede}] Candidatas (sem filtro de datas): {vazios}/{total} | status preenchido: {preenchidas}")
+        if not _row_has_min_payload(row):
+            ignoradas_sem_payload += 1
+            _log(f"[{rede}] SKIP L{rindex}: sem dados mínimos (A/D/E).")
+            continue
+
+        cand.append((rindex, row))
+        vazios += 1
+
+    _log(f"[{rede}] Candidatas: {vazios}/{total} | status preenchido: {preenchidas} | sem payload: {ignoradas_sem_payload}")
     return cand
 
 # =========================
@@ -492,6 +520,11 @@ def publicar_em_x(ws, candidatos):
     reply_below = X_REPLY_WITH_LINK_BELOW  # False (tudo em 1 post)
 
     for rownum, row in candidatos[:limite]:
+        # Checagem extra de segurança
+        if not _row_has_min_payload(row):
+            _log(f"[X] L{rownum} ignorada: payload insuficiente.")
+            continue
+
         texto_full = montar_texto_base(row)
         mode = "IMAGE_ONLY" if reply_below else mode_cfg
         texto_para_postar = "" if mode == "IMAGE_ONLY" else texto_full
@@ -595,6 +628,10 @@ def publicar_em_facebook(ws, candidatos):
     mode = get_text_mode("FACEBOOK")
 
     for rownum, row in candidatos[:limite]:
+        if not _row_has_min_payload(row):
+            _log(f"[Facebook] L{rownum} ignorada: payload insuficiente.")
+            continue
+
         base = montar_texto_base(row)
         msg = "" if mode == "IMAGE_ONLY" else base
         ok_any = False
@@ -654,6 +691,10 @@ def publicar_em_telegram(ws, candidatos):
     mode = get_text_mode("TELEGRAM")
 
     for rownum, row in candidatos[:limite]:
+        if not _row_has_min_payload(row):
+            _log(f"[Telegram] L{rownum} ignorada: payload insuficiente.")
+            continue
+
         base = montar_texto_base(row)
         msg = "" if mode == "IMAGE_ONLY" else base
         ok_any = False
@@ -712,6 +753,10 @@ def publicar_em_discord(ws, candidatos):
     mode = get_text_mode("DISCORD")
 
     for rownum, row in candidatos[:limite]:
+        if not _row_has_min_payload(row):
+            _log(f"[Discord] L{rownum} ignorada: payload insuficiente.")
+            continue
+
         base = montar_texto_base(row)
         msg = "" if mode == "IMAGE_ONLY" else base
         ok_any = False
@@ -791,6 +836,10 @@ def publicar_em_pinterest(ws, candidatos):
     mode = get_text_mode("PINTEREST")
 
     for rownum, row in candidatos[:limite]:
+        if not _row_has_min_payload(row):
+            _log(f"[Pinterest] L{rownum} ignorada: payload insuficiente.")
+            continue
+
         loteria  = row[COL_LOTERIA  - 1] if _safe_len(row, COL_LOTERIA)  else "Loteria"
         concurso = row[COL_CONCURSO - 1] if _safe_len(row, COL_CONCURSO) else "0000"
         title = f"{loteria} — Concurso {concurso}"
