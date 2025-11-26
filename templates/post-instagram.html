@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-slug="{{Slug}}">
 <head>
   <meta charset="UTF-8" />
   <title>Post Loteria</title>
@@ -9,15 +9,24 @@
     *{margin:0;padding:0;box-sizing:border-box}
     body{width:1080px;height:1080px;background:#0b0f1c;font-family:'Montserrat',sans-serif;overflow:hidden}
 
-    /* Fundo 3D (vem do {{ImagemFundo}}) */
+    /* Fundo 3D padrão (usa {{ImagemFundo}} se existir) */
     .card{
       position:relative;
       width:100%;
       height:100%;
-      background:url('{{ImagemFundo}}') center/cover no-repeat;
+      background:#0b0f1c url('{{ImagemFundo}}') center/cover no-repeat;
     }
 
-    /* Brilho/volume + vinheta para opção B */
+    /* ===== Fundo oficial – Loteria Federal (aplicado por slug) =====
+       Gradiente mais limpo/suave nas cores CAIXA (aprox.):
+       #003399 → #0a2a66 → #001a4d
+       Obs.: este bloco SOBRESCREVE o background acima quando slug = federal. */
+    html[data-slug="federal"] .card{
+      background:
+        linear-gradient(160deg, #003399 0%, #0a2a66 55%, #001a4d 100%);
+    }
+
+    /* Brilho/volume + vinheta (padrão B 3D) */
     .layer-3d{
       position:absolute;
       inset:0;
@@ -26,6 +35,14 @@
         rgba(255,255,255,.06) 36%,
         rgba(0,0,0,.45) 100%);
     }
+    /* Para a Federal deixamos o brilho um pouco mais suave */
+    html[data-slug="federal"] .layer-3d{
+      background:radial-gradient(ellipse at 50% 50%,
+        rgba(255,255,255,.14) 0%,
+        rgba(255,255,255,.05) 36%,
+        rgba(0,0,0,.35) 100%);
+    }
+
     .vignette{
       position:absolute;
       inset:-10%;
@@ -33,6 +50,13 @@
         rgba(0,0,0,0) 0%,
         rgba(0,0,0,.45) 80%,
         rgba(0,0,0,.65) 100%);
+    }
+    /* Vinheta um pouco mais leve na Federal */
+    html[data-slug="federal"] .vignette{
+      background:radial-gradient(ellipse at 50% 52%,
+        rgba(0,0,0,0) 0%,
+        rgba(0,0,0,.35) 78%,
+        rgba(0,0,0,.55) 100%);
     }
 
     .wrap{
@@ -79,7 +103,7 @@
       max-width:880px;
       line-height:1.32;
       opacity:.98;
-      white-space:pre-line; /* importante p/ Dupla Sena (quebra de linha) */
+      white-space:pre-line; /* mantém quebras (Dupla Sena, Federal etc.) */
       text-shadow:0 6px 20px rgba(0,0,0,.45);
     }
 
@@ -98,10 +122,7 @@
       text-transform:uppercase;
       box-shadow:0 12px 28px rgba(0,0,0,.4);
     }
-    .cta a{
-      color:#000;
-      text-decoration:none;
-    }
+    .cta a{ color:#000; text-decoration:none; }
 
     /* 5) Canais Telegram (colunas / campos TelegramC1 / TelegramC2) */
     .tg{
@@ -132,7 +153,7 @@
         <div class="date">{{Data}}</div>
       </div>
 
-      <!-- 3) Descrição (inclui Dupla Sena com 1º/2º sorteio) -->
+      <!-- 3) Descrição (inclui Dupla Sena/Federal formatados no render) -->
       <div class="desc">{{Descricao}}</div>
 
       <!-- 4) Botão -->
