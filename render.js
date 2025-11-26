@@ -45,12 +45,13 @@ const LOTERIA_SLUGS = {
   'dupla sena':'dupla-sena',
   'dupla-sena':'dupla-sena',
   'federal':'federal',
+  'loteria federal':'federal',
   'dia de sorte':'dia-de-sorte',
   'dia-de-sorte':'dia-de-sorte',
   'super sete':'super-sete',
   'super-sete':'super-sete',
   'loteca':'loteca',
-  // sinônimos/variações
+  // sinônimos/variações — +Milionária
   'mais-milionaria':'mais-milionaria',
   'mais milionaria':'mais-milionaria',
   'mais milionária':'mais-milionaria',
@@ -110,7 +111,7 @@ function buildFilename(loteria, concurso, data, id){
 function ensureUniquePath(dir, filename){
   let out = path.join(dir, filename);
   if (!fs.existsSync(out)) return out;
-  const ext = path.extname(filename);      // .jpg
+  const ext = path.extname(filename);        // .jpg
   const name = path.basename(filename, ext); // quina-6875
   let i = 1;
   while (true){
@@ -165,6 +166,7 @@ function buildFields(item){
     numeros = n;
   } else if (slug === 'federal') {
     const clean = stripInvisible(String(rawNum||''));
+    // aceita "004492, 094083, ..." ou linhas com separadores variados
     const parts = clean.split(/[,\n;]+/).map(s => s.trim()).filter(Boolean);
     if (parts.length >= 5) {
       const top5 = parts.slice(0,5);
@@ -198,8 +200,8 @@ function applyTemplate(html, f){
     .replace(/{{URL}}/g,         f.url)
     .replace(/{{TelegramC1}}/g,  f.tg1)
     .replace(/{{TelegramC2}}/g,  f.tg2)
-    .replace(/{{Slug}}/g,        f.slug)        // <-- passa o slug para CSS condicional (ex.: Federal)
-    .replace(/{{NumerosRaw}}/g,  f.numeros||'');// <-- útil p/ Loteca / Federal no template
+    .replace(/{{Slug}}/g,        f.slug)         // CSS condicional (ex.: Federal)
+    .replace(/{{NumerosRaw}}/g,  f.numeros||''); // útil p/ Loteca/Federal no template
 }
 
 /* ================= MAIN ================= */
@@ -239,7 +241,8 @@ async function main(){
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-gpu',
-        '--font-render-hinting=none'
+        '--font-render-hinting=none',
+        '--lang=pt-BR'
       ]
     });
   } catch (e) {
@@ -256,7 +259,10 @@ async function main(){
     if (!f.logo)  console.warn(`⚠️  Logo ausente para "${f.slug}" — verifique assets/logos/${f.slug}.png`);
 
     const html = applyTemplate(template, f);
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    await page.setContent(html, { waitUntil: 'domcontentloaded' });
+
+    // aguarda fontes web carregarem p/ evitar "fallback"
+    try { await page.evaluateHandle('document.fonts.ready'); } catch(_e){}
 
     const outPath = ensureUniquePath(OUT_DIR, f.filename);
     await page.screenshot({ path: outPath, type: 'jpeg', quality: 95 });
