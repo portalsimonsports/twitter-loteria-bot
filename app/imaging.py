@@ -1,11 +1,9 @@
 # app/imaging.py — Portal SimonSports
-# Rev: 2025-11-25a
-# - Loteca: mostra G1 e G2; vencedor (nome+gol) em verde #38761D;
-#           EMPATE agora destaca a coluna central "×" em #38761D (texto branco)
-# - Robustez de parse: captura gols mesmo com prefixos tipo "dica 0 Time" ou "0 Time"
-# - Demais loterias: layout bolinhas (cores CAIXA), Dupla Sena com rótulos, Timemania/Dia de Sorte com linha extra
-# - Mais Milionária: 6 números + 2 trevos
-# - CTA desativado por padrão; rodapé "Portal SimonSports"
+# Rev: 2025-11-25
+# - Loteca: não perde G1 quando a linha começa com "0 TIME"; destaque verde no vencedor (nome+gol)
+#           e, em caso de EMPATE, destaca a coluna central "×" em verde.
+# - Loteria Federal: layout próprio em linhas (1º a 5º prêmio); sem bolinhas; logo com fallback "federal".
+# - Dedupe de nome da loteria no título; fallback de fontes ampliado; sem alterar visual aprovado.
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io
@@ -20,7 +18,7 @@ LOGOS_DIR  = os.path.join(ASSETS_DIR, "logos")
 SHOW_CTA   = False
 BRAND_TEXT = "Portal SimonSports"
 
-# ======= Fontes =======
+# ======= Fontes (com fallbacks) =======
 def _try_fonts(cands, size):
     for p in cands:
         if os.path.exists(p):
@@ -99,6 +97,20 @@ def _slug(s: str) -> str:
     s = re.sub(r"\s+", "-", s).strip("-")
     return s
 
+def _dedupe_loteria_name(s: str) -> str:
+    s = re.sub(r"\s+", " ", str(s or "")).strip()
+    if not s: return s
+    patt = re.compile(r"^(.*?)(?:\s*[–—-]?\s*)\1$", re.IGNORECASE)
+    for _ in range(2):
+        m = patt.fullmatch(s)
+        if m: s = m.group(1).strip()
+        else: break
+    words, out = s.split(" "), []
+    for w in words:
+        if not out or out[-1].lower() != w.lower():
+            out.append(w)
+    return " ".join(out)
+
 def cor_loteria(nome: str):
     if (nome or "").lower() in CORES_LOTERIAS:
         return CORES_LOTERIAS[nome.lower()]
@@ -128,13 +140,18 @@ def criar_fundo(loteria_nome: str):
 
 def load_logo(loteria_nome: str):
     slug = _slug(loteria_nome)
-    for ext in ("png", "jpg", "jpeg"):
-        p = os.path.join(LOGOS_DIR, f"{slug}.{ext}")
-        if os.path.exists(p):
-            try:
-                return Image.open(p).convert("RGBA")
-            except Exception:
-                pass
+    tries = [slug]
+    # Fallbacks para Federal
+    if "federal" in slug and slug != "federal":
+        tries.append("federal")
+    for s in tries:
+        for ext in ("png", "jpg", "jpeg"):
+            p = os.path.join(LOGOS_DIR, f"{s}.{ext}")
+            if os.path.exists(p):
+                try:
+                    return Image.open(p).convert("RGBA")
+                except Exception:
+                    pass
     return None
 
 def desenhar_logo(canvas: Image.Image, loteria_nome: str):
@@ -209,7 +226,7 @@ def parse_mais_milionaria(numeros_str: str):
         if len(main) == 6: break
     return main, trevos
 
-# ======== Desenho de bolinhas (todas, exceto Loteca) ========
+# ======== Desenho de bolinhas (todas, exceto Loteca e Federal) ========
 def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str, numeros_str: str, area_box):
     x0, y0, x1, y1 = area_box
     largura = x1 - x0
@@ -322,40 +339,26 @@ def desenhar_bolinhas(draw: ImageDraw.ImageDraw, loteria_nome: str, numeros_str:
 _SPLIT_X = re.compile(r"\s+[xX×]\s+")
 
 def _strip_index_prefix(s: str) -> str:
-    return re.sub(r"^\s*\d{1,2}[\.\)]?\s*", "", s or "")
+    # Remove índice "01", "1.", "2)" ... mas NÃO remove um gol inicial "0 " (mandante)
+    s2 = str(s or "")
+    # casos com pontuação (1. ou 1))
+    s2 = re.sub(r"^\s*\d{1,2}[.)]\s*", "", s2)
+    # dois dígitos puros (01, 02 ... 14)
+    s2 = re.sub(r"^\s*(?:(0\d)|([1-9]\d))\s+", "", s2)
+    return s2
 
 def _extract_goals_and_name(token: str):
-    """
-    Extrai (nome, gols) admitindo variações:
-    - '2 FLAMENGO' | 'FLAMENGO 2'
-    - 'dica 0 FLAMENGO' | '0 FLAMENGO'
-    - remove dia/semana entre parênteses ao fim.
-    """
     s = (token or "").strip()
-    s = re.sub(r"\s*\((?:Dom|Seg|Ter|Qua|Qui|Sex|S[áa]b|[A-Za-z\. ]+)\)\s*$", "", s, flags=re.I)
-
-    # número em QUALQUER prefixo não numérico (ex.: "dica 0 FLAMENGO")
-    m = re.match(r"^\D*?(\d+)\s+(.+)$", s)
-    if m:
-        try:
-            return m.group(2).strip(" -"), int(m.group(1))
-        except:
-            pass
-
-    # nome seguido de número (ex.: "FLAMENGO 2")
-    m = re.match(r"^(.+?)\s+(\d+)\s*$", s)
-    if m:
-        try:
-            return m.group(1).strip(" -"), int(m.group(2))
-        except:
-            pass
-
+    s = re.sub(r"\s*\((?:Dom|Seg|Ter|Qua|Qui|Sex|Sáb|Sab|[A-Za-z\. ]+)\)\s*$", "", s, flags=re.I)
+    m = re.match(r"^\s*(\d+)\s+(.+)$", s)   # "2 FLAMENGO"
+    if m: return m.group(2).strip(" -"), int(m.group(1))
+    m = re.match(r"^(.+?)\s+(\d+)\s*$", s) # "FLAMENGO 2"
+    if m: return m.group(1).strip(" -"), int(m.group(2))
     return s.strip(" -"), None
 
 def _clean_team_name(s: str) -> str:
     s = re.sub(r"\s*\([^)]+\)\s*$", "", s or "")
-    s = re.sub(r"^\s*\d+\s+", "", s)
-    s = re.sub(r"\s+\d+\s*$", "", s)
+    s = re.sub(r"\s+\d+\s*$", "", s)   # remove gols no fim se não capturados
     return s.strip(" -")
 
 def _parse_loteca(numeros_str: str):
@@ -380,8 +383,7 @@ def _parse_loteca(numeros_str: str):
                         try:
                             a, b = int(g1), int(g2)
                             res = "1" if a > b else ("2" if b > a else "X")
-                        except:
-                            pass
+                        except: pass
                     jogos.append({
                         "idx": i,
                         "mandante": _clean_team_name(mand),
@@ -407,8 +409,7 @@ def _parse_loteca(numeros_str: str):
                 try:
                     a, b = int(g1), int(g2)
                     res = "1" if a > b else ("2" if b > a else "X")
-                except:
-                    pass
+                except: pass
             jogos.append({
                 "idx": i,
                 "mandante": _clean_team_name(mand),
@@ -426,8 +427,7 @@ def desenhar_loteca(draw: ImageDraw.ImageDraw, loteria_nome: str, numeros_str: s
     x0, y0, x1, y1 = area_box
     jogos = _parse_loteca(numeros_str)
 
-    # Colunas:
-    # 0: # | 1: G_mand | 2: Mandante | 3: × | 4: Visitante | 5: G_visit
+    # Colunas: # | G_mand | Mandante | × | Visitante | G_visit
     col_w = [0.07, 0.06, 0.40, 0.04, 0.33, 0.10]
     xs = [x0]
     for p in col_w:
@@ -460,14 +460,14 @@ def desenhar_loteca(draw: ImageDraw.ImageDraw, loteria_nome: str, numeros_str: s
         g1   = j["g1"];       g2   = j["g2"]
         res  = (j["resultado"] or "").upper()  # "1", "2" ou "X"
 
-        # Destaques do vencedor
-        if res == "1":  # mandante
+        # Destaques:
+        if res == "1":  # mandante vence
             draw.rounded_rectangle((xs[1]+6, top+6, xs[2]-6, bot-6), radius=10, fill=HIGHLIGHT)  # gol mandante
             draw.rounded_rectangle((xs[2]+6, top+6, xs[3]-6, bot-6), radius=10, fill=HIGHLIGHT)  # nome mandante
-        elif res == "2":  # visitante
+        elif res == "2":  # visitante vence
             draw.rounded_rectangle((xs[4]+6, top+6, xs[5]-6, bot-6), radius=10, fill=HIGHLIGHT)  # nome visitante
             draw.rounded_rectangle((xs[5]+6, top+6, xs[6]-6, bot-6), radius=10, fill=HIGHLIGHT)  # gol visitante
-        elif res == "X":  # EMPATE → destaque na coluna central "×"
+        elif res == "X":  # EMPATE → coluna do meio
             draw.rounded_rectangle((xs[3]+6, top+6, xs[4]-6, bot-6), radius=10, fill=HIGHLIGHT)
 
         # Conteúdo
@@ -482,6 +482,48 @@ def desenhar_loteca(draw: ImageDraw.ImageDraw, loteria_nome: str, numeros_str: s
                   fill=(255,255,255) if res=="2" else (230,232,240), anchor="mm")
         draw.text((_center(xs[5], xs[6]), (top+bot)/2), "-" if g2 is None else str(g2),
                   font=f_goals, fill=(255,255,255) if res=="2" else (230,232,240), anchor="mm")
+
+# ======== Loteria Federal (linhas 1º a 5º) ========
+def _parse_federal(numeros_str: str):
+    # Aceita separadores variados; captura bilhetes de 4 a 6 dígitos
+    toks = [t for t in re.split(r"[,\s|;/-]+", str(numeros_str or "").strip()) if t]
+    bilhetes = []
+    for t in toks:
+        if re.fullmatch(r"\d{4,6}", t):
+            bilhetes.append(t.zfill(5))
+    # Mantém só os 5 primeiros
+    return (bilhetes + ["", "", "", "", ""])[:5]
+
+def desenhar_federal(draw: ImageDraw.ImageDraw, numeros_str: str, area_box):
+    x0, y0, x1, y1 = area_box
+    linhas = _parse_federal(numeros_str)
+    header_h = 70
+    row_h = (y1 - y0 - header_h) / 5
+
+    # Cabeçalho da tabela
+    draw.rounded_rectangle((x0, y0, x1, y0 + header_h), radius=16, fill=(28, 34, 62))
+    f_head = FONT_SANS(28, bold=True)
+    def _center(a, b): return a + (b - a) / 2
+    headers = ["Prêmio", "Bilhete"]
+    col_w = [0.28, 0.72]
+    xs = [x0]
+    for p in col_w:
+        xs.append(xs[-1] + (x1 - x0) * p)
+    draw.text((_center(xs[0], xs[1]), y0 + header_h/2 - 1), headers[0], font=f_head, fill=TEXT_LIGHT, anchor="mm")
+    draw.text((_center(xs[1], xs[2]), y0 + header_h/2 - 1), headers[1], font=f_head, fill=TEXT_LIGHT, anchor="mm")
+
+    f_row_l = FONT_SANS(30, bold=True)
+    f_row_r = FONT_SANS(34, bold=True)
+
+    ords = ["1º", "2º", "3º", "4º", "5º"]
+    for i in range(5):
+        top = y0 + header_h + i * row_h
+        bot = top + row_h - 4
+        if i % 2 == 0:
+            draw.rounded_rectangle((x0, top, x1, bot), radius=10, fill=(26, 32, 58))
+        draw.text((_center(xs[0], xs[1]), (top+bot)/2), f"{ords[i]} PRÊMIO", font=f_row_l, fill=TEXT_LIGHT, anchor="mm")
+        bilhete = linhas[i] or "-"
+        draw.text((_center(xs[1], xs[2]), (top+bot)/2), bilhete, font=f_row_r, fill=(255,255,255), anchor="mm")
 
 # ======== CTA / marca ========
 def desenhar_cta(draw: ImageDraw.ImageDraw, url: str = ""):
@@ -505,7 +547,7 @@ def desenhar_marca(draw: ImageDraw.ImageDraw):
     draw.text((W / 2 - tw / 2, H - 72), BRAND_TEXT, font=font_marca, fill=(255, 255, 255, 220))
 
 def desenhar_titulo(draw: ImageDraw.ImageDraw, loteria: str, concurso: str, data_br: str):
-    loteria_txt = (loteria or "").strip() or "Loteria"
+    loteria_txt = _dedupe_loteria_name((loteria or "").strip() or "Loteria")
     font_title = FONT_SERIF(88)
     draw.text((M, M), loteria_txt, font=font_title, fill=(255, 255, 255))
     font_sub = FONT_SANS(40, bold=True)
@@ -515,7 +557,7 @@ def desenhar_titulo(draw: ImageDraw.ImageDraw, loteria: str, concurso: str, data
         font_date = FONT_SANS(34)
         draw.text((M, M + 90 + 48), data_br, font=font_date, fill=(220, 220, 220))
 
-# ======== API principal ========
+# ======== API principal (compatível com o bot.py) ========
 def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url=""):
     loteria   = str(loteria or "").strip()
     concurso  = str(concurso or "").strip()
@@ -533,8 +575,11 @@ def gerar_imagem_loteria(loteria, concurso, data_br, numeros_str, url=""):
     area_bottom = H - 320
     area_box = (M, area_top, W - M, area_bottom)
 
-    if "loteca" in loteria.lower():
+    name_lc = loteria.lower()
+    if "loteca" in name_lc:
         desenhar_loteca(draw, loteria, numeros_s, area_box)
+    elif "federal" in name_lc:
+        desenhar_federal(draw, numeros_s, area_box)
     else:
         desenhar_bolinhas(draw, loteria, numeros_s, area_box)
 
