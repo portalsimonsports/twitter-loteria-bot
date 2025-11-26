@@ -49,7 +49,13 @@ const LOTERIA_SLUGS = {
   'dia-de-sorte':'dia-de-sorte',
   'super sete':'super-sete',
   'super-sete':'super-sete',
-  'loteca':'loteca'
+  'loteca':'loteca',
+  // sinônimos/variações
+  'mais-milionaria':'mais-milionaria',
+  'mais milionaria':'mais-milionaria',
+  'mais milionária':'mais-milionaria',
+  '+milionaria':'mais-milionaria',
+  '+milionária':'mais-milionaria'
 };
 
 function guessSlug(text){
@@ -144,7 +150,7 @@ function buildFields(item){
   let descricao = '';
   if (slug === 'loteca') {
     numeros = normalizeNumerosLoteca(rawNum);
-    // Loteca costuma ir renderizada no HTML (tabela); mantemos descrição enxuta
+    // Loteca renderiza via tabela no HTML; descrição vazia.
     descricao = '';
   } else if (slug === 'dupla-sena') {
     const n = normalizeNumerosGeneric(rawNum);
@@ -158,9 +164,7 @@ function buildFields(item){
     }
     numeros = n;
   } else if (slug === 'federal') {
-    // Federal em 5 linhas (ex.: "1º 004492", ...), se possível
     const clean = stripInvisible(String(rawNum||''));
-    // aceita formatos "004492, 094083, ..." ou com espaços/linhas
     const parts = clean.split(/[,\n;]+/).map(s => s.trim()).filter(Boolean);
     if (parts.length >= 5) {
       const top5 = parts.slice(0,5);
@@ -181,7 +185,7 @@ function buildFields(item){
   // ===== Nome do arquivo final (sem repetições) =====
   const filename = buildFilename(loteria, concurso, data, item.id);
 
-  return { slug, produto, data, descricao, url, tg1, tg2, fundo, logo, filename };
+  return { slug, produto, data, descricao, url, tg1, tg2, fundo, logo, filename, numeros };
 }
 
 function applyTemplate(html, f){
@@ -193,7 +197,9 @@ function applyTemplate(html, f){
     .replace(/{{Descricao}}/g,   f.descricao)
     .replace(/{{URL}}/g,         f.url)
     .replace(/{{TelegramC1}}/g,  f.tg1)
-    .replace(/{{TelegramC2}}/g,  f.tg2);
+    .replace(/{{TelegramC2}}/g,  f.tg2)
+    .replace(/{{Slug}}/g,        f.slug)        // <-- passa o slug para CSS condicional (ex.: Federal)
+    .replace(/{{NumerosRaw}}/g,  f.numeros||'');// <-- útil p/ Loteca / Federal no template
 }
 
 /* ================= MAIN ================= */
