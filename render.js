@@ -15,16 +15,19 @@ const TEMPLATE_FILE = path.join(ROOT, 'templates', 'post-instagram.html');
 
 /* ================= Utils ================= */
 function ensureDir(p) {
-  if (!fs.existsSync(p)) {
-    fs.mkdirSync(p, { recursive: true });
-  }
+  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
 }
 function safe(v){ return (v===undefined || v===null) ? '' : String(v); }
 function isHttp(u){ return /^https?:\/\//i.test(String(u||'')); }
 function fileUrl(absPath){ return pathToFileURL(absPath).href; }
 
+// remove caracteres invisíveis comuns (ZERO-WIDTH etc.)
+function stripInvisible(s){
+  return String(s||'').replace(/[\u200B-\u200D\uFEFF\u2060]/g, '');
+}
+
 function slugify(s){
-  return String(s||'')
+  return stripInvisible(String(s||''))
     .toLowerCase()
     .normalize('NFKD').replace(/[\u0300-\u036f]/g,'')
     .replace(/[^a-z0-9\- ]+/g,'')
@@ -68,15 +71,47 @@ function resolvePathOrUrl(relOrUrl){
   return fs.existsSync(abs) ? fileUrl(abs) : null;
 }
 
-// Normaliza números (“1 2;03,4” → “01, 02, 03, 04”) preservando “1x2” (Loteca)
-function normalizeNumeros(raw){
+// Normaliza números gerais (“1 2;03,4” → “01, 02, 03, 04”)
+function normalizeNumerosGeneric(raw){
   let s = safe(raw).replace(/[;\|\s]+/g, ',');
   const parts = s.split(',').map(x => x.trim()).filter(Boolean);
-  const norm = parts.map(p => {
-    if (/^\d{1,2}$/.test(p)) return ('0'+Number(p)).slice(-2);
-    return p;
-  });
+  const norm = parts.map(p => /^\d{1,2}$/.test(p) ? ('0'+Number(p)).slice(-2) : p);
   return norm.join(', ');
+}
+
+// Preserva “ x ” / “×” da Loteca e numerações (não mexe na pontuação)
+function normalizeNumerosLoteca(raw){
+  return stripInvisible(String(raw||'')).trim();
+}
+
+/* ======= helpers filename (anti-duplicado + sufixo incremental) ======= */
+function buildFilename(loteria, concurso, data, id){
+  const slug = guessSlug(loteria);
+  const tagRaw = stripInvisible(safe(id) || safe(concurso) || safe(data));
+  const tag = slugify(tagRaw);
+  let base;
+  if (!tag) {
+    base = `${slug}`;
+  } else if (tag === slug || tag.startsWith(`${slug}-`)) {
+    // id já tem o slug dentro: "quina-6875" → usa direto
+    base = `${tag}`;
+  } else {
+    base = `${slug}-${tag}`;
+  }
+  return `${base}.jpg`;
+}
+
+function ensureUniquePath(dir, filename){
+  let out = path.join(dir, filename);
+  if (!fs.existsSync(out)) return out;
+  const ext = path.extname(filename);      // .jpg
+  const name = path.basename(filename, ext); // quina-6875
+  let i = 1;
+  while (true){
+    const trial = path.join(dir, `${name}-${i}${ext}`);
+    if (!fs.existsSync(trial)) return trial;
+    i++;
+  }
 }
 
 /* =============== Build fields =============== */
@@ -85,7 +120,7 @@ function buildFields(item){
   const loteria  = safe(item.Loteria || item.Produto);
   const concurso = safe(item.Concurso);
   const data     = safe(item.Data);
-  const numeros  = normalizeNumeros(item['Números'] ?? item.Numeros);
+  const rawNum   = item['Números'] ?? item.Numeros;
   const url      = safe(item.URL ?? item.Url);
   const tg1      = safe(item.TelegramC1 ?? item.TELEGRAM_CANAL_1);
   const tg2      = safe(item.TelegramC2 ?? item.TELEGRAM_CANAL_2);
@@ -96,7 +131,7 @@ function buildFields(item){
   let fundo = resolvePathOrUrl(item.ImagemFundo);
   if (!fundo) {
     const localFundo = path.join('assets','fundos', `${slug}.jpg`);
-    fundo = resolvePathOrUrl(localFundo); // file://...
+    fundo = resolvePathOrUrl(localFundo);
   }
   let logo = resolvePathOrUrl(item.Logo);
   if (!logo) {
@@ -104,43 +139,47 @@ function buildFields(item){
     logo = resolvePathOrUrl(localLogo);
   }
 
-  // ===== DESCRIÇÃO (ajuste especial Dupla Sena) =====
+  // ===== DESCRIÇÃO =====
+  let numeros = '';
   let descricao = '';
-  if (numeros) {
-    if (slug === 'dupla-sena') {
-      // Esperado: 12 dezenas → 1º sorteio (6) + 2º sorteio (6)
-      const parts = numeros.split(',').map(x => x.trim()).filter(Boolean);
-      if (parts.length === 12) {
-        const s1 = parts.slice(0, 6).join(', ');
-        const s2 = parts.slice(6, 12).join(', ');
-        descricao = `1º sorteio: ${s1}\n2º sorteio: ${s2}`;
-      } else {
-        // fallback se não vier exatamente 12 dezenas
-        descricao = `Números: ${numeros}`;
-      }
+  if (slug === 'loteca') {
+    numeros = normalizeNumerosLoteca(rawNum);
+    // Loteca costuma ir renderizada no HTML (tabela); mantemos descrição enxuta
+    descricao = '';
+  } else if (slug === 'dupla-sena') {
+    const n = normalizeNumerosGeneric(rawNum);
+    const parts = n.split(',').map(x => x.trim()).filter(Boolean);
+    if (parts.length === 12) {
+      const s1 = parts.slice(0,6).join(', ');
+      const s2 = parts.slice(6,12).join(', ');
+      descricao = `1º sorteio: ${s1}\n2º sorteio: ${s2}`;
     } else {
-      descricao = `Números: ${numeros}`;
+      descricao = `Números: ${n}`;
     }
+    numeros = n;
+  } else if (slug === 'federal') {
+    // Federal em 5 linhas (ex.: "1º 004492", ...), se possível
+    const clean = stripInvisible(String(rawNum||''));
+    // aceita formatos "004492, 094083, ..." ou com espaços/linhas
+    const parts = clean.split(/[,\n;]+/).map(s => s.trim()).filter(Boolean);
+    if (parts.length >= 5) {
+      const top5 = parts.slice(0,5);
+      descricao = `1º ${top5[0]}\n2º ${top5[1]}\n3º ${top5[2]}\n4º ${top5[3]}\n5º ${top5[4]}`;
+    } else {
+      descricao = `Resultados: ${normalizeNumerosGeneric(rawNum)}`;
+    }
+    numeros = clean;
+  } else {
+    const n = normalizeNumerosGeneric(rawNum);
+    numeros = n;
+    descricao = n ? `Números: ${n}` : '';
   }
 
   // ===== Título (Produto) =====
   const produto = concurso ? `${loteria} • Concurso ${concurso}` : loteria;
 
   // ===== Nome do arquivo final (sem repetições) =====
-  // Preferimos 'id' quando existir (ex.: "lotomania-2846").
-  // Se o 'id' já contiver o slug, não repetimos.
-  const tagRaw = safe(item.id) || (concurso || data || '');
-  const tag = slugify(tagRaw);
-  let filename;
-  if (!tag) {
-    filename = `${slug}.jpg`;
-  } else if (tag.startsWith(`${slug}-`)) {
-    // Ex.: slug="quina", tag="quina-6875" → quina-6875.jpg
-    filename = `${tag}.jpg`;
-  } else {
-    // Ex.: slug="quina", tag="6875" → quina-6875.jpg
-    filename = `${slug}-${tag}.jpg`;
-  }
+  const filename = buildFilename(loteria, concurso, data, item.id);
 
   return { slug, produto, data, descricao, url, tg1, tg2, fundo, logo, filename };
 }
@@ -213,7 +252,7 @@ async function main(){
     const html = applyTemplate(template, f);
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
-    const outPath = path.join(OUT_DIR, f.filename);
+    const outPath = ensureUniquePath(OUT_DIR, f.filename);
     await page.screenshot({ path: outPath, type: 'jpeg', quality: 95 });
     console.log('✅ Imagem gerada:', outPath);
   }
