@@ -324,7 +324,7 @@ def montar_texto_base(row) -> str:
     {canal_dicas}
 
     Todas as notícias do portal
-    Inscreva-se no canal oficial:
+    Inscreva-se :
     {canal_portal}
     """
     url    = (row[COL_URL - 1]       if _safe_len(row, COL_URL)       else "").strip()
@@ -338,7 +338,7 @@ def montar_texto_base(row) -> str:
         "Inscreva-se :\n"
         f"{dicas}\n\n"
         "Todas as notícias do portal\n"
-        "Inscreva-se no canal oficial:\n"
+        "Inscreva-se :\n"
         f"{portal}"
     ).strip()
 
