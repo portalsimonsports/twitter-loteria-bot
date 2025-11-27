@@ -1,5 +1,4 @@
 // render.js — Portal SimonSports — Loterias → Imagem 1080x1080 (Opção B 3D)
-// Rev: 2025-11-27 — sinônimos extra ("loteria federal") + fonts ready + lang pt-BR
 // Lê data/to_publish.json, aplica templates/post-instagram.html,
 // usa fundos em assets/fundos/<slug>.jpg e logos em assets/logos/<slug>.png,
 // e salva as imagens finais em output/<arquivo>.jpg
@@ -27,12 +26,16 @@ function stripInvisible(s){
   return String(s||'').replace(/[\u200B-\u200D\uFEFF\u2060]/g, '');
 }
 
+// ⚠️ Corrigido: hífen no FIM do conjunto evita “Range out of order”
 function slugify(s){
   return stripInvisible(String(s||''))
     .toLowerCase()
     .normalize('NFKD').replace(/[\u0300-\u036f]/g,'')
-    .replace(/[^a-z0-9\\- ]+/g,'')
-    .trim().replace(/\\s+/g,'-');
+    .replace(/[^a-z0-9 -]+/g,'')
+    .trim()
+    .replace(/\s+/g,'-')
+    .replace(/-+/g,'-')
+    .replace(/^-|-$/g,'');
 }
 
 // Nome -> slug (arquivos de fundo/logo)
@@ -52,7 +55,7 @@ const LOTERIA_SLUGS = {
   'super sete':'super-sete',
   'super-sete':'super-sete',
   'loteca':'loteca',
-  // +Milionária
+  // sinônimos/variações — +Milionária
   'mais-milionaria':'mais-milionaria',
   'mais milionaria':'mais-milionaria',
   'mais milionária':'mais-milionaria',
@@ -68,7 +71,9 @@ function guessSlug(text){
   return slugify(text||'loteria');
 }
 
-/** Converte caminho relativo para file:// absoluto. */
+/** Converte caminho relativo para file:// absoluto.
+ * Se já for http(s), retorna como está.
+ * Se o arquivo local não existir, retorna null (para cair no fallback). */
 function resolvePathOrUrl(relOrUrl){
   const v = String(relOrUrl||'').trim();
   if (!v) return null;
@@ -79,13 +84,13 @@ function resolvePathOrUrl(relOrUrl){
 
 // Normaliza números gerais (“1 2;03,4” → “01, 02, 03, 04”)
 function normalizeNumerosGeneric(raw){
-  let s = safe(raw).replace(/[;\\|\\s]+/g, ',');
+  let s = safe(raw).replace(/[;\|\s]+/g, ',');
   const parts = s.split(',').map(x => x.trim()).filter(Boolean);
-  const norm = parts.map(p => /^\\d{1,2}$/.test(p) ? ('0'+Number(p)).slice(-2) : p);
+  const norm = parts.map(p => /^\d{1,2}$/.test(p) ? ('0'+Number(p)).slice(-2) : p);
   return norm.join(', ');
 }
 
-// Preserva “ x ” / “×” da Loteca e numerações
+// Preserva “ x ” / “×” da Loteca e numerações (não mexe na pontuação)
 function normalizeNumerosLoteca(raw){
   return stripInvisible(String(raw||'')).trim();
 }
@@ -99,6 +104,7 @@ function buildFilename(loteria, concurso, data, id){
   if (!tag) {
     base = `${slug}`;
   } else if (tag === slug || tag.startsWith(`${slug}-`)) {
+    // id já tem o slug dentro: "quina-6875" → usa direto
     base = `${tag}`;
   } else {
     base = `${slug}-${tag}`;
@@ -109,8 +115,8 @@ function buildFilename(loteria, concurso, data, id){
 function ensureUniquePath(dir, filename){
   let out = path.join(dir, filename);
   if (!fs.existsSync(out)) return out;
-  const ext = path.extname(filename);
-  const name = path.basename(filename, ext);
+  const ext = path.extname(filename);        // .jpg
+  const name = path.basename(filename, ext); // quina-6875
   let i = 1;
   while (true){
     const trial = path.join(dir, `${name}-${i}${ext}`);
@@ -121,6 +127,7 @@ function ensureUniquePath(dir, filename){
 
 /* =============== Build fields =============== */
 function buildFields(item){
+  // Esperado (vindo do GAS): Produto/Loteria, Concurso, Data, Números, URL, TelegramC1, TelegramC2
   const loteria  = safe(item.Loteria || item.Produto);
   const concurso = safe(item.Concurso);
   const data     = safe(item.Data);
@@ -148,6 +155,7 @@ function buildFields(item){
   let descricao = '';
   if (slug === 'loteca') {
     numeros = normalizeNumerosLoteca(rawNum);
+    // Loteca renderiza via tabela no HTML; descrição vazia.
     descricao = '';
   } else if (slug === 'dupla-sena') {
     const n = normalizeNumerosGeneric(rawNum);
@@ -162,7 +170,8 @@ function buildFields(item){
     numeros = n;
   } else if (slug === 'federal') {
     const clean = stripInvisible(String(rawNum||''));
-    const parts = clean.split(/[,\\n;]+/).map(s => s.trim()).filter(Boolean);
+    // aceita "004492, 094083, ..." ou linhas com separadores variados
+    const parts = clean.split(/[,\n;]+/).map(s => s.trim()).filter(Boolean);
     if (parts.length >= 5) {
       const top5 = parts.slice(0,5);
       descricao = `1º ${top5[0]}\n2º ${top5[1]}\n3º ${top5[2]}\n4º ${top5[3]}\n5º ${top5[4]}`;
@@ -176,7 +185,10 @@ function buildFields(item){
     descricao = n ? `Números: ${n}` : '';
   }
 
+  // ===== Título (Produto) =====
   const produto = concurso ? `${loteria} • Concurso ${concurso}` : loteria;
+
+  // ===== Nome do arquivo final (sem repetições) =====
   const filename = buildFilename(loteria, concurso, data, item.id);
 
   return { slug, produto, data, descricao, url, tg1, tg2, fundo, logo, filename, numeros };
@@ -192,8 +204,8 @@ function applyTemplate(html, f){
     .replace(/{{URL}}/g,         f.url)
     .replace(/{{TelegramC1}}/g,  f.tg1)
     .replace(/{{TelegramC2}}/g,  f.tg2)
-    .replace(/{{Slug}}/g,        f.slug)
-    .replace(/{{NumerosRaw}}/g,  f.numeros||'');
+    .replace(/{{Slug}}/g,        f.slug)         // CSS condicional (ex.: Federal)
+    .replace(/{{NumerosRaw}}/g,  f.numeros||''); // útil p/ Loteca/Federal no template
 }
 
 /* ================= MAIN ================= */
@@ -252,6 +264,8 @@ async function main(){
 
     const html = applyTemplate(template, f);
     await page.setContent(html, { waitUntil: 'domcontentloaded' });
+
+    // aguarda fontes web carregarem p/ evitar "fallback"
     try { await page.evaluateHandle('document.fonts.ready'); } catch(_e){}
 
     const outPath = ensureUniquePath(OUT_DIR, f.filename);
