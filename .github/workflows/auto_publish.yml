@@ -3,7 +3,7 @@ name: Publicação Automática de Loterias
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/10 * * * *"  # a cada 10 min (UTC)
 
 concurrency:
   group: publish-loterias
@@ -20,17 +20,20 @@ jobs:
     steps:
       - name: Checkout do repositório
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0            # <— necessário para pull/rebase
+          persist-credentials: true # usa o token padrão do Actions
 
       # =========================
       # DIAGNÓSTICOS INICIAIS
       # =========================
       - name: Mostrar matriz de arquivos e vars
         run: |
-          echo "Branch: $GITHUB_REF"
+          echo "Branch: $GITHUB_REF_NAME"
           echo "Arquivos no repo:" && ls -la
           echo "Subpastas:" && find . -maxdepth 2 -type d -print | sort
           echo "Existe data/to_publish.json?"
-          if [ -f data/to_publish.json ]; then cat data/to_publish.json; else echo "NAO ENCONTRADO"; fi
+          test -f data/to_publish.json && cat data/to_publish.json || echo "NÃO ENCONTRADO"
 
       # =========================
       # GARANTIR output/ no repo
@@ -47,7 +50,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
 
       - name: Instalar deps do render
         run: |
@@ -60,11 +63,10 @@ jobs:
 
       - name: Validar template e assets
         run: |
-          test -f templates/post-instagram.html || (echo "templates/post-instagram.html nao existe" && exit 1)
+          test -f templates/post-instagram.html || (echo "templates/post-instagram.html não existe" && exit 1)
           test -d assets/fundos || (echo "assets/fundos ausente. Criando..." && mkdir -p assets/fundos)
           test -d assets/logos  || (echo "assets/logos ausente. Criando..." && mkdir -p assets/logos)
 
-      # jq é usado para contar itens na fila
       - name: Instalar jq
         run: |
           sudo apt-get update
@@ -78,7 +80,7 @@ jobs:
           else
             N=0
           fi
-          echo "itens=$N" >> "$GITHUB_OUTPUT"
+          echo "itens=$N" >> $GITHUB_OUTPUT
           echo "Itens na fila: $N"
 
       - name: Renderizar imagens (se houver itens)
@@ -93,9 +95,16 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add output || true
+
+          git add -A output || true
           git commit -m "chore: adiciona imagens geradas (${GITHUB_RUN_NUMBER})" || echo "Nada para commitar"
-          git push
+
+          # integra possíveis commits que chegaram no remoto
+          git fetch origin $GITHUB_REF_NAME
+          git pull --rebase --autostash origin $GITHUB_REF_NAME
+
+          # push para a mesma branch
+          git push origin HEAD:$GITHUB_REF_NAME
 
       # =========================
       # PUBLICAÇÃO (Python bot.py)
@@ -120,11 +129,11 @@ jobs:
 
       - name: Verificar secrets mínimos (Google + X conta 1)
         env:
-          GOOGLE_SERVICE_JSON: "${{ secrets.GOOGLE_SERVICE_JSON }}"
-          TWITTER_API_KEY_1: "${{ secrets.TWITTER_API_KEY_1 }}"
-          TWITTER_API_SECRET_1: "${{ secrets.TWITTER_API_SECRET_1 }}"
-          TWITTER_ACCESS_TOKEN_1: "${{ secrets.TWITTER_ACCESS_TOKEN_1 }}"
-          TWITTER_ACCESS_SECRET_1: "${{ secrets.TWITTER_ACCESS_SECRET_1 }}"
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
+          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
+          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
         run: |
           python - <<'PY'
           import os, sys, json
@@ -132,59 +141,57 @@ jobs:
           miss = [k for k in need if not os.getenv(k)]
           if miss:
             print("FALTAM SECRETS:", miss); sys.exit(1)
-          try:
-            json.loads(os.environ["GOOGLE_SERVICE_JSON"])
-          except Exception as e:
-            print("GOOGLE_SERVICE_JSON invalido:", e); sys.exit(1)
-          print("Secrets minimos OK")
+          try: json.loads(os.environ["GOOGLE_SERVICE_JSON"])
+          except Exception as e: print("GOOGLE_SERVICE_JSON inválido:", e); sys.exit(1)
+          print("Secrets mínimos OK")
           PY
 
       - name: Executar bot.py (X/Telegram/Discord/FB/Pinterest conforme vars)
         env:
           # Google
-          GOOGLE_SERVICE_JSON: "${{ secrets.GOOGLE_SERVICE_JSON }}"
-          GOOGLE_SHEET_ID: "${{ vars.GOOGLE_SHEET_ID }}"
-          SHEET_TAB: "${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}"
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
 
-          # ===== Cofre (pelo menos o ID) =====
-          COFRE_SHEET_ID: "${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}"
-          COFRE_ABA_CRED: "${{ secrets.COFRE_ABA_CRED || vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}"
-          COFRE_ABA_CANAIS: "${{ secrets.COFRE_ABA_CANAIS || vars.COFRE_ABA_CANAIS || 'Redes_Sociais_Canais' }}"
+          # Cofre (via secrets/vars)
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ secrets.COFRE_ABA_CRED || vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          COFRE_ABA_CANAIS: ${{ secrets.COFRE_ABA_CANAIS || vars.COFRE_ABA_CANAIS || 'Redes_Sociais_Canais' }}
 
           # X (obrigatória conta 1)
-          TWITTER_API_KEY_1: "${{ secrets.TWITTER_API_KEY_1 }}"
-          TWITTER_API_SECRET_1: "${{ secrets.TWITTER_API_SECRET_1 }}"
-          TWITTER_ACCESS_TOKEN_1: "${{ secrets.TWITTER_ACCESS_TOKEN_1 }}"
-          TWITTER_ACCESS_SECRET_1: "${{ secrets.TWITTER_ACCESS_SECRET_1 }}"
+          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
+          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
+          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
 
           # X conta 2 (opcional)
-          TWITTER_API_KEY_2: "${{ secrets.TWITTER_API_KEY_2 }}"
-          TWITTER_API_SECRET_2: "${{ secrets.TWITTER_API_SECRET_2 }}"
-          TWITTER_ACCESS_TOKEN_2: "${{ secrets.TWITTER_ACCESS_TOKEN_2 }}"
-          TWITTER_ACCESS_SECRET_2: "${{ secrets.TWITTER_ACCESS_SECRET_2 }}"
+          TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
+          TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
+          TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
+          TWITTER_ACCESS_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
 
-          # Outras redes (opcionais / podem vir do Cofre)
-          TG_BOT_TOKEN: "${{ secrets.TG_BOT_TOKEN }}"
-          TG_CHAT_IDS: "${{ secrets.TG_CHAT_IDS }}"
-          DISCORD_WEBHOOKS: "${{ secrets.DISCORD_WEBHOOKS }}"
-          FB_PAGE_IDS: "${{ secrets.FB_PAGE_IDS }}"
-          FB_PAGE_TOKENS: "${{ secrets.FB_PAGE_TOKENS }}"
-          PINTEREST_ACCESS_TOKEN: "${{ secrets.PINTEREST_ACCESS_TOKEN }}"
-          PINTEREST_BOARD_ID: "${{ secrets.PINTEREST_BOARD_ID }}"
+          # Outras redes (opcionais)
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_IDS: ${{ secrets.TG_CHAT_IDS }}
+          DISCORD_WEBHOOKS: ${{ secrets.DISCORD_WEBHOOKS }}
+          FB_PAGE_IDS: ${{ secrets.FB_PAGE_IDS }}
+          FB_PAGE_TOKENS: ${{ secrets.FB_PAGE_TOKENS }}
+          PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
+          PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
 
           # Comportamento
-          TARGET_NETWORKS: "${{ vars.TARGET_NETWORKS || 'X' }}"
-          BACKLOG_DAYS: "${{ vars.BACKLOG_DAYS || '7' }}"
-          MAX_PUBLICACOES_RODADA: "${{ vars.MAX_PUBLICACOES_RODADA || '30' }}"
-          PAUSA_ENTRE_POSTS: "${{ vars.PAUSA_ENTRE_POSTS || '2.5' }}"
-          POST_X_WITH_IMAGE: "${{ vars.POST_X_WITH_IMAGE || 'true' }}"
-          X_POST_IN_ALL_ACCOUNTS: "${{ vars.X_POST_IN_ALL_ACCOUNTS || 'true' }}"
-          POST_TG_WITH_IMAGE: "${{ vars.POST_TG_WITH_IMAGE || 'true' }}"
-          POST_PINTEREST_WITH_IMAGE: "${{ vars.POST_PINTEREST_WITH_IMAGE || 'true' }}"
-          POST_FB_WITH_IMAGE: "${{ vars.POST_FB_WITH_IMAGE || 'true' }}"
+          TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS || 'X' }}
+          BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS || '7' }}
+          MAX_PUBLICACOES_RODADA: ${{ vars.MAX_PUBLICACOES_RODADA || '30' }}
+          PAUSA_ENTRE_POSTS: ${{ vars.PAUSA_ENTRE_POSTS || '2.5' }}
+          POST_X_WITH_IMAGE: ${{ vars.POST_X_WITH_IMAGE || 'true' }}
+          X_POST_IN_ALL_ACCOUNTS: ${{ vars.X_POST_IN_ALL_ACCOUNTS || 'true' }}
+          POST_TG_WITH_IMAGE: ${{ vars.POST_TG_WITH_IMAGE || 'true' }}
+          POST_PINTEREST_WITH_IMAGE: ${{ vars.POST_PINTEREST_WITH_IMAGE || 'true' }}
+          POST_FB_WITH_IMAGE: ${{ vars.POST_FB_WITH_IMAGE || 'true' }}
 
-          # Correção de duplicados do X (desliga busca de timeline)
-          X_SKIP_DUP_CHECK: "${{ vars.X_SKIP_DUP_CHECK || 'true' }}"
+          # 401 no X: desliga checagem de duplicados
+          X_SKIP_DUP_CHECK: ${{ vars.X_SKIP_DUP_CHECK || 'true' }}
 
           ENABLE_KEEPALIVE: "false"
         run: |
