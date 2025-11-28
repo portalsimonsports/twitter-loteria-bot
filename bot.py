@@ -1,9 +1,10 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-28 — Cofre como fonte principal + canais ordenados + colunas Publicado_<REDE> auto
+# Rev: 2025-11-28c — Cofre como fonte principal + canais ordenados + colunas Publicado_<REDE> auto
 # - Lê Cofre (Credenciais_Rede / Redes_Sociais_Canais); usa .env apenas como fallback
 # - Sem filtro de data; publica quando a coluna da rede estiver VAZIA
 # - Cria colunas "Publicado_<REDE>" se não existirem
 # - Texto inclui TODOS os canais ativos do Cofre (ordem crescente)
+# - NOVO: X_SKIP_DUP_CHECK controla o check de duplicidade (evita 401)
 
 import os, re, io, glob, json, time, base64, pytz, tweepy, requests
 import datetime as dt
@@ -61,6 +62,7 @@ X_POST_IN_ALL_ACCOUNTS = (os.getenv("X_POST_IN_ALL_ACCOUNTS", "true").strip().lo
 POST_X_WITH_IMAGE      = (os.getenv("POST_X_WITH_IMAGE", "true").strip().lower() == "true")
 COL_STATUS_X           = int(os.getenv("COL_STATUS_X", "8"))
 X_REPLY_WITH_LINK_BELOW = False  # manter compat
+X_SKIP_DUP_CHECK       = (os.getenv("X_SKIP_DUP_CHECK", "true").strip().lower() == "true")  # <— NOVO
 
 # Facebook
 POST_FB_WITH_IMAGE   = (os.getenv("POST_FB_WITH_IMAGE", "true").strip().lower() == "true")
@@ -398,7 +400,6 @@ def _build_canais_block_for(rede_alvo: str, max_chars: int = None) -> str:
     """
     canais = _cofre_cache.get("canais_list", [])
     if not canais:
-        # Fallback para P/Q (legado), apenas se existirem na linha (feito em montar_texto_publicacao)
         return ""
     lines = ["Inscreva-se nos nossos canais"]
     for ch in canais:
@@ -407,17 +408,14 @@ def _build_canais_block_for(rede_alvo: str, max_chars: int = None) -> str:
         lines += [nome, url, ""]
     txt = "\n".join([s for s in lines if s is not None]).strip()
     if max_chars and len(txt) > max_chars:
-        # corta preservando pares (nome + url)
         header = "Inscreva-se nos nossos canais\n"
         rest = txt[len(header):].split("\n")
-        # rest está como [nome1, url1, "", nome2, url2, "", ...]
         pairs = []
         i=0
         while i < len(rest):
             name = rest[i] if i < len(rest) else ""
             url  = rest[i+1] if i+1 < len(rest) else ""
             pairs.append((name,url))
-            # pular possível linha vazia
             i += 3 if i+2 < len(rest) and rest[i+2]=="" else 2
         out = header
         for (name,url) in pairs:
@@ -435,13 +433,11 @@ def montar_texto_publicacao(row, rede_alvo: str) -> str:
     canais_block = ""
     canais_list = _cofre_cache.get("canais_list", [])
     if canais_list:
-        # X tem limite — vamos dar 275 no total; cabeçalho + canais
         if rede_alvo == "X":
             canais_block = _build_canais_block_for(rede_alvo, max_chars=275 - len(head) - 1)
         else:
             canais_block = _build_canais_block_for(rede_alvo)
     else:
-        # Fallback P/Q apenas se Cofre não tiver canais
         dicas  = (_strip_invisible(row[COL_TG_DICAS-1])  if _safe_len(row,COL_TG_DICAS)  else "")
         portal = (_strip_invisible(row[COL_TG_PORTAL-1]) if _safe_len(row,COL_TG_PORTAL) else "")
         if dicas or portal:
@@ -451,7 +447,6 @@ def montar_texto_publicacao(row, rede_alvo: str) -> str:
             canais_block = "\n".join([p for p in parts if p]).strip()
 
     text = head + ("\n" + canais_block if canais_block else "")
-    # segurança extra para X
     if rede_alvo == "X" and len(text) > 275:
         text = text[:275]
     return text.strip()
@@ -514,6 +509,8 @@ def build_x_accounts():
 _recent_tweets_cache=defaultdict(set)
 _postados_nesta_execucao=defaultdict(set)
 def x_load_recent_texts(acc,max_results=50):
+    if X_SKIP_DUP_CHECK:
+        return set()
     try:
         resp=acc.client_v2.get_users_tweets(id=acc.user_id,max_results=min(max_results,100),tweet_fields=["text"])
         out=set()
@@ -526,7 +523,9 @@ def x_load_recent_texts(acc,max_results=50):
     except Exception as e:
         _log(f"[{acc.handle}] warning: tweets recentes: {e}")
         return set()
-def x_is_dup(acc,text): 
+def x_is_dup(acc,text):
+    if X_SKIP_DUP_CHECK:
+        return False
     t=(text or "").strip()
     return bool(t and (t in _recent_tweets_cache[acc.label] or t in _postados_nesta_execucao[acc.label]))
 def x_upload_media_if_any(acc,row):
