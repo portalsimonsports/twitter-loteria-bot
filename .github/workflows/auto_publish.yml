@@ -139,6 +139,11 @@ jobs:
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
           SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
 
+          # ===== Cofre (NOVO) =====
+          COFRE_SHEET_ID: ${{ vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          COFRE_ABA_CANAIS: ${{ vars.COFRE_ABA_CANAIS || 'Redes_Sociais_Canais' }}
+
           # X (obrigatória conta 1)
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
@@ -170,6 +175,9 @@ jobs:
           POST_TG_WITH_IMAGE: ${{ vars.POST_TG_WITH_IMAGE || 'true' }}
           POST_PINTEREST_WITH_IMAGE: ${{ vars.POST_PINTEREST_WITH_IMAGE || 'true' }}
           POST_FB_WITH_IMAGE: ${{ vars.POST_FB_WITH_IMAGE || 'true' }}
+
+          # Correção 401 no X (desliga busca de tweets recentes)
+          X_SKIP_DUP_CHECK: ${{ vars.X_SKIP_DUP_CHECK || 'true' }}
 
           ENABLE_KEEPALIVE: "false"
         run: |
