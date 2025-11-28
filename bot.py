@@ -1,8 +1,9 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2025-11-27b — Texto usa TODOS os canais ativos da aba Redes_Sociais_Canais (ordem crescente)
-# - Ignora P/Q da planilha de publicações (usa como fallback apenas se Cofre não tiver canais)
+# Rev: 2025-11-28 — Cofre como fonte principal + canais ordenados + colunas Publicado_<REDE> auto
+# - Lê Cofre (Credenciais_Rede / Redes_Sociais_Canais); usa .env apenas como fallback
 # - Sem filtro de data; publica quando a coluna da rede estiver VAZIA
-# - Cria colunas "Publicado_<REDE>" quando faltarem (se estiver usando Cofre)
+# - Cria colunas "Publicado_<REDE>" se não existirem
+# - Texto inclui TODOS os canais ativos do Cofre (ordem crescente)
 
 import os, re, io, glob, json, time, base64, pytz, tweepy, requests
 import datetime as dt
@@ -31,7 +32,7 @@ COFRE_ABA_CANAIS = (os.getenv("COFRE_ABA_CANAIS", "Redes_Sociais_Canais") or "Re
 
 TARGET_NETWORKS = [
     s.strip().upper()
-    for s in (os.getenv("TARGET_NETWORKS", "X") or "X").split(",")
+    for s in (os.getenv("TARGET_NETWORKS", "X,FACEBOOK,TELEGRAM,DISCORD,PINTEREST") or "X").split(",")
     if s.strip()
 ]
 DRY_RUN = (os.getenv("DRY_RUN", "false").strip().lower() == "true")
@@ -59,7 +60,7 @@ def get_text_mode(rede: str) -> str:
 X_POST_IN_ALL_ACCOUNTS = (os.getenv("X_POST_IN_ALL_ACCOUNTS", "true").strip().lower() == "true")
 POST_X_WITH_IMAGE      = (os.getenv("POST_X_WITH_IMAGE", "true").strip().lower() == "true")
 COL_STATUS_X           = int(os.getenv("COL_STATUS_X", "8"))
-X_REPLY_WITH_LINK_BELOW = False
+X_REPLY_WITH_LINK_BELOW = False  # manter compat
 
 # Facebook
 POST_FB_WITH_IMAGE   = (os.getenv("POST_FB_WITH_IMAGE", "true").strip().lower() == "true")
@@ -94,7 +95,7 @@ KEEPALIVE_PORT   = int(os.getenv("KEEPALIVE_PORT", "8080"))
 
 # Limites
 MAX_PUBLICACOES_RODADA = int(os.getenv("MAX_PUBLICACOES_RODADA", "30"))
-PAUSA_ENTRE_POSTS      = float(os.getenv("PAUSA_ENTRE_POSTS", "2.0"))
+PAUSA_ENTRE_POSTS      = float(os.getenv("PAUSA_ENTRE_POSTS", "2.5"))
 
 def _detect_origem():
     if os.getenv("BOT_ORIGEM"): return os.getenv("BOT_ORIGEM").strip()
@@ -144,14 +145,30 @@ def _row_has_min_payload(row) -> bool:
 # ---------------- Google Sheets ----------------
 _cofre_cache: Dict[str, Dict] = {}  # "creds", "canais" (map) e "canais_list" (lista ordenada)
 
+# sinônimos de "Rede" aceitos no Cofre
+_COOL_REDE = {
+    "GOOGLE": ["GOOGLE", "PLANILHAS GOOGLE", "PLANILHAS_GOOGLE", "PLANILHAS"],
+    "X": ["X", "TWITTER"],
+    "FACEBOOK": ["FACEBOOK", "META_FACEBOOK", "META"],
+    "TELEGRAM": ["TELEGRAM", "TG"],
+    "DISCORD": ["DISCORD"],
+    "PINTEREST": ["PINTEREST"]
+}
+def _match_rede(key_rede: str, target: str) -> bool:
+    kr = (key_rede or "").strip().upper()
+    tg = (target or "").strip().upper()
+    return kr == tg or kr.replace("_"," ") == tg.replace("_"," ") or kr in _COOL_REDE.get(tg, [])
+
 def _gs_creds_from_env_or_cofre() -> Dict:
     sa_json_env = (os.getenv("GOOGLE_SERVICE_JSON", "") or "").strip()
-    if sa_json_env: return json.loads(sa_json_env)
+    if sa_json_env:
+        try: return json.loads(sa_json_env)
+        except Exception: pass
     if not COFRE_SHEET_ID: return {}
     try:
-        cofre = _cofre_cache.get("creds", {})
-        val = cofre.get(("GOOGLE", "GOOGLE_SERVICE_JSON"))
-        if val: return json.loads(val)
+        for (rede, chave), valor in _cofre_cache.get("creds", {}).items():
+            if _match_rede(rede, "GOOGLE") and chave.upper() == "GOOGLE_SERVICE_JSON" and valor:
+                return json.loads(valor)
     except Exception:
         pass
     return {}
@@ -234,20 +251,30 @@ def _cofre_load():
                     o = 9999
                 canais_list.append({"ordem":o, "rede":rede, "tipo":tipo, "nome":nome or tipo, "url":url})
                 if tipo in canais_map and url:
-                    canais_map[tipo] = url  # mantém compatibilidade
+                    canais_map[tipo] = url  # mantém compat
     canais_list.sort(key=lambda x: x["ordem"])
     _cofre_cache["canais"] = canais_map
     _cofre_cache["canais_list"] = canais_list
 
 def _cofre_get(key: Tuple[str,str], default: Optional[str]=None) -> Optional[str]:
-    return _cofre_cache.get("creds", {}).get((key[0].upper(), key[1].upper()), default)
+    """Busca por (rede, chave) aceitando sinônimos de 'rede'."""
+    rede, chave = (key[0] or "").upper(), (key[1] or "").upper()
+    m = _cofre_cache.get("creds", {})
+    # 1) match direto
+    v = m.get((rede, chave))
+    if v: return v
+    # 2) procurar por sinônimos
+    for (r,k), val in m.items():
+        if k == chave and _match_rede(r, rede):
+            return val
+    return default
 
 def _cofre_get_many(prefix: Tuple[str,str]) -> List[Tuple[int,str]]:
-    rede, pref = prefix[0].upper(), prefix[1].upper()
+    rede, pref = (prefix[0] or "").upper(), (prefix[1] or "").upper()
     m = _cofre_cache.get("creds", {})
     out=[]
     for (r,k),v in m.items():
-        if r==rede and k.startswith(pref):
+        if _match_rede(r, rede) and k.startswith(pref):
             mm = re.search(rf"^{re.escape(pref)}(\d+)$", k)
             if mm: out.append((int(mm.group(1)), v))
     out.sort(key=lambda x:x[0])
@@ -301,6 +328,11 @@ def _apply_cofre_to_env_and_networks():
     if tg_active: redes.append("TELEGRAM")
     if disc_active: redes.append("DISCORD")
     if pin_active: redes.append("PINTEREST")
+
+    if redes:
+        _log(f"[Cofre] Redes ativas: {', '.join(redes)}")
+    else:
+        _log("[Cofre] Nenhuma rede ativa detectada — usando TARGET_NETWORKS do .env")
     return redes if redes else TARGET_NETWORKS
 
 # ---------------- imagem ----------------
@@ -722,22 +754,30 @@ def iniciar_keepalive():
     except ImportError:
         _log("Flask não instalado; keepalive desativado."); return None
     app=Flask(__name__)
-    @app.route("/") ; @app.route("/ping")
-    def raiz(): return "ok",200
+    @app.route("/")
+    @app.route("/ping")
+    def raiz(): 
+        return "ok",200
     def run():
         port=int(os.getenv("PORT", KEEPALIVE_PORT))
         app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
     th=Thread(target=run,daemon=True); th.start()
     _log(f"Keepalive em 0.0.0.0:{os.getenv('PORT', KEEPALIVE_PORT)}"); return th
 
+def _print_config_summary(redes_alvo):
+    _log("=== Config ===",
+         f"SHEET_ID={SHEET_ID or '(via Cofre)'} | TAB={SHEET_TAB} | COFRE={COFRE_SHEET_ID or 'desligado'}")
+    _log("Redes alvo:", ", ".join(redes_alvo))
+    _log("Canais Cofre:", len(_cofre_cache.get("canais_list", [])))
+
 # principal
 def main():
-    _log("Start",
-         f"Origem={BOT_ORIGEM} | DRY_RUN={DRY_RUN} | KIT_FIRST={USE_KIT_IMAGE_FIRST}")
+    _log("Start", f"Origem={BOT_ORIGEM} | DRY_RUN={DRY_RUN} | KIT_FIRST={USE_KIT_IMAGE_FIRST}")
     keepalive_thread = iniciar_keepalive() if ENABLE_KEEPALIVE else None
     try:
         _cofre_load()
         redes_alvo=_apply_cofre_to_env_and_networks()
+        _print_config_summary(redes_alvo)
         ws=_open_ws()
         for rede in redes_alvo:
             rede=rede.upper()
