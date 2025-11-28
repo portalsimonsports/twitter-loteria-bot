@@ -1,27 +1,78 @@
-# main.py — mantém vivo e executa o bot periodicamente
+# main.py — Portal SimonSports — Orquestrador do bot com keepalive opcional
+# - Executa bot.py de forma periódica
+# - Mantém endpoint HTTP para Render/Replit quando ENABLE_KEEPALIVE=true
+
 import os
-import threading
+import sys
 import time
-from flask import Flask
+import signal
+import threading
 import subprocess
 
-app = Flask(__name__)
+try:
+    from flask import Flask
+except Exception:
+    # Flask só é necessário se ENABLE_KEEPALIVE=true
+    Flask = None
 
-@app.route("/")
-def home():
-    return "✅ Portal SimonSports — Bot de Loterias ativo!"
+# ===== Env (.env é opcional) =====
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
-def executar_bot():
+ENABLE_KEEPALIVE = (os.getenv("ENABLE_KEEPALIVE", "false").strip().lower() == "true")
+PORT = int(os.getenv("PORT", os.getenv("KEEPALIVE_PORT", "8080")))
+RUN_EVERY_MINUTES = float(os.getenv("RUN_EVERY_MINUTES", "10"))  # intervalo entre execuções
+RUN_ONCE = (os.getenv("RUN_ONCE", "false").strip().lower() == "true")
+
+# ===== App Flask (somente se manter vivo estiver habilitado) =====
+app = Flask(__name__) if (ENABLE_KEEPALIVE and Flask) else None
+
+if app:
+    @app.get("/")
+    @app.get("/ping")
+    @app.get("/health")
+    def home():
+        return "✅ Portal SimonSports — Bot de Loterias ativo!", 200
+
+# ===== Runner =====
+def executar_bot_loop():
+    """Roda o bot uma vez ou em loop, conforme RUN_ONCE/RUN_EVERY_MINUTES."""
     while True:
         try:
-            print("🚀 Executando bot.py automaticamente...")
-            subprocess.run(["python", "bot.py"], check=True)
+            print("🚀 Executando bot.py ...", flush=True)
+            # usa o mesmo interpretador em uso
+            subprocess.run([sys.executable, "bot.py"], check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"⚠️  bot.py terminou com código {e.returncode}", flush=True)
         except Exception as e:
-            print(f"⚠️ Erro ao executar bot.py: {e}")
-        print("🕒 Próxima execução em 10 minutos...")
-        time.sleep(600)  # 10 min (ajuste se quiser)
-        
+            print(f"⚠️  Erro ao executar bot.py: {e}", flush=True)
+
+        if RUN_ONCE:
+            print("🛑 RUN_ONCE=true — encerrando após esta execução.", flush=True)
+            break
+
+        print(f"🕒 Próxima execução em {RUN_EVERY_MINUTES} minuto(s)...", flush=True)
+        time.sleep(max(1, int(RUN_EVERY_MINUTES * 60)))
+
+def _on_sigterm(signum, frame):
+    print("🔚 SIGTERM recebido — finalizando main.py.", flush=True)
+    sys.exit(0)
+
+# ===== Main =====
 if __name__ == "__main__":
-    t = threading.Thread(target=executar_bot, daemon=True)
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
+    # Quando há keepalive, o loop do bot roda em thread daemon; o Flask fica em foreground.
+    # Sem keepalive, o loop fica em foreground (t.join()).
+    t = threading.Thread(target=executar_bot_loop, daemon=ENABLE_KEEPALIVE)
     t.start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
+    if ENABLE_KEEPALIVE and app:
+        print(f"🌐 Keepalive ON — servindo em 0.0.0.0:{PORT}", flush=True)
+        app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
+    else:
+        print("🌐 Keepalive OFF — executando somente o loop do bot.", flush=True)
+        t.join()
