@@ -90,24 +90,8 @@ jobs:
           echo "Arquivos gerados em /output:"
           ls -la output || true
 
-      - name: Commitar /output (se gerado)
-        if: steps.fila.outputs.itens != '0'
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-
-          git add -A output || true
-          git commit -m "chore: adiciona imagens geradas (${GITHUB_RUN_NUMBER})" || echo "Nada para commitar"
-
-          # integra possíveis commits que chegaram no remoto
-          git fetch origin $GITHUB_REF_NAME
-          git pull --rebase --autostash origin $GITHUB_REF_NAME
-
-          # push para a mesma branch
-          git push origin HEAD:$GITHUB_REF_NAME
-
       # =========================
-      # PUBLICAÇÃO (Python bot.py)
+      # PYTHON (para cleanup + bot)
       # =========================
       - name: Configurar Python
         uses: actions/setup-python@v5
@@ -127,6 +111,38 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
+      # =========================
+      # CLEANUP OUTPUT (NOVO)
+      # =========================
+      - name: Limpar/normalizar imagens em output (remover duplicados, ajustar nomes)
+        if: steps.fila.outputs.itens != '0'
+        run: |
+          python cleanup_output.py
+          echo "Após cleanup, conteúdo de /output:"
+          ls -la output || true
+
+      # =========================
+      # COMMIT DAS IMAGENS
+      # =========================
+      - name: Commitar /output (se gerado)
+        if: steps.fila.outputs.itens != '0'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          git add -A output || true
+          git commit -m "chore: adiciona imagens geradas (${GITHUB_RUN_NUMBER})" || echo "Nada para commitar"
+
+          # integra possíveis commits que chegaram no remoto
+          git fetch origin $GITHUB_REF_NAME
+          git pull --rebase --autostash origin $GITHUB_REF_NAME
+
+          # push para a mesma branch
+          git push origin HEAD:$GITHUB_REF_NAME
+
+      # =========================
+      # PUBLICAÇÃO (Python bot.py)
+      # =========================
       - name: Verificar secrets mínimos (Google + X conta 1)
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
