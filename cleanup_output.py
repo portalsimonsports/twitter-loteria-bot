@@ -16,7 +16,7 @@
 #
 # 3) Também normaliza o "slug" da loteria, removendo palavras repetidas:
 #      federal-loteria-federal-5995.jpg  -> federal-loteria-5995.jpg
-#      mega-sena-mega-sena-2945.jpg      -> mega-sena-2945.jpg
+#      mega-mega-sena-2945.jpg           -> mega-sena-2945.jpg
 #
 # IMPORTANTE:
 # - Só mexe em arquivos .jpg/.jpeg/.png na pasta ./output
@@ -66,7 +66,8 @@ def main():
         print(f"Pasta output não encontrada: {OUTPUT_DIR}")
         return
 
-    groups = {}  # key = (canon_slug, conc, ext) -> [ (Path, suffix_int, original_slug) ]
+    # key = (canon_slug, conc, ext) -> [ (Path, suffix_int, original_slug) ]
+    groups = {}
 
     # Varre todos os arquivos da pasta output
     for f in OUTPUT_DIR.iterdir():
@@ -124,6 +125,7 @@ def main():
             )[0]
 
         main_file, main_sfx, main_slug = main
+        old_main_path = main_file  # guarda o caminho original
 
         # Nome final desejado (slug já "limpo")
         target_name = f"{canon}-{conc}.{ext}"
@@ -140,11 +142,18 @@ def main():
 
         # Apaga todos os outros arquivos do grupo
         for f, sfx, slug in files:
-            if f == main_file:
+            # não apagar nem o novo caminho nem o original (caso já tenha sido renomeado)
+            if f == main_file or f == old_main_path:
+                continue
+            if not f.exists():
                 continue
             print(f"[APAGAR]   {f.name}")
             if not DRY_RUN:
-                f.unlink()
+                try:
+                    f.unlink()
+                except FileNotFoundError:
+                    # se por qualquer razão já tiver sido removido, ignora
+                    pass
             total_deleted += 1
 
     print("\nResumo da limpeza:")
