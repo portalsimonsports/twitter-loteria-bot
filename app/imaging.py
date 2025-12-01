@@ -4,6 +4,8 @@
 #           e, em caso de EMPATE, destaca a coluna central "×" em verde.
 # - Loteria Federal: layout próprio em linhas (1º a 5º prêmio); sem bolinhas; logo com fallback "federal".
 # - Dedupe de nome da loteria no título; fallback de fontes ampliado; sem alterar visual aprovado.
+#
+# OBS: gerar_imagem_loteria() gera um PNG em memória (BytesIO).
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io
