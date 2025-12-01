@@ -30,7 +30,7 @@ function slugify(s){
   return stripInvisible(String(s||''))
     .toLowerCase()
     .normalize('NFKD').replace(/[\u0300-\u036f]/g,'')
-    // HÍFEN no fim da classe para evitar "range out of order"
+    // hífen no fim para evitar "range out of order"
     .replace(/[^a-z0-9 _-]+/g,'')
     .trim().replace(/\s+/g,'-');
 }
@@ -54,7 +54,7 @@ const LOTERIA_SLUGS = {
   'dupla-sena':'dupla-sena',
   'duplasena':'dupla-sena',
 
-  // Loteria Federal: sempre usar "loteria-federal"
+  // Loteria Federal → sempre "loteria-federal"
   'federal':'loteria-federal',
   'loteria federal':'loteria-federal',
   'loteria-federal':'loteria-federal',
@@ -108,34 +108,57 @@ function normalizeNumerosLoteca(raw){
   return stripInvisible(String(raw||'')).trim();
 }
 
-/* ======= helpers filename (anti-duplicado + sufixo incremental) ======= */
+/* ======= helpers filename (anti-dobras) ======= */
 /**
- * Regra nova:
- *  - PRIORIDADE 1: usar o ID vindo do JSON (id já normalizado no Apps Script)
- *      id="mega-sena-2938"        → mega-sena-2938.jpg
- *      id="loteria-federal-5975"  → loteria-federal-5975.jpg
+ * Regras para nome de arquivo:
  *
- *  - Se não tiver id, usa slug da loteria + concurso/data:
- *      mega-sena + 2938 → mega-sena-2938.jpg
+ * 1) Se houver CONCURSO:
+ *    - extrai o primeiro número do concurso
+ *      ex: "Concurso 2931", "2931", "2931 (Especial)" → 2931
+ *    - filename = "<slug>-<numero>.jpg"
+ *      ex: mega-sena-2931.jpg
  *
- *  - Se nada disso existir, cai no slug puro:
- *      loteca → loteca.jpg
+ * 2) Se NÃO houver concurso mas existir id:
+ *    - tenta usar o id já normalizado:
+ *      a) se começar com "<slug>-": usa direto (mega-sena-2931)
+ *      b) senão: "<slug>-<id-normalizado>"
+ *
+ * 3) Se não tiver nem concurso nem id:
+ *    - tenta usar data como tag
+ *    - se ainda assim não tiver nada: "<slug>.jpg"
  */
 function buildFilename(loteria, concurso, data, id){
-  const cleanId = slugify(stripInvisible(id || ''));
-  if (cleanId) {
-    return `${cleanId}.jpg`;
+  const slug = guessSlug(loteria);
+
+  // 1) Tentar pelo CONCURSO
+  let numero = '';
+  if (concurso) {
+    const m = String(concurso).match(/\d+/);
+    if (m) numero = m[0];
+  }
+  if (numero) {
+    return `${slug}-${numero}.jpg`;
   }
 
-  const slug = guessSlug(loteria);
-  const tagRaw = stripInvisible(safe(concurso) || safe(data));
-  const tag = slugify(tagRaw);
+  // 2) Sem concurso → tentar pelo ID
+  const cleanId = slugify(stripInvisible(id || ''));
+  if (cleanId) {
+    if (cleanId.startsWith(`${slug}-`)) {
+      // já está no formato mega-sena-2931, etc.
+      return `${cleanId}.jpg`;
+    }
+    // senão, pendura o id normalizado depois do slug
+    return `${slug}-${cleanId}.jpg`;
+  }
 
+  // 3) fallback com data
+  const tagRaw = stripInvisible(safe(data));
+  const tag = slugify(tagRaw);
   if (tag) {
     return `${slug}-${tag}.jpg`;
   }
 
-  // fallback extremo (não deve acontecer na prática)
+  // 4) fallback extremo
   return `${slug}.jpg`;
 }
 
@@ -143,7 +166,7 @@ function ensureUniquePath(dir, filename){
   let out = path.join(dir, filename);
   if (!fs.existsSync(out)) return out;
   const ext = path.extname(filename);        // .jpg
-  const name = path.basename(filename, ext); // quina-6875
+  const name = path.basename(filename, ext); // ex: quina-6875
   let i = 1;
   while (true){
     const trial = path.join(dir, `${name}-${i}${ext}`);
@@ -211,7 +234,7 @@ function buildFields(item){
 
   const produto = concurso ? `${loteria} • Concurso ${concurso}` : loteria;
 
-  // AQUI entra a nova lógica de nome de arquivo
+  // nova lógica de nome do arquivo (baseada em slug + concurso)
   const filename = buildFilename(loteria, concurso, data, item.id);
 
   return { slug, produto, data, descricao, url, tg1, tg2, fundo, logo, filename, numeros };
