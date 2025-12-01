@@ -38,20 +38,37 @@ function slugify(s){
 // Nome -> slug (arquivos de fundo/logo)
 const LOTERIA_SLUGS = {
   'mega-sena':'mega-sena',
+  'megasena':'mega-sena',
+  'mega sena':'mega-sena',
+
   'quina':'quina',
+
   'lotofacil':'lotofacil',
   'lotofácil':'lotofacil',
+
   'lotomania':'lotomania',
+
   'timemania':'timemania',
+
   'dupla sena':'dupla-sena',
   'dupla-sena':'dupla-sena',
-  'federal':'federal',
-  'loteria federal':'federal',
+  'duplasena':'dupla-sena',
+
+  // Loteria Federal: sempre usar "loteria-federal"
+  'federal':'loteria-federal',
+  'loteria federal':'loteria-federal',
+  'loteria-federal':'loteria-federal',
+
   'dia de sorte':'dia-de-sorte',
   'dia-de-sorte':'dia-de-sorte',
+  'diadesorte':'dia-de-sorte',
+
   'super sete':'super-sete',
   'super-sete':'super-sete',
+  'supersete':'super-sete',
+
   'loteca':'loteca',
+
   'mais-milionaria':'mais-milionaria',
   'mais milionaria':'mais-milionaria',
   'mais milionária':'mais-milionaria',
@@ -92,19 +109,34 @@ function normalizeNumerosLoteca(raw){
 }
 
 /* ======= helpers filename (anti-duplicado + sufixo incremental) ======= */
+/**
+ * Regra nova:
+ *  - PRIORIDADE 1: usar o ID vindo do JSON (id já normalizado no Apps Script)
+ *      id="mega-sena-2938"        → mega-sena-2938.jpg
+ *      id="loteria-federal-5975"  → loteria-federal-5975.jpg
+ *
+ *  - Se não tiver id, usa slug da loteria + concurso/data:
+ *      mega-sena + 2938 → mega-sena-2938.jpg
+ *
+ *  - Se nada disso existir, cai no slug puro:
+ *      loteca → loteca.jpg
+ */
 function buildFilename(loteria, concurso, data, id){
-  const slug = guessSlug(loteria);
-  const tagRaw = stripInvisible(safe(id) || safe(concurso) || safe(data));
-  const tag = slugify(tagRaw);
-  let base;
-  if (!tag) {
-    base = `${slug}`;
-  } else if (tag === slug || tag.startsWith(`${slug}-`)) {
-    base = `${tag}`;
-  } else {
-    base = `${slug}-${tag}`;
+  const cleanId = slugify(stripInvisible(id || ''));
+  if (cleanId) {
+    return `${cleanId}.jpg`;
   }
-  return `${base}.jpg`;
+
+  const slug = guessSlug(loteria);
+  const tagRaw = stripInvisible(safe(concurso) || safe(data));
+  const tag = slugify(tagRaw);
+
+  if (tag) {
+    return `${slug}-${tag}.jpg`;
+  }
+
+  // fallback extremo (não deve acontecer na prática)
+  return `${slug}.jpg`;
 }
 
 function ensureUniquePath(dir, filename){
@@ -161,7 +193,7 @@ function buildFields(item){
       descricao = `Números: ${n}`;
     }
     numeros = n;
-  } else if (slug === 'federal') {
+  } else if (slug === 'loteria-federal') {
     const clean = stripInvisible(String(rawNum||''));
     const parts = clean.split(/[,\n;]+/).map(s => s.trim()).filter(Boolean);
     if (parts.length >= 5) {
@@ -178,6 +210,8 @@ function buildFields(item){
   }
 
   const produto = concurso ? `${loteria} • Concurso ${concurso}` : loteria;
+
+  // AQUI entra a nova lógica de nome de arquivo
   const filename = buildFilename(loteria, concurso, data, item.id);
 
   return { slug, produto, data, descricao, url, tg1, tg2, fundo, logo, filename, numeros };
