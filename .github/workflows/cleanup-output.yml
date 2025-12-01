@@ -1,1 +1,50 @@
+name: Cleanup output images
+
+on:
+  # Executa 1x por semana (domingo 03:00 UTC)
+  schedule:
+    - cron: "0 3 * * 0"
+  # Permite rodar manualmente
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup-output:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies (se precisar)
+        run: |
+          python -m pip install --upgrade pip
+          # Se o cleanup_output.py não usa libs externas, pode deixar só a linha acima
+
+      - name: Run cleanup script
+        run: |
+          python cleanup_output.py
+
+      - name: Configurar git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit and push changes (if any)
+        run: |
+          if git status --porcelain | grep output/; then
+            echo "Mudanças encontradas em output/, fazendo commit..."
+            git add output
+            git commit -m "chore: auto-clean output images" || echo "Nada para commitar"
+            git push
+          else
+            echo "Sem mudanças em output/, nada para commitar."
+          fi
 
