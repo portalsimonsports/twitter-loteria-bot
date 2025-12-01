@@ -14,9 +14,10 @@
 #        • se só tiver com sufixo, pega o MENOR sufixo
 #    - Todos os outros são APAGADOS.
 #
-# 3) Também normaliza o "slug" da loteria, removendo palavras repetidas:
-#      federal-loteria-federal-5995.jpg  -> federal-loteria-5995.jpg
-#      mega-mega-sena-2945.jpg           -> mega-sena-2945.jpg
+# 3) Normaliza o "slug" da loteria:
+#      - Remove palavras duplicadas
+#      - Para a combinação FEDERAL + LOTERIA, usa SEMPRE "loteria-federal"
+#        Ex.: federal-loteria-federal-5995.jpg  -> loteria-federal-5995.jpg
 #
 # IMPORTANTE:
 # - Só mexe em arquivos .jpg/.jpeg/.png na pasta ./output
@@ -45,10 +46,12 @@ PAT = re.compile(
 
 def canonical_slug(slug: str) -> str:
     """
-    Remove palavras duplicadas do slug, mantendo a ordem da 1ª ocorrência.
+    Remove palavras duplicadas do slug, mantendo a ordem da 1ª ocorrência
+    e aplica alguns ajustes especiais (como Loteria Federal).
 
-    Ex.:
-      "federal-loteria-federal" -> "federal-loteria"
+    Exemplos:
+      "federal-loteria-federal" -> "loteria-federal"
+      "loteria-federal"         -> "loteria-federal"
       "mega-mega-sena"          -> "mega-sena"
     """
     parts = [p for p in slug.split("-") if p]
@@ -58,6 +61,16 @@ def canonical_slug(slug: str) -> str:
         if p not in seen:
             uniq.append(p)
             seen.add(p)
+
+    # Combos especiais com ordem preferida
+    key = frozenset(uniq)
+
+    # Caso Loteria Federal: queremos SEMPRE "loteria-federal"
+    if key == frozenset({"federal", "loteria"}):
+        ordered = [w for w in ["loteria", "federal"] if w in uniq]
+        return "-".join(ordered)
+
+    # Outros casos: só remove duplicados mantendo ordem original
     return "-".join(uniq)
 
 
@@ -152,7 +165,6 @@ def main():
                 try:
                     f.unlink()
                 except FileNotFoundError:
-                    # se por qualquer razão já tiver sido removido, ignora
                     pass
             total_deleted += 1
 
