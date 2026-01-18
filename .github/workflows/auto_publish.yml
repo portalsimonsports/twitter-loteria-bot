@@ -196,7 +196,7 @@ jobs:
           PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
 
           # Comportamento
-          TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS || 'X' }}
+          TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS }}
           BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS || '7' }}
           MAX_PUBLICACOES_RODADA: ${{ vars.MAX_PUBLICACOES_RODADA || '30' }}
           PAUSA_ENTRE_POSTS: ${{ vars.PAUSA_ENTRE_POSTS || '2.5' }}
