@@ -1,13 +1,14 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2026-01-18b — COFRE ONLY (credenciais de redes SOMENTE no Cofre) + RODA TODAS AS REDES (skips por credencial)
+# Rev: 2026-01-18b — COFRE ONLY + FIX grid limits (add_cols) + roda TODAS as redes alvo
 # - NÃO usa .env (não chama load_dotenv)
 # - ÚNICA credencial fora do Cofre: GOOGLE_SERVICE_JSON via GitHub Actions (secret)
 # - Planilhas (principal + Cofre) são abertas via Service Account
-# - Redes sociais (tokens/keys/ids/webhooks/chat_ids/board_id etc.) SOMENTE via Cofre
+# - Redes sociais (tokens/keys/ids/webhooks/chat_ids) SOMENTE via Cofre
 # - Sem filtro de data; publica quando a coluna da rede estiver VAZIA
-# - Cria colunas "Publicado_<REDE>" se não existirem (e evita escrever em coluna errada se índice fixo estiver desalinhado)
-# - Texto inclui TODOS os canais ativos do Cofre (ordem crescente) — canais NÃO determinam redes ativas
-# - Se NÃO houver credenciais de uma rede, o bot apenas loga "SKIP" e segue (não dá FATAL)
+# - Cria colunas "Publicado_<REDE>" se não existirem (e AUMENTA colunas da aba automaticamente)
+# - Texto inclui TODOS os canais ativos do Cofre (ordem crescente) — usado apenas como bloco de links (não ativa rede)
+# - TARGET_NETWORKS (env/vars) define a ordem/redes a processar (default: todas suportadas)
+# - Se a rede NÃO tiver credenciais no Cofre, apenas registra no log e segue para a próxima (não falha execução)
 # - X_SKIP_DUP_CHECK no Cofre (opcional) controla check de duplicidade (evita 401)
 
 import os, re, io, glob, json, time, base64, pytz, tweepy, requests
@@ -38,6 +39,7 @@ TZ = pytz.timezone("America/Sao_Paulo")
 # - COFRE_ABA_CRED  (default: Credenciais_Rede)
 # - COFRE_ABA_CANAIS(default: Redes_Sociais_Canais)
 # - SHEET_TAB       (default: ImportadosBlogger2)
+# - TARGET_NETWORKS (default: X,FACEBOOK,TELEGRAM,DISCORD,PINTEREST)
 #
 # OBS: a planilha PRINCIPAL (GOOGLE_SHEET_ID) vem do Cofre.
 # ============================================================
@@ -48,6 +50,9 @@ COFRE_ABA_CRED   = (os.getenv("COFRE_ABA_CRED", "Credenciais_Rede") or "Credenci
 COFRE_ABA_CANAIS = (os.getenv("COFRE_ABA_CANAIS", "Redes_Sociais_Canais") or "Redes_Sociais_Canais").strip()
 
 SHEET_TAB = (os.getenv("SHEET_TAB", "ImportadosBlogger2") or "ImportadosBlogger2").strip()
+
+# Redes alvo (ordem). Mesmo sem credenciais, o bot "roda" e só pula a publicação.
+TARGET_NETWORKS = (os.getenv("TARGET_NETWORKS", "X,FACEBOOK,TELEGRAM,DISCORD,PINTEREST") or "").strip()
 
 DRY_RUN = (os.getenv("DRY_RUN", "false").strip().lower() == "true")
 
@@ -64,14 +69,13 @@ PAUSA_ENTRE_POSTS      = float(os.getenv("PAUSA_ENTRE_POSTS", "2.5"))
 # ---------------- colunas planilha principal ----------------
 COL_LOTERIA, COL_CONCURSO, COL_DATA, COL_NUMEROS, COL_URL = 1, 2, 3, 4, 5
 COL_URL_IMAGEM, COL_IMAGEM = 6, 7
+
 # P e Q continuam existindo como fallback "antigo" de canais (se não houver canais no Cofre)
 COL_TG_DICAS  = 16  # P
 COL_TG_PORTAL = 17  # Q
 
-# Status por rede:
-# Observação: se a coluna não existir, o bot cria "Publicado_<REDE>"
-# IMPORTANTE: o índice fixo pode ficar desalinhado se você inserir colunas.
-# Nesta revisão, o índice fixo só é usado se o cabeçalho bater; caso contrário, busca/cria pelo nome.
+# Status por rede (índices fixos antigos, se existirem).
+# Se a coluna não existir, o bot cria "Publicado_<REDE>".
 COL_STATUS_REDES = {
     "X": 8,
     "FACEBOOK": 15,
@@ -79,9 +83,6 @@ COL_STATUS_REDES = {
     "DISCORD": 13,
     "PINTEREST": 14
 }
-
-# Ordem padrão de execução (sempre tenta rodar todas; publica apenas se houver credenciais)
-SUPPORTED_NETWORKS = ["X", "FACEBOOK", "TELEGRAM", "DISCORD", "PINTEREST"]
 
 # ---------------- utilidades ----------------
 def _detect_origem():
@@ -192,14 +193,14 @@ def _cofre_load():
     creds_map = {}
     allv = creds_ws.get_all_values()
     for r in allv[1:]:
-        rede = _strip_invisible(r[0]) if len(r)>0 else ""
+        rede  = _strip_invisible(r[0]) if len(r)>0 else ""
         chave = _strip_invisible(r[2]) if len(r)>2 else ""
         valor = _strip_invisible(r[3]) if len(r)>3 else ""
         if rede and chave and valor:
             creds_map[(rede.upper(), chave.upper())] = valor
     _cofre_cache["creds"] = creds_map
 
-    # Canais (Redes_Sociais_Canais) — NÃO define "redes ativas"
+    # Canais (Redes_Sociais_Canais) — SOMENTE para bloco de links no texto (não define redes ativas)
     canais_ws = _open_cofre_ws(COFRE_ABA_CANAIS)
     canais_list = []
     vals = canais_ws.get_all_values()
@@ -227,38 +228,49 @@ def _open_ws_principal():
     sh = _gs_client().open_by_key(sid)
     return sh.worksheet(SHEET_TAB)
 
-def _find_or_create_status_column(ws, rede: str) -> int:
-    """
-    Resolve de forma segura a coluna de status:
-    - Se índice fixo existir E o cabeçalho bater com "Publicado_<REDE>", usa.
-    - Caso contrário, procura pelo cabeçalho (case-insensitive).
-    - Se não existir, cria no final.
-    """
+def _ensure_cols(ws, min_cols: int):
+    """Garante que a aba tenha pelo menos min_cols colunas (FIX do erro 'exceeds grid limits')."""
+    try:
+        cur = ws.col_count
+    except Exception:
+        # fallback: tenta inferir pelo header
+        cur = len(ws.row_values(1))
+    if cur >= min_cols:
+        return
+    add = min_cols - cur
+    _log(f"[Planilha] Aumentando colunas: {cur} -> {min_cols} (+{add})")
+    ws.add_cols(add)
+
+def _ensure_status_column(ws, rede: str, env_col: Optional[int]) -> int:
+    # Mantém compat com índices fixos, mas cria se não existir
+    if env_col and isinstance(env_col, int) and env_col > 0:
+        return env_col
+
     header = ws.row_values(1)
-    target = f"Publicado_{rede}".strip()
+    target = f"Publicado_{rede}"
 
-    # 1) Se tiver índice fixo, valida se o cabeçalho bate
-    fixed = COL_STATUS_REDES.get(rede)
-    if fixed and isinstance(fixed, int) and fixed > 0:
-        if len(header) >= fixed:
-            h = _strip_invisible(header[fixed-1]).lower()
-            if h == target.lower():
-                return fixed
-
-    # 2) Procura pelo cabeçalho
     for i, h in enumerate(header, start=1):
-        if _strip_invisible(h).lower() == target.lower():
+        if h and h.strip().lower() == target.lower():
             return i
 
-    # 3) Cria
     col = len(header) + 1
+
+    # FIX: se col ultrapassar o grid, adiciona colunas antes de escrever (evita S1 > max_columns)
+    _ensure_cols(ws, col)
+
     ws.update_cell(1, col, target)
     _log(f"[Planilha] Criada coluna: {target} (col {col})")
     return col
 
 def marcar_publicado(ws, rownum, rede, value=None):
-    col = _find_or_create_status_column(ws, rede)
-    COL_STATUS_REDES[rede] = col
+    col = COL_STATUS_REDES.get(rede, None)
+    if not col:
+        col = _ensure_status_column(ws, rede, None)
+        COL_STATUS_REDES[rede] = col
+
+    # FIX extra: se índice fixo apontar para coluna que não existe no grid, expande
+    _ensure_cols(ws, col)
+
     value = value or f"Publicado {rede} via {BOT_ORIGEM} em {_ts_br()}"
     ws.update_cell(rownum, col, value)
 
@@ -412,9 +424,10 @@ def coleta_candidatos_para(ws, rede: str):
         _log(f"[{rede}] Planilha sem dados.")
         return []
 
-    # garante coluna status segura
-    col_status = _find_or_create_status_column(ws, rede)
-    COL_STATUS_REDES[rede] = col_status
+    if rede not in COL_STATUS_REDES or not COL_STATUS_REDES[rede]:
+        COL_STATUS_REDES[rede] = _ensure_status_column(ws, rede, None)
+
+    col_status = COL_STATUS_REDES.get(rede)
 
     data = linhas[1:]
     cand=[]
@@ -425,6 +438,7 @@ def coleta_candidatos_para(ws, rede: str):
         if not _row_has_min_payload(row):
             continue
         cand.append((rindex, row))
+
     _log(f"[{rede}] Candidatas: {len(cand)}/{len(data)}")
     return cand
 
@@ -464,11 +478,12 @@ def _build_x_accounts():
 
     tw1 = _x_creds(1)
     if ok(tw1): accs.append(XAccount("ACC1", **tw1))
+    else: _log("Conta X ACC1 incompleta (Cofre).")
 
     tw2 = _x_creds(2)
     if ok(tw2): accs.append(XAccount("ACC2", **tw2))
 
-    return accs  # pode voltar vazio => SKIP em vez de FATAL
+    return accs  # pode voltar vazio; nesse caso apenas não publica X
 
 _recent_tweets_cache = defaultdict(set)
 _postados_nesta_execucao = defaultdict(set)
@@ -522,7 +537,7 @@ def x_upload_media_if_any(acc, row):
 def publicar_em_x(ws, candidatos):
     contas=_build_x_accounts()
     if not contas:
-        _log("[X] SKIP — credenciais ausentes no Cofre (TWITTER_*_1).")
+        _log("[X] Sem credenciais válidas no Cofre. Pulando publicação em X.")
         return 0
 
     for acc in contas:
@@ -596,37 +611,16 @@ def publicar_em_x(ws, candidatos):
 # FACEBOOK (somente Cofre)
 # ============================================================
 def _fb_pairs_from_cofre():
-    """
-    Suporta:
-      - PAGE_ID_1 / PAGE_TOKEN_1 (e próximos)
-      - OU sem sufixo (PAGE_ID + PAGE_ACCESS_TOKEN / PAGE_TOKEN)
-    """
+    # Aceita PAGE_ID_1, PAGE_ID_2... e PAGE_ACCESS_TOKEN_1... (ou PAGE_TOKEN_1...)
     ids   = _cofre_get_many(("FACEBOOK","PAGE_ID_"))
-    toks  = _cofre_get_many(("FACEBOOK","PAGE_TOKEN_"))
-    # fallback alternativo comum
-    toks2 = _cofre_get_many(("FACEBOOK","PAGE_ACCESS_TOKEN_"))
-
+    toks1 = _cofre_get_many(("FACEBOOK","PAGE_ACCESS_TOKEN_"))
+    toks2 = _cofre_get_many(("FACEBOOK","PAGE_TOKEN_"))
     mp = {n:v for n,v in ids}
-    mt = {n:v for n,v in toks}
-    mt2 = {n:v for n,v in toks2}
-
+    mt = {n:v for n,v in toks1} if toks1 else {n:v for n,v in toks2}
     out=[]
-    for n in sorted(set(mp) & (set(mt) | set(mt2))):
-        token = mt.get(n) or mt2.get(n) or ""
-        if mp[n] and token:
-            out.append((mp[n], token))
-
-    # sem sufixo
-    pid = (_cofre_get(("FACEBOOK","PAGE_ID"), "") or "").strip()
-    tok = (_cofre_get(("FACEBOOK","PAGE_TOKEN"), "") or "").strip() or (_cofre_get(("FACEBOOK","PAGE_ACCESS_TOKEN"), "") or "").strip()
-    if pid and tok:
-        if not out:
-            out.append((pid, tok))
-        else:
-            # evita duplicar se já está na lista
-            if (pid, tok) not in out:
-                out.append((pid, tok))
-
+    for n in sorted(set(mp)&set(mt)):
+        if mp[n] and mt[n]:
+            out.append((mp[n], mt[n]))
     return out
 
 def _fb_post_text(pid, token, message, link=None):
@@ -648,7 +642,7 @@ def _fb_post_photo(pid, token, caption, image_bytes):
 def publicar_em_facebook(ws, candidatos):
     pairs = _fb_pairs_from_cofre()
     if not pairs:
-        _log("[FACEBOOK] SKIP — credenciais ausentes no Cofre (PAGE_ID/PAGE_TOKEN).")
+        _log("[FACEBOOK] Sem credenciais no Cofre (PAGE_ID_n + PAGE_ACCESS_TOKEN_n). Pulando Facebook.")
         return 0
 
     mode = _cofre_text_mode("FACEBOOK", default="TEXT_AND_IMAGE")
@@ -695,19 +689,11 @@ def publicar_em_facebook(ws, candidatos):
 # TELEGRAM (somente Cofre)
 # ============================================================
 def _tg_token_from_cofre():
-    # aceita BOT_TOKEN ou TG_BOT_TOKEN
-    return (_cofre_get(("TELEGRAM","BOT_TOKEN"), "") or _cofre_get(("TELEGRAM","TG_BOT_TOKEN"), "") or "").strip()
+    return (_cofre_get(("TELEGRAM","BOT_TOKEN"), "") or "").strip()
 
 def _tg_chat_ids_from_cofre():
-    # aceita CHAT_ID_1..N ou TG_CHAT_ID_1..N
-    chats = [v for _,v in _cofre_get_many(("TELEGRAM","CHAT_ID_")) if v]
-    if chats: return chats
-    chats2 = [v for _,v in _cofre_get_many(("TELEGRAM","TG_CHAT_ID_")) if v]
-    if chats2: return chats2
-    # sem sufixo (raro)
-    one = (_cofre_get(("TELEGRAM","CHAT_ID"), "") or "").strip()
-    if one: return [one]
-    return []
+    # CHAT_ID_1, CHAT_ID_2...
+    return [v for _,v in _cofre_get_many(("TELEGRAM","CHAT_ID_")) if v]
 
 def _tg_send_photo(token, chat_id, caption, image_bytes):
     url=f"https://api.telegram.org/bot{token}/sendPhoto"
@@ -728,7 +714,7 @@ def publicar_em_telegram(ws, candidatos):
     token = _tg_token_from_cofre()
     chats = _tg_chat_ids_from_cofre()
     if not token or not chats:
-        _log("[TELEGRAM] SKIP — credenciais ausentes no Cofre (BOT_TOKEN + CHAT_ID_1..N).")
+        _log("[TELEGRAM] Sem credenciais no Cofre (BOT_TOKEN + CHAT_ID_n). Pulando Telegram.")
         return 0
 
     mode = _cofre_text_mode("TELEGRAM", default="TEXT_AND_IMAGE")
@@ -781,11 +767,8 @@ def publicar_em_telegram(ws, candidatos):
 # DISCORD (somente Cofre)
 # ============================================================
 def _discord_webhooks_from_cofre():
-    hooks = [v for _,v in _cofre_get_many(("DISCORD","WEBHOOK_")) if v]
-    if hooks: return hooks
-    one = (_cofre_get(("DISCORD","WEBHOOK"), "") or "").strip()
-    if one: return [one]
-    return []
+    # WEBHOOK_1, WEBHOOK_2...
+    return [v for _,v in _cofre_get_many(("DISCORD","WEBHOOK_")) if v]
 
 def _discord_send(webhook_url, content=None, image_bytes=None):
     data={"content":content or ""}
@@ -799,7 +782,7 @@ def _discord_send(webhook_url, content=None, image_bytes=None):
 def publicar_em_discord(ws, candidatos):
     hooks = _discord_webhooks_from_cofre()
     if not hooks:
-        _log("[DISCORD] SKIP — credenciais ausentes no Cofre (WEBHOOK_1..N).")
+        _log("[DISCORD] Sem credenciais no Cofre (WEBHOOK_n). Pulando Discord.")
         return 0
 
     mode = _cofre_text_mode("DISCORD", default="TEXT_AND_IMAGE")
@@ -886,7 +869,7 @@ def publicar_em_pinterest(ws, candidatos):
     token = _pin_token_from_cofre()
     board = _pin_board_from_cofre()
     if not (token and board):
-        _log("[PINTEREST] SKIP — credenciais ausentes no Cofre (ACCESS_TOKEN + BOARD_ID).")
+        _log("[PINTEREST] Sem credenciais no Cofre (ACCESS_TOKEN + BOARD_ID). Pulando Pinterest.")
         return 0
 
     mode = _cofre_text_mode("PINTEREST", default="TEXT_AND_IMAGE")
@@ -930,6 +913,27 @@ def publicar_em_pinterest(ws, candidatos):
     return publicados
 
 # ============================================================
+# REDES ALVO (NÃO depende do Cofre para "ativar" rede)
+# ============================================================
+_SUPPORTED = ["X","FACEBOOK","TELEGRAM","DISCORD","PINTEREST"]
+
+def _parse_target_networks() -> List[str]:
+    raw = (TARGET_NETWORKS or "").strip()
+    if not raw:
+        return list(_SUPPORTED)
+    parts = [p.strip().upper() for p in raw.split(",") if p.strip()]
+    # normaliza sinônimos
+    norm=[]
+    for p in parts:
+        if p in ("TWITTER",): p="X"
+        if p in ("META",): p="FACEBOOK"
+        if p not in _SUPPORTED:
+            _log(f"[Config] Rede ignorada (não suportada): {p}")
+            continue
+        norm.append(p)
+    return norm or list(_SUPPORTED)
+
+# ============================================================
 # Keepalive
 # ============================================================
 def iniciar_keepalive():
@@ -955,11 +959,11 @@ def iniciar_keepalive():
     _log(f"Keepalive em 0.0.0.0:{os.getenv('PORT', KEEPALIVE_PORT)}")
     return th
 
-def _print_config_summary():
+def _print_config_summary(redes_alvo):
     _log("=== Config ===",
          f"TAB={SHEET_TAB} | COFRE_SHEET_ID={COFRE_SHEET_ID or '(vazio)'} | DRY_RUN={DRY_RUN}")
-    _log("Canais Cofre:", len(_cofre_cache.get("canais_list", [])))
-    _log("Redes (sempre tenta nesta ordem):", ", ".join(SUPPORTED_NETWORKS))
+    _log("Redes alvo (Config):", ", ".join(redes_alvo) if redes_alvo else "(nenhuma)")
+    _log("Canais Cofre (texto):", len(_cofre_cache.get("canais_list", [])))
 
 # ============================================================
 # MAIN
@@ -971,15 +975,15 @@ def main():
 
     try:
         _cofre_load()
-        _print_config_summary()
+
+        redes_alvo = _parse_target_networks()
+        _print_config_summary(redes_alvo)
 
         ws=_open_ws_principal()
 
-        # SEMPRE roda todas: se não tiver credenciais, apenas SKIP (sem FATAL)
-        for rede in SUPPORTED_NETWORKS:
+        for rede in redes_alvo:
             rede = rede.upper()
 
-            # Coleta candidatas primeiro (permite criar/garantir coluna de status mesmo que ainda esteja sem credencial)
             cand = coleta_candidatos_para(ws, rede)
             if not cand:
                 _log(f"[{rede}] Nenhuma candidata.")
