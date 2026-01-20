@@ -1,5 +1,5 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2026-01-20b — COFRE ONLY + Facebook compatível com SEU Cofre (tokens por página) + user token opcional
+# Rev: 2026-01-20c — FIX X multi-contas (varre _1.._20) + valida credenciais X por qualquer conta completa
 # - NÃO usa .env
 # - ÚNICA credencial fora do Cofre: GOOGLE_SERVICE_JSON (GitHub Actions secret)
 # - Planilhas (principal + Cofre) via Service Account
@@ -444,18 +444,22 @@ class XAccount:
             self.handle = f"@{label}"
 
 def _build_x_accounts():
+    """
+    FIX: Antes só tentava ACC1/ACC2.
+    Agora varre TWITTER_*_1.._20 e monta todas as contas completas.
+    """
     accs=[]
     def ok(d): return all(d.get(k) for k in ("api_key","api_secret","access_token","access_secret"))
 
-    tw1 = _x_creds(1)
-    if ok(tw1): accs.append(XAccount("ACC1", **tw1))
-    else: _log("Conta X ACC1 incompleta (Cofre).")
-
-    tw2 = _x_creds(2)
-    if ok(tw2): accs.append(XAccount("ACC2", **tw2))
+    for i in range(1, 21):
+        d = _x_creds(i)
+        if ok(d):
+            accs.append(XAccount(f"ACC{i}", **d))
 
     if not accs:
-        raise RuntimeError("Nenhuma conta X configurada no Cofre.")
+        raise RuntimeError("Nenhuma conta X configurada no Cofre (TWITTER_*_1.._20).")
+
+    _log("[X] Contas X detectadas:", ", ".join([a.handle for a in accs]))
     return accs
 
 _recent_tweets_cache = defaultdict(set)
@@ -471,6 +475,7 @@ def _x_skip_dup_check() -> bool:
     return _cofre_bool_x("X_SKIP_DUP_CHECK", default=True)
 
 def _x_post_in_all_accounts() -> bool:
+    # Mantido (você controla pelo Cofre). Default True.
     return _cofre_bool_x("X_POST_IN_ALL_ACCOUNTS", default=True)
 
 def _x_post_with_image() -> bool:
@@ -1083,8 +1088,13 @@ def _target_networks():
 def _has_creds_for(rede: str) -> bool:
     rede = (rede or "").upper().strip()
     if rede == "X":
-        x1_ok = all((_cofre_get("X", k, default="") or "") for k in ["TWITTER_API_KEY_1","TWITTER_API_SECRET_1","TWITTER_ACCESS_TOKEN_1","TWITTER_ACCESS_SECRET_1"])
-        return bool(x1_ok)
+        # FIX: Antes só validava a conta 1.
+        # Agora considera X válido se existir PELO MENOS 1 conta completa em _1.._20.
+        for i in range(1, 21):
+            d = _x_creds(i)
+            if all(d.get(k) for k in ("api_key","api_secret","access_token","access_secret")):
+                return True
+        return False
 
     if rede == "FACEBOOK":
         pages = _fb_pages_declared_in_cofre()
