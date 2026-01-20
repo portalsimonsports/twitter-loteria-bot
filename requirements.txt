@@ -1,12 +1,13 @@
 # ===============================================================
 # Portal SimonSports — Publicador Automático de Loterias
 # Arquivo: requirements.txt
-# Revisão: 2025-11-09
+# Revisão: 2026-01-20 (Atualizado para Vídeo)
 # ---------------------------------------------------------------
 # Contém todas as dependências necessárias para:
 # - Publicação automática (X, Facebook, Telegram, Discord, Pinterest)
 # - Leitura/escrita na planilha Google (Sheets API)
 # - Geração de imagens 3D e arte HTML/CSS via Pillow
+# - Geração de vídeos automáticos via MoviePy (FFmpeg)
 # - Servidor Flask Keepalive para Render/Replit
 # ===============================================================
 
@@ -40,6 +41,14 @@ gunicorn>=21.2.0
 # Imagem / Geração visual
 # ------------------------------
 Pillow>=10.4.0           # Renderização e manipulação de imagens
+
+# ------------------------------
+# Vídeo / Geração visual (Novo)
+# ------------------------------
+moviepy>=1.0.3           # Core para edição de vídeo
+proglog>=0.1.10          # Gerenciamento de logs de renderização
+decorator>=5.1.1         # Dependência de processamento do MoviePy
+imageio-ffmpeg>=0.4.9    # Interface para o motor FFmpeg
 
 # ===============================================================
 # Fim do arquivo
