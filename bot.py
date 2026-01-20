@@ -1,5 +1,5 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2026-01-20c — FIX X multi-contas (varre _1.._20) + valida credenciais X por qualquer conta completa
+# Rev: 2026-01-20c — COFRE ONLY + Facebook LIMPO (SEM /me/accounts) + tokens por página no Cofre
 # - NÃO usa .env
 # - ÚNICA credencial fora do Cofre: GOOGLE_SERVICE_JSON (GitHub Actions secret)
 # - Planilhas (principal + Cofre) via Service Account
@@ -8,8 +8,8 @@
 # - Cria colunas "Publicado_<REDE>" se não existirem
 # - Texto inclui TODOS os canais ativos do Cofre (ordem crescente)
 # - Facebook:
-#     * Aceita PAGE_ACCESS_TOKEN / PAGE_TOKEN / Token_de_Acesso (por página) como antes
-#     * USER_ACCESS_TOKEN é opcional (se existir, pode usar /me/accounts)
+#     * SEM /me/accounts (zero “avisos”)
+#     * Exige token por página no Cofre (PAGE_ACCESS_TOKEN / PAGE_TOKEN / Token_de_Acesso etc.)
 
 import os, re, io, glob, json, time, base64, pytz, tweepy, requests
 import datetime as dt
@@ -444,22 +444,18 @@ class XAccount:
             self.handle = f"@{label}"
 
 def _build_x_accounts():
-    """
-    FIX: Antes só tentava ACC1/ACC2.
-    Agora varre TWITTER_*_1.._20 e monta todas as contas completas.
-    """
     accs=[]
     def ok(d): return all(d.get(k) for k in ("api_key","api_secret","access_token","access_secret"))
 
-    for i in range(1, 21):
-        d = _x_creds(i)
-        if ok(d):
-            accs.append(XAccount(f"ACC{i}", **d))
+    tw1 = _x_creds(1)
+    if ok(tw1): accs.append(XAccount("ACC1", **tw1))
+    else: _log("Conta X ACC1 incompleta (Cofre).")
+
+    tw2 = _x_creds(2)
+    if ok(tw2): accs.append(XAccount("ACC2", **tw2))
 
     if not accs:
-        raise RuntimeError("Nenhuma conta X configurada no Cofre (TWITTER_*_1.._20).")
-
-    _log("[X] Contas X detectadas:", ", ".join([a.handle for a in accs]))
+        raise RuntimeError("Nenhuma conta X configurada no Cofre.")
     return accs
 
 _recent_tweets_cache = defaultdict(set)
@@ -475,7 +471,6 @@ def _x_skip_dup_check() -> bool:
     return _cofre_bool_x("X_SKIP_DUP_CHECK", default=True)
 
 def _x_post_in_all_accounts() -> bool:
-    # Mantido (você controla pelo Cofre). Default True.
     return _cofre_bool_x("X_POST_IN_ALL_ACCOUNTS", default=True)
 
 def _x_post_with_image() -> bool:
@@ -588,7 +583,7 @@ def publicar_em_x(ws, candidatos):
     return publicados
 
 # ============================================================
-# FACEBOOK — COMPATÍVEL COM SEU COFRE (tokens por página)
+# FACEBOOK — SOMENTE TOKEN POR PÁGINA (SEM /me/accounts)
 # ============================================================
 FB_GRAPH_VERSION = os.getenv("FB_GRAPH_VERSION", "v24.0").strip() or "v24.0"
 
@@ -606,39 +601,6 @@ def _fb_raise_details(r: requests.Response):
         pass
     raise RuntimeError(f"Facebook HTTP {r.status_code}: {r.text[:600]}")
 
-def _fb_exchange_long_lived_user_token(short_token: str) -> str:
-    app_id = (_cofre_get("FACEBOOK", "APP_ID", default="") or "").strip()
-    app_secret = (_cofre_get("FACEBOOK", "APP_SECRET", default="") or "").strip()
-    if not (app_id and app_secret and short_token):
-        return short_token
-    url = f"https://graph.facebook.com/{FB_GRAPH_VERSION}/oauth/access_token"
-    params = {
-        "grant_type": "fb_exchange_token",
-        "client_id": app_id,
-        "client_secret": app_secret,
-        "fb_exchange_token": short_token
-    }
-    r = requests.get(url, params=params, timeout=25)
-    if not r.ok:
-        return short_token
-    j = r.json() or {}
-    return (j.get("access_token") or short_token).strip()
-
-def _fb_user_token() -> str:
-    # USER token é opcional: aceita várias chaves do seu padrão antigo
-    keys_try = [
-        "USER_ACCESS_TOKEN",
-        "TOKEN_USUARIO",
-        "TOKEN_DE_ACESSO_USUARIO",
-        "USER_TOKEN",
-        "TOKEN_DE_ACESSO"  # se você tiver uma linha "Facebook / (conta vazia) / Token_de_Acesso"
-    ]
-    for k in keys_try:
-        v = (_cofre_get("FACEBOOK", k, default="") or "").strip()
-        if v:
-            return v
-    return ""
-
 def _fb_pick_page_token_from_saved(conta: str) -> str:
     # compat: aceita PAGE_ACCESS_TOKEN/PAGE_TOKEN/Token_de_Acesso/Token de Acesso/Token_de_Acesso_Pagina etc.
     keys_try = [
@@ -654,7 +616,7 @@ def _fb_pick_page_token_from_saved(conta: str) -> str:
         v = (_cofre_get("FACEBOOK", k, conta=conta, default="") or "").strip()
         if v:
             return v
-    # se tiver token salvo sem conta (não recomendado, mas suportado)
+    # fallback: token salvo sem conta (não recomendado, mas suportado)
     for k in keys_try:
         v = (_cofre_get("FACEBOOK", k, default="") or "").strip()
         if v:
@@ -664,7 +626,7 @@ def _fb_pick_page_token_from_saved(conta: str) -> str:
 def _fb_pages_declared_in_cofre() -> List[Tuple[str, str, Optional[str]]]:
     """
     Retorna lista: (conta, page_id, page_token_salvo_ou_None)
-    - PAGE_ID por conta (como você já usa)
+    - PAGE_ID por conta
     - Token por conta pode estar em várias chaves (compat)
     """
     creds = _cofre_cache.get("creds_rc", {}) or {}
@@ -675,10 +637,8 @@ def _fb_pages_declared_in_cofre() -> List[Tuple[str, str, Optional[str]]]:
             continue
         acc = (c or "").strip()
         key = k.upper().strip()
-        # PAGE_ID é o principal
         if key == "PAGE_ID":
             acc_map[acc]["PAGE_ID"] = v
-        # tokens possíveis por página
         if key in ("PAGE_ACCESS_TOKEN", "PAGE_TOKEN", "TOKEN_DE_ACESSO", "TOKEN DE ACESSO", "TOKEN_DE_ACESSO_PAGINA", "TOKEN_ACESSO", "TOKEN"):
             acc_map[acc]["PAGE_TOKEN_ANY"] = v
 
@@ -687,7 +647,6 @@ def _fb_pages_declared_in_cofre() -> List[Tuple[str, str, Optional[str]]]:
         pid = d.get("PAGE_ID")
         tok = d.get("PAGE_TOKEN_ANY") or None
         if pid:
-            # se não achou em PAGE_TOKEN_ANY, tenta buscar por conta com _fb_pick_page_token_from_saved
             if not tok:
                 tok = _fb_pick_page_token_from_saved(acc) or None
             out.append((acc or "FACEBOOK", pid, tok))
@@ -713,31 +672,6 @@ def _fb_pages_declared_in_cofre() -> List[Tuple[str, str, Optional[str]]]:
         if pid:
             out.append((f"FACEBOOK_{n}", pid, tok or None))
 
-    return out
-
-def _fb_fetch_page_tokens(user_token: str) -> Dict[str, Dict[str,str]]:
-    if not user_token:
-        return {}
-    url = f"https://graph.facebook.com/{FB_GRAPH_VERSION}/me/accounts"
-    params = {
-        "fields": "id,name,access_token",
-        "limit": 200,
-        "access_token": user_token
-    }
-    r = requests.get(url, params=params, timeout=25)
-    if not r.ok:
-        _fb_raise_details(r)
-    j = r.json() or {}
-    data = j.get("data", []) or []
-    out={}
-    for p in data:
-        pid = str(p.get("id") or "").strip()
-        if not pid:
-            continue
-        out[pid] = {
-            "name": str(p.get("name") or "").strip(),
-            "access_token": str(p.get("access_token") or "").strip()
-        }
     return out
 
 def _fb_post_text(pid, token, message, link=None):
@@ -769,18 +703,6 @@ def publicar_em_facebook(ws, candidatos):
         _log("[FACEBOOK] Nenhuma PAGE_ID cadastrada no Cofre. Pulando Facebook.")
         return 0
 
-    # USER token é opcional. Se existir, tenta /me/accounts para pegar tokens atualizados.
-    user_tok = _fb_user_token()
-    page_map = {}
-    if user_tok:
-        try:
-            user_tok = _fb_exchange_long_lived_user_token(user_tok)
-            page_map = _fb_fetch_page_tokens(user_tok)
-            _log(f"[FACEBOOK] /me/accounts retornou: {len(page_map)} páginas")
-        except Exception as e:
-            _log(f"[FACEBOOK] Aviso: falha ao ler /me/accounts (seguindo com tokens salvos). Detalhe: {e}")
-            page_map = {}
-
     mode = _cofre_text_mode("FACEBOOK", default="TEXT_AND_IMAGE")
     post_with_image = _cofre_bool("FACEBOOK", "POST_FB_WITH_IMAGE", default=True)
 
@@ -794,18 +716,15 @@ def publicar_em_facebook(ws, candidatos):
 
         ok_any=False
         for conta, pid, saved_tok in pages:
-            page_name = (page_map.get(str(pid), {}) or {}).get("name") or conta
+            page_name = conta or f"PAGE_{pid}"
 
-            # Prioridade:
-            # 1) token atualizado via /me/accounts (se existir)
-            # 2) token salvo no Cofre por página (como você já usava)
-            page_tok = (page_map.get(str(pid), {}) or {}).get("access_token") or (saved_tok or "")
+            # Token apenas por página (Cofre)
+            page_tok = (saved_tok or "").strip()
             if not page_tok:
-                # última tentativa: buscar token salvo pela conta
-                page_tok = _fb_pick_page_token_from_saved(conta) or ""
+                page_tok = (_fb_pick_page_token_from_saved(conta) or "").strip()
 
             if not page_tok:
-                _log(f"[Facebook][{page_name}] PAGE_ID={pid} sem token. Mantenha seu token por página no Cofre (Token_de_Acesso/PAGE_ACCESS_TOKEN).")
+                _log(f"[Facebook][{page_name}] PAGE_ID={pid} sem token no Cofre. Preencha Token_de_Acesso/PAGE_ACCESS_TOKEN por página.")
                 continue
 
             try:
@@ -1088,25 +1007,17 @@ def _target_networks():
 def _has_creds_for(rede: str) -> bool:
     rede = (rede or "").upper().strip()
     if rede == "X":
-        # FIX: Antes só validava a conta 1.
-        # Agora considera X válido se existir PELO MENOS 1 conta completa em _1.._20.
-        for i in range(1, 21):
-            d = _x_creds(i)
-            if all(d.get(k) for k in ("api_key","api_secret","access_token","access_secret")):
-                return True
-        return False
+        x1_ok = all((_cofre_get("X", k, default="") or "") for k in ["TWITTER_API_KEY_1","TWITTER_API_SECRET_1","TWITTER_ACCESS_TOKEN_1","TWITTER_ACCESS_SECRET_1"])
+        return bool(x1_ok)
 
     if rede == "FACEBOOK":
         pages = _fb_pages_declared_in_cofre()
         if not pages:
             return False
-        # cred ok se tiver token salvo por página OU user token
-        if _fb_user_token():
-            return True
+        # agora é obrigatório haver token por página
         for conta, pid, tok in pages:
             if tok and str(tok).strip():
                 return True
-            # tenta achar token salvo por conta
             if _fb_pick_page_token_from_saved(conta):
                 return True
         return False
