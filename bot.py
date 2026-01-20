@@ -1,5 +1,5 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2026-01-18b — COFRE ONLY + credenciais por (Rede + Conta + Chave) + sufixo _n opcional
+# Rev: 2026-01-18c — COFRE ONLY + credenciais por (Rede + Conta + Chave) + sufixo _n opcional
 # - NÃO usa .env (não chama load_dotenv)
 # - ÚNICA credencial fora do Cofre: GOOGLE_SERVICE_JSON via GitHub Actions (secret)
 # - Planilhas (principal + Cofre) são abertas via Service Account
@@ -273,9 +273,15 @@ def _ensure_status_column(ws, rede: str, env_col: Optional[int]) -> int:
     col = len(header) + 1
     # evita erro de grid: se precisar, aumenta colunas antes de escrever
     try:
-        if ws.col_count < col:
-            ws.add_cols(col - ws.col_count)
+        current_cols = getattr(ws, "col_count", None)
+        if current_cols is None:
+            # fallback: tenta ler dimensões via gspread
+            current_cols = len(header) if header else 0
+        if current_cols < col:
+            ws.add_cols(col - current_cols)
     except Exception:
+        # Se add_cols falhar por qualquer razão, tentamos mesmo assim;
+        # (o erro ficará explícito no log)
         pass
     ws.update_cell(1, col, target)
     _log(f"[Planilha] Criada coluna: {target} (col {col})")
@@ -623,7 +629,10 @@ def publicar_em_x(ws, candidatos):
     return publicados
 
 # ============================================================
-# FACEBOOK (somente Cofre) — agora por CONTA (sem exigir _1/_2)
+# FACEBOOK (somente Cofre) — por CONTA (sem exigir _1/_2)
+# + Correção: log detalhado do erro Graph API
+# + Correção: não usar published="true"
+# + Fallback: se /photos falhar, tentar /feed com link
 # ============================================================
 def _fb_pairs_from_cofre() -> List[Tuple[str,str,str]]:
     """
@@ -638,9 +647,9 @@ def _fb_pairs_from_cofre() -> List[Tuple[str,str,str]]:
     # 1) por conta (preferido)
     acc_map: Dict[str, Dict[str,str]] = defaultdict(dict)
     for (r,c,k), v in creds.items():
-        if not _match_rede(r, "FACEBOOK"): 
+        if not _match_rede(r, "FACEBOOK"):
             continue
-        if not v: 
+        if not v:
             continue
         acc = (c or "").strip()
         key = k.upper().strip()
@@ -658,7 +667,6 @@ def _fb_pairs_from_cofre() -> List[Tuple[str,str,str]]:
         return out
 
     # 2) fallback legado com sufixo _n (sem conta)
-    # agrupa por número do sufixo
     tmp: Dict[str, Dict[str,str]] = defaultdict(dict)
     for (r,c,k), v in creds.items():
         if not _match_rede(r, "FACEBOOK"):
@@ -680,21 +688,46 @@ def _fb_pairs_from_cofre() -> List[Tuple[str,str,str]]:
 
     return out
 
+def _fb_raise_details(r: requests.Response):
+    """Lança exceção com detalhes do JSON/texto do Graph API."""
+    try:
+        j = r.json()
+        if isinstance(j, dict) and "error" in j:
+            err = j.get("error", {}) or {}
+            msg = err.get("message", "")
+            code = err.get("code", "")
+            sub  = err.get("error_subcode", "")
+            fbtr = err.get("fbtrace_id", "")
+            raise RuntimeError(f"Facebook API error: message={msg} | code={code} | subcode={sub} | fbtrace_id={fbtr}")
+    except ValueError:
+        # não é JSON
+        pass
+    # fallback: texto cru (limitado)
+    raise RuntimeError(f"Facebook HTTP {r.status_code}: {r.text[:600]}")
+
 def _fb_post_text(pid, token, message, link=None):
     url=f"https://graph.facebook.com/v19.0/{pid}/feed"
-    data={"message":message,"access_token":token}
-    if link: data["link"]=link
+    data={"access_token":token}
+    if message:
+        data["message"]=message
+    if link:
+        data["link"]=link
     r=requests.post(url, data=data, timeout=25)
-    r.raise_for_status()
-    return r.json().get("id")
+    if not r.ok:
+        _fb_raise_details(r)
+    return (r.json() or {}).get("id")
 
 def _fb_post_photo(pid, token, caption, image_bytes):
     url=f"https://graph.facebook.com/v19.0/{pid}/photos"
     files={"source":("resultado.png", image_bytes, "image/png")}
-    data={"caption":caption,"published":"true","access_token":token}
-    r=requests.post(url, data=data, files=files, timeout=40)
-    r.raise_for_status()
-    return r.json().get("id")
+    data={"access_token":token}
+    if caption:
+        data["caption"]=caption
+    # NÃO usar published="true" (pode causar 400 em alguns cenários)
+    r=requests.post(url, data=data, files=files, timeout=60)
+    if not r.ok:
+        _fb_raise_details(r)
+    return (r.json() or {}).get("id")
 
 def publicar_em_facebook(ws, candidatos):
     pairs = _fb_pairs_from_cofre()
@@ -722,11 +755,20 @@ def publicar_em_facebook(ws, candidatos):
                 else:
                     if post_with_image:
                         buf=_build_image_from_row(row)
-                        fb_id=_fb_post_photo(pid, ptok, msg, buf.getvalue())
+                        try:
+                            fb_id=_fb_post_photo(pid, ptok, msg, buf.getvalue())
+                            _log(f"[Facebook][{conta}] OK (/photos) → {fb_id}")
+                            ok=True
+                        except Exception as e_photo:
+                            # Fallback: tenta /feed com link
+                            _log(f"[Facebook][{conta}] Falhou /photos; tentando /feed com link. Detalhe: {e_photo}")
+                            fb_id=_fb_post_text(pid, ptok, msg, link=url_post or None)
+                            _log(f"[Facebook][{conta}] OK (/feed) → {fb_id}")
+                            ok=True
                     else:
                         fb_id=_fb_post_text(pid, ptok, msg, link=url_post or None)
-                    _log(f"[Facebook][{conta}] OK → {fb_id}")
-                    ok=True
+                        _log(f"[Facebook][{conta}] OK (/feed) → {fb_id}")
+                        ok=True
             except Exception as e:
                 _log(f"[Facebook][{conta}] erro: {e}")
                 ok=False
@@ -981,7 +1023,7 @@ def publicar_em_pinterest(ws, candidatos):
 
 # ============================================================
 # REDES ALVO x REDES COM CREDENCIAL
-# - você quer: "rodar em todas; se não tiver credencial, só pula"
+# - regra: "rodar em todas; se não tiver credencial, só pula"
 # ============================================================
 def _target_networks():
     # alvo fixo (ordem)
@@ -1058,7 +1100,7 @@ def main():
                 continue
 
             if not _has_creds_for(rede):
-                # aqui é exatamente sua regra: “roda”, mas se não tiver credencial, não publica
+                # regra: roda, mas sem credencial não publica
                 if rede == "FACEBOOK":
                     _log("[FACEBOOK] Sem credenciais no Cofre (PAGE_ID + PAGE_ACCESS_TOKEN/PAGE_TOKEN por Conta). Pulando Facebook.")
                 elif rede == "DISCORD":
