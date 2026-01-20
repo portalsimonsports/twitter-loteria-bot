@@ -1,48 +1,99 @@
 import os
-from moviepy.editor import TextClip, ColorClip, CompositeVideoClip
+import time
+import datetime as dt
 
-def executar(dados):
+from youtube_auth import get_access_token
+from youtube_upload import upload_video, build_watch_url
+
+# Importa seu gerador de vídeo
+from gerador_video import executar as gerar_video  # ajuste se seu arquivo/função tiver outro nome
+
+def _tz_now_str():
+    # simples; se você já tem TZ no bot, pode usar o mesmo
+    return dt.datetime.now().strftime("%d/%m/%Y %H:%M")
+
+def _log(*a):
+    print(f"[YOUTUBE] ", *a, flush=True)
+
+def _parse_tags(v: str):
+    if not v:
+        return []
+    # aceita "a,b,c" ou "a; b; c"
+    v = v.replace(";", ",")
+    return [t.strip() for t in v.split(",") if t.strip()]
+
+def _cofre_get_safe(_cofre_get, rede: str, chave: str, conta: str = None, default: str = ""):
+    v = (_cofre_get(rede, chave, conta=conta, default=default) or "").strip()
+    if v:
+        return v
+    # fallback global (conta vazia)
+    return (_cofre_get(rede, chave, default=default) or "").strip()
+
+def _listar_contas_youtube(_cofre_cache):
     """
-    dados: dicionário vindo do seu leitor de planilha 
-    ex: {'concurso': '2850', 'numeros': '01 02 03 04 05 06', 'premio': 'R$ 2.000.000,00'}
+    Descobre as contas YOUTUBE existentes no Cofre pela presença de REFRESH_TOKEN por conta.
+    Retorna lista de contas (strings).
     """
-    
-    print("Iniciando geração do vídeo...")
-    
-    # Configurações de estilo
-    LARGURA, ALTURA = 1080, 1920  # Formato Reels/TikTok
-    DURACAO = 8  # Segundos
-    COR_FUNDO = (0, 114, 54) # Verde loteria (RGB)
+    creds_rc = _cofre_cache.get("creds_rc", {}) or {}
+    contas = set()
+    for (r, c, k), v in creds_rc.items():
+        if (r or "").strip().upper() == "YOUTUBE" and (k or "").strip().upper() == "REFRESH_TOKEN" and v:
+            contas.add((c or "").strip())
+    return sorted([c for c in contas if c])
 
-    # 1. Criar o fundo
-    fundo = ColorClip(size=(LARGURA, ALTURA), color=COR_FUNDO, duration=DURACAO)
+def publicar_video_em_multicanais(
+    dados_video: dict,
+    cofre_get_fn,
+    cofre_cache: dict
+):
+    """
+    Gera vídeo e publica em TODOS os canais YOUTUBE cadastrados no Cofre.
+    """
+    contas = _listar_contas_youtube(cofre_cache)
+    if not contas:
+        _log("Nenhuma conta YOUTUBE com REFRESH_TOKEN no Cofre. Pulando.")
+        return []
 
-    # 2. Texto do Concurso (Topo)
-    txt_concurso = TextClip(
-        f"CONCURSO {dados['concurso']}",
-        fontsize=70, color='white', font='Arial-Bold', method='caption', size=(LARGURA*0.8, None)
-    ).set_position(('center', 300)).set_duration(DURACAO)
+    # 1) Gera o vídeo 1x (mesmo arquivo serve para todos canais)
+    video_path = gerar_video(dados_video)
 
-    # 3. Texto dos Números (Centro) - Com efeito de entrada
-    # Vamos separar os números para facilitar a leitura se houver muitos
-    numeros_formatados = dados['numeros'].replace(" ", "  ") 
-    txt_numeros = TextClip(
-        numeros_formatados,
-        fontsize=110, color='yellow', font='Arial-Bold', method='caption', size=(LARGURA*0.9, None)
-    ).set_position('center').set_duration(DURACAO).crossfadein(1.5)
+    resultados = []
+    for conta in contas:
+        client_id     = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "CLIENT_ID", conta=conta)
+        client_secret = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "CLIENT_SECRET", conta=conta)
+        refresh_token = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "REFRESH_TOKEN", conta=conta)
 
-    # 4. Texto do Prêmio (Base)
-    txt_premio = TextClip(
-        f"PRÊMIO ESTIMADO:\n{dados['premio']}",
-        fontsize=60, color='white', font='Arial-Bold', method='caption', size=(LARGURA*0.8, None)
-    ).set_position(('center', 1400)).set_duration(DURACAO)
+        if not (client_id and client_secret and refresh_token):
+            _log(f"[{conta}] Credenciais incompletas (CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN). Pulando.")
+            continue
 
-    # 5. Montagem Final
-    video = CompositeVideoClip([fundo, txt_concurso, txt_numeros, txt_premio])
-    
-    # Exportação (Otimizada para Redes Sociais)
-    nome_arquivo = "resultado_loteria.mp4"
-    video.write_videofile(nome_arquivo, fps=24, codec="libx264", audio=False)
-    
-    print(f"Vídeo salvo como {nome_arquivo}")
-    return nome_arquivo
+        privacy = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "PRIVACY_STATUS", conta=conta, default="unlisted") or "unlisted"
+        cat_id  = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "CATEGORY_ID", conta=conta, default="17") or "17"
+        tags_s  = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "TAGS", conta=conta, default="")
+        tags    = _parse_tags(tags_s)
+
+        # Título/descrição sugeridos
+        title = dados_video.get("title") or f"{dados_video.get('loteria','Loteria')} — Concurso {dados_video.get('concurso','')}"
+        desc  = dados_video.get("description") or f"Resultado completo: {dados_video.get('url','')}\n\nPortal SimonSports\nGerado em {_tz_now_str()}"
+
+        try:
+            access_token = get_access_token(client_id, client_secret, refresh_token)
+            vid = upload_video(
+                access_token=access_token,
+                video_path=video_path,
+                title=title,
+                description=desc,
+                tags=tags,
+                category_id=cat_id,
+                privacy_status=privacy
+            )
+            url = build_watch_url(vid)
+            _log(f"[{conta}] OK → {url}")
+            resultados.append({"conta": conta, "video_id": vid, "url": url, "status": "OK"})
+        except Exception as e:
+            _log(f"[{conta}] ERRO: {e}")
+            resultados.append({"conta": conta, "video_id": "", "url": "", "status": f"ERRO: {e}"})
+
+        time.sleep(1.0)
+
+    return resultados
