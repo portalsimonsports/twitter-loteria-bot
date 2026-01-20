@@ -1,13 +1,13 @@
 # bot.py — Portal SimonSports — Publicador Automático (X, Facebook, Telegram, Discord, Pinterest)
-# Rev: 2026-01-18c — COFRE ONLY + credenciais por (Rede + Conta + Chave) + sufixo _n opcional
-# - NÃO usa .env (não chama load_dotenv)
-# - ÚNICA credencial fora do Cofre: GOOGLE_SERVICE_JSON via GitHub Actions (secret)
-# - Planilhas (principal + Cofre) são abertas via Service Account
-# - Redes sociais (tokens/keys/ids/webhooks/chat_ids/board_id etc.) SOMENTE via Cofre
-# - Sem filtro de data; publica quando a coluna da rede estiver VAZIA
+# Rev: 2026-01-20a — COFRE ONLY + Facebook corrigido (USER_ACCESS_TOKEN -> /me/accounts -> PAGE_ACCESS_TOKEN)
+# - NÃO usa .env
+# - ÚNICA credencial fora do Cofre: GOOGLE_SERVICE_JSON (GitHub Actions secret)
+# - Planilhas (principal + Cofre) via Service Account
+# - Redes sociais tokens/keys/webhooks/chat_ids/board_id SOMENTE via Cofre
+# - Publica quando a coluna da rede estiver vazia
 # - Cria colunas "Publicado_<REDE>" se não existirem
 # - Texto inclui TODOS os canais ativos do Cofre (ordem crescente)
-# - X_SKIP_DUP_CHECK no Cofre (opcional) controla check de duplicidade (evita 401)
+# - Facebook: NÃO usa publish_actions; obtém page token correto via /me/accounts
 
 import os, re, io, glob, json, time, base64, pytz, tweepy, requests
 import datetime as dt
@@ -23,23 +23,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 from app.imaging import gerar_imagem_loteria
 
 TZ = pytz.timezone("America/Sao_Paulo")
-
-# ============================================================
-# REGRAS "COFRE ONLY"
-# ============================================================
-# 1) NÃO carregar .env (NÃO usar load_dotenv).
-# 2) ÚNICA coisa "externa" ao Cofre:
-#    - GOOGLE_SERVICE_JSON (GitHub Actions Secret) para acessar Google Sheets.
-# 3) IDs/tokens/keys/webhooks/chat_ids/board_id etc. SOMENTE no Cofre.
-#
-# Config não-secreta (pode vir como GitHub "Variables"):
-# - COFRE_SHEET_ID  (ID da planilha Cofre)
-# - COFRE_ABA_CRED  (default: Credenciais_Rede)
-# - COFRE_ABA_CANAIS(default: Redes_Sociais_Canais)
-# - SHEET_TAB       (default: ImportadosBlogger2)
-#
-# OBS: a planilha PRINCIPAL (GOOGLE_SHEET_ID) também vem do Cofre.
-# ============================================================
 
 # ---------------- Config (não-secreta) ----------------
 COFRE_SHEET_ID   = (os.getenv("COFRE_SHEET_ID", "") or "").strip()
@@ -63,11 +46,9 @@ PAUSA_ENTRE_POSTS      = float(os.getenv("PAUSA_ENTRE_POSTS", "2.5"))
 # ---------------- colunas planilha principal ----------------
 COL_LOTERIA, COL_CONCURSO, COL_DATA, COL_NUMEROS, COL_URL = 1, 2, 3, 4, 5
 COL_URL_IMAGEM, COL_IMAGEM = 6, 7
-# P e Q continuam existindo como fallback "antigo" de canais (se não houver canais no Cofre)
 COL_TG_DICAS  = 16  # P
 COL_TG_PORTAL = 17  # Q
 
-# Status por rede (fallback por índice fixo; se não existir, cria Publicado_<REDE>)
 COL_STATUS_REDES = {
     "X": 8,
     "FACEBOOK": 15,
@@ -111,7 +92,7 @@ def _row_has_min_payload(row) -> bool:
     return True
 
 # ============================================================
-# COFRE (cache) — agora por (Rede + Conta + Chave)
+# COFRE (cache) — por (Rede + Conta + Chave)
 # ============================================================
 _cofre_cache: Dict[str, Any] = {}  # creds_rows, creds_rc, canais_list
 
@@ -130,33 +111,24 @@ def _match_rede(key_rede: str, target: str) -> bool:
     tg = (target or "").strip().upper()
     return kr == tg or kr.replace("_"," ") == tg.replace("_"," ") or kr in _COOL_REDE.get(tg, [])
 
-def _cofre_rows() -> List[Dict[str,str]]:
-    return _cofre_cache.get("creds_rows", []) or []
-
 def _cofre_get(rede: str, chave: str, conta: Optional[str]=None, default: Optional[str]=None) -> Optional[str]:
-    """
-    Busca credencial no Cofre por prioridade:
-      1) (REDE, CONTA, CHAVE) exato
-      2) (REDE, qualquer CONTA, CHAVE)
-      3) sinônimos de REDE
-    """
     rede_u  = (rede or "").strip().upper()
     chave_u = (chave or "").strip().upper()
     conta_u = (conta or "").strip().upper() if conta else ""
 
     creds_rc: Dict[Tuple[str,str,str], str] = _cofre_cache.get("creds_rc", {}) or {}
 
-    # 1) exato
+    # 1) exato (rede+conta+chave)
     if conta_u:
         v = creds_rc.get((rede_u, conta_u, chave_u))
         if v: return v
 
-    # 2) qualquer conta (mesma rede)
+    # 2) mesma rede, qualquer conta
     for (r,c,k), v in creds_rc.items():
         if r == rede_u and k == chave_u and v:
             return v
 
-    # 3) sinônimos de rede
+    # 3) sinônimos
     for (r,c,k), v in creds_rc.items():
         if k == chave_u and _match_rede(r, rede_u) and v:
             if conta_u and c == conta_u:
@@ -168,10 +140,6 @@ def _cofre_get(rede: str, chave: str, conta: Optional[str]=None, default: Option
     return default
 
 def _cofre_find_by_prefix(rede: str, prefix: str) -> List[Tuple[str,str,str]]:
-    """
-    Retorna lista de tuplas (conta, chave, valor) onde chave começa com prefixo.
-    Serve para suportar CHAT_ID_1, WEBHOOK_1, PAGE_ID_1 etc.
-    """
     rede_u = (rede or "").strip().upper()
     pref_u = (prefix or "").strip().upper()
     out=[]
@@ -181,8 +149,28 @@ def _cofre_find_by_prefix(rede: str, prefix: str) -> List[Tuple[str,str,str]]:
             out.append((c, k, v))
     return out
 
+def _gs_client():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    sa_json_env = (os.getenv("GOOGLE_SERVICE_JSON", "") or "").strip()
+    if not sa_json_env:
+        raise RuntimeError("Credencial Google ausente: defina GOOGLE_SERVICE_JSON (GitHub Actions Secret).")
+    try:
+        info = json.loads(sa_json_env)
+    except Exception as e:
+        raise RuntimeError(f"GOOGLE_SERVICE_JSON inválido (não é JSON). Erro: {e}")
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scopes)
+    return gspread.authorize(creds)
+
+def _open_cofre_ws(tab: str):
+    if not COFRE_SHEET_ID:
+        raise RuntimeError("COFRE_SHEET_ID não definido (GitHub Variables).")
+    sh = _gs_client().open_by_key(COFRE_SHEET_ID)
+    return sh.worksheet(tab)
+
 def _cofre_load():
-    # Credenciais (Credenciais_Rede)
     creds_ws = _open_cofre_ws(COFRE_ABA_CRED)
     allv = creds_ws.get_all_values()
 
@@ -198,15 +186,12 @@ def _cofre_load():
             rede_u  = rede.upper()
             conta_u = (conta or "").upper()
             chave_u = chave.upper()
-
             rows.append({"rede":rede_u, "conta":conta_u, "chave":chave_u, "valor":valor})
-            # chave primária: (REDE, CONTA, CHAVE)
             creds_rc[(rede_u, conta_u, chave_u)] = valor
 
     _cofre_cache["creds_rows"] = rows
     _cofre_cache["creds_rc"]   = creds_rc
 
-    # Canais (Redes_Sociais_Canais)
     canais_ws = _open_cofre_ws(COFRE_ABA_CANAIS)
     canais_list = []
     vals = canais_ws.get_all_values()
@@ -226,35 +211,7 @@ def _cofre_load():
     canais_list.sort(key=lambda x: x["ordem"])
     _cofre_cache["canais_list"] = canais_list
 
-# ============================================================
-# GOOGLE AUTH (somente via GOOGLE_SERVICE_JSON no Actions)
-# ============================================================
-def _gs_client():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    sa_json_env = (os.getenv("GOOGLE_SERVICE_JSON", "") or "").strip()
-    if not sa_json_env:
-        raise RuntimeError(
-            "Credencial Google ausente: defina GOOGLE_SERVICE_JSON (GitHub Actions Secret). "
-            "Não usamos service_account.json nem .env."
-        )
-    try:
-        info = json.loads(sa_json_env)
-    except Exception as e:
-        raise RuntimeError(f"GOOGLE_SERVICE_JSON inválido (não é JSON). Erro: {e}")
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scopes)
-    return gspread.authorize(creds)
-
-def _open_cofre_ws(tab: str):
-    if not COFRE_SHEET_ID:
-        raise RuntimeError("COFRE_SHEET_ID não definido (GitHub Variables).")
-    sh = _gs_client().open_by_key(COFRE_SHEET_ID)
-    return sh.worksheet(tab)
-
 def _open_ws_principal():
-    # A planilha principal vem do Cofre (GOOGLE_SHEET_ID)
     sid = _cofre_get("GOOGLE", "GOOGLE_SHEET_ID", default="") or ""
     if not sid:
         raise RuntimeError("No Cofre, informe (Rede=GOOGLE, Chave=GOOGLE_SHEET_ID) com o ID da planilha principal.")
@@ -262,7 +219,6 @@ def _open_ws_principal():
     return sh.worksheet(SHEET_TAB)
 
 def _ensure_status_column(ws, rede: str, env_col: Optional[int]) -> int:
-    # Mantém compat com índices fixos, mas cria se não existir
     if env_col and isinstance(env_col, int) and env_col > 0:
         return env_col
     header = ws.row_values(1)
@@ -271,17 +227,13 @@ def _ensure_status_column(ws, rede: str, env_col: Optional[int]) -> int:
         if h and h.strip().lower() == target.lower():
             return i
     col = len(header) + 1
-    # evita erro de grid: se precisar, aumenta colunas antes de escrever
     try:
         current_cols = getattr(ws, "col_count", None)
         if current_cols is None:
-            # fallback: tenta ler dimensões via gspread
             current_cols = len(header) if header else 0
         if current_cols < col:
             ws.add_cols(col - current_cols)
     except Exception:
-        # Se add_cols falhar por qualquer razão, tentamos mesmo assim;
-        # (o erro ficará explícito no log)
         pass
     ws.update_cell(1, col, target)
     _log(f"[Planilha] Criada coluna: {target} (col {col})")
@@ -296,7 +248,7 @@ def marcar_publicado(ws, rownum, rede, value=None):
     ws.update_cell(rownum, col, value)
 
 # ============================================================
-# TEXT MODE + FLAGS (somente via Cofre)
+# TEXT MODE + FLAGS (Cofre)
 # ============================================================
 VALID_TEXT_MODES = {"IMAGE_ONLY", "TEXT_AND_IMAGE", "TEXT_ONLY"}
 
@@ -305,11 +257,6 @@ def _cofre_bool(rede: str, chave: str, default: bool=False, conta: Optional[str]
     if v in ("1","true","sim","yes","y","on"): return True
     if v in ("0","false","nao","não","no","n","off"): return False
     return default
-
-def _cofre_int(rede: str, chave: str, default: int, conta: Optional[str]=None) -> int:
-    v = (_cofre_get(rede, chave, conta=conta, default="") or "").strip()
-    try: return int(v)
-    except Exception: return default
 
 def _cofre_text_mode(rede: str, default: str="TEXT_AND_IMAGE", conta: Optional[str]=None) -> str:
     v = (_cofre_get(rede, "TEXT_MODE", conta=conta, default="") or "").strip().upper()
@@ -419,7 +366,6 @@ def montar_texto_publicacao(row, rede_alvo: str) -> str:
     url = (_strip_invisible(row[COL_URL-1]) if _safe_len(row,COL_URL) else "")
     head = f"Resultado completo aqui >>>>\n{url}\n\n".strip()
 
-    canais_block = ""
     canais_list = _cofre_cache.get("canais_list", [])
     if canais_list:
         if rede_alvo == "X":
@@ -427,9 +373,9 @@ def montar_texto_publicacao(row, rede_alvo: str) -> str:
         else:
             canais_block = _build_canais_block_for(rede_alvo)
     else:
-        # fallback antigo (P/Q) se Cofre não tiver canais
         dicas  = (_strip_invisible(row[COL_TG_DICAS-1])  if _safe_len(row,COL_TG_DICAS)  else "")
         portal = (_strip_invisible(row[COL_TG_PORTAL-1]) if _safe_len(row,COL_TG_PORTAL) else "")
+        canais_block = ""
         if dicas or portal:
             parts = ["Inscreva-se nos nossos canais"]
             if dicas:  parts += ["Dicas Esportivas", dicas, ""]
@@ -466,7 +412,7 @@ def coleta_candidatos_para(ws, rede: str):
     return cand
 
 # ============================================================
-# X (somente Cofre)
+# X (Cofre)
 # ============================================================
 def _x_creds(idx:int) -> Dict[str,str]:
     return {
@@ -513,14 +459,20 @@ def _build_x_accounts():
 _recent_tweets_cache = defaultdict(set)
 _postados_nesta_execucao = defaultdict(set)
 
+def _cofre_bool_x(chave: str, default: bool=False) -> bool:
+    v = (_cofre_get("X", chave, default="") or "").strip().lower()
+    if v in ("1","true","sim","yes","y","on"): return True
+    if v in ("0","false","nao","não","no","n","off"): return False
+    return default
+
 def _x_skip_dup_check() -> bool:
-    return _cofre_bool("X", "X_SKIP_DUP_CHECK", default=True)
+    return _cofre_bool_x("X_SKIP_DUP_CHECK", default=True)
 
 def _x_post_in_all_accounts() -> bool:
-    return _cofre_bool("X", "X_POST_IN_ALL_ACCOUNTS", default=True)
+    return _cofre_bool_x("X_POST_IN_ALL_ACCOUNTS", default=True)
 
 def _x_post_with_image() -> bool:
-    return _cofre_bool("X", "POST_X_WITH_IMAGE", default=True)
+    return _cofre_bool_x("POST_X_WITH_IMAGE", default=True)
 
 def x_load_recent_texts(acc, max_results=50):
     if _x_skip_dup_check():
@@ -629,49 +581,88 @@ def publicar_em_x(ws, candidatos):
     return publicados
 
 # ============================================================
-# FACEBOOK (somente Cofre) — por CONTA (sem exigir _1/_2)
-# + Correção: log detalhado do erro Graph API
-# + Correção: não usar published="true"
-# + Fallback: se /photos falhar, tentar /feed com link
+# FACEBOOK — CORREÇÃO DEFINITIVA
+# - Usa USER_ACCESS_TOKEN do Cofre
+# - Obtém PAGE_ACCESS_TOKEN correto via /me/accounts
+# - Por página: só precisa PAGE_ID no Cofre (por Conta)
+# - Ainda aceita PAGE_ACCESS_TOKEN se existir, mas NÃO é obrigatório
 # ============================================================
-def _fb_pairs_from_cofre() -> List[Tuple[str,str,str]]:
+FB_GRAPH_VERSION = os.getenv("FB_GRAPH_VERSION", "v24.0").strip() or "v24.0"
+
+def _fb_raise_details(r: requests.Response):
+    try:
+        j = r.json()
+        if isinstance(j, dict) and "error" in j:
+            err = j.get("error", {}) or {}
+            msg = err.get("message", "")
+            code = err.get("code", "")
+            sub  = err.get("error_subcode", "")
+            fbtr = err.get("fbtrace_id", "")
+            raise RuntimeError(f"Facebook API error: message={msg} | code={code} | subcode={sub} | fbtrace_id={fbtr}")
+    except ValueError:
+        pass
+    raise RuntimeError(f"Facebook HTTP {r.status_code}: {r.text[:600]}")
+
+def _fb_exchange_long_lived_user_token(short_token: str) -> str:
     """
-    Retorna lista: (conta, page_id, page_token)
-    Aceita chaves:
-      - PAGE_ID + PAGE_ACCESS_TOKEN (recomendado)
-      - PAGE_ID + PAGE_TOKEN (fallback)
-      - PAGE_ID_1 + PAGE_ACCESS_TOKEN_1 (fallback legado)
+    Opcional: troca token curto por token longo (60 dias).
+    Requer APP_ID e APP_SECRET no Cofre (FACEBOOK).
+    Se não existir, retorna o token original.
+    """
+    app_id = (_cofre_get("FACEBOOK", "APP_ID", default="") or "").strip()
+    app_secret = (_cofre_get("FACEBOOK", "APP_SECRET", default="") or "").strip()
+    if not (app_id and app_secret and short_token):
+        return short_token
+
+    url = f"https://graph.facebook.com/{FB_GRAPH_VERSION}/oauth/access_token"
+    params = {
+        "grant_type": "fb_exchange_token",
+        "client_id": app_id,
+        "client_secret": app_secret,
+        "fb_exchange_token": short_token
+    }
+    r = requests.get(url, params=params, timeout=25)
+    if not r.ok:
+        _log(f"[Facebook] Não foi possível trocar por token longo; mantendo token atual. Detalhe: {r.text[:250]}")
+        return short_token
+    j = r.json() or {}
+    return (j.get("access_token") or short_token).strip()
+
+def _fb_user_token() -> str:
+    # Pode existir geral (sem conta) ou por conta
+    return (_cofre_get("FACEBOOK", "USER_ACCESS_TOKEN", default="") or "").strip()
+
+def _fb_pages_declared_in_cofre() -> List[Tuple[str, str, Optional[str]]]:
+    """
+    Retorna lista: (conta, page_id, page_token_salvo_ou_None)
+    - Preferido: por Conta -> PAGE_ID (e opcional PAGE_ACCESS_TOKEN)
+    - Mantém compat com sufixos _n (legado)
     """
     creds = _cofre_cache.get("creds_rc", {}) or {}
 
-    # 1) por conta (preferido)
     acc_map: Dict[str, Dict[str,str]] = defaultdict(dict)
     for (r,c,k), v in creds.items():
-        if not _match_rede(r, "FACEBOOK"):
-            continue
-        if not v:
+        if not _match_rede(r, "FACEBOOK") or not v:
             continue
         acc = (c or "").strip()
         key = k.upper().strip()
-        if key in ("PAGE_ID","PAGE_ACCESS_TOKEN","PAGE_TOKEN"):
+        if key in ("PAGE_ID", "PAGE_ACCESS_TOKEN", "PAGE_TOKEN"):
             acc_map[acc][key] = v
 
     out=[]
     for acc, d in acc_map.items():
         pid = d.get("PAGE_ID")
         tok = d.get("PAGE_ACCESS_TOKEN") or d.get("PAGE_TOKEN")
-        if pid and tok:
-            out.append((acc or "FACEBOOK", pid, tok))
+        if pid:
+            out.append((acc or "FACEBOOK", pid, tok or None))
 
     if out:
         return out
 
-    # 2) fallback legado com sufixo _n (sem conta)
+    # fallback legado: PAGE_ID_1 etc.
     tmp: Dict[str, Dict[str,str]] = defaultdict(dict)
     for (r,c,k), v in creds.items():
-        if not _match_rede(r, "FACEBOOK"):
-            continue
-        if not v:
+        if not _match_rede(r, "FACEBOOK") or not v:
             continue
         m = re.match(r"^(PAGE_ID|PAGE_ACCESS_TOKEN|PAGE_TOKEN)_(\d+)$", k.upper().strip())
         if not m:
@@ -683,30 +674,41 @@ def _fb_pairs_from_cofre() -> List[Tuple[str,str,str]]:
     for n, d in tmp.items():
         pid = d.get("PAGE_ID")
         tok = d.get("PAGE_ACCESS_TOKEN") or d.get("PAGE_TOKEN")
-        if pid and tok:
-            out.append((f"FACEBOOK_{n}", pid, tok))
+        if pid:
+            out.append((f"FACEBOOK_{n}", pid, tok or None))
 
     return out
 
-def _fb_raise_details(r: requests.Response):
-    """Lança exceção com detalhes do JSON/texto do Graph API."""
-    try:
-        j = r.json()
-        if isinstance(j, dict) and "error" in j:
-            err = j.get("error", {}) or {}
-            msg = err.get("message", "")
-            code = err.get("code", "")
-            sub  = err.get("error_subcode", "")
-            fbtr = err.get("fbtrace_id", "")
-            raise RuntimeError(f"Facebook API error: message={msg} | code={code} | subcode={sub} | fbtrace_id={fbtr}")
-    except ValueError:
-        # não é JSON
-        pass
-    # fallback: texto cru (limitado)
-    raise RuntimeError(f"Facebook HTTP {r.status_code}: {r.text[:600]}")
+def _fb_fetch_page_tokens(user_token: str) -> Dict[str, Dict[str,str]]:
+    """
+    Retorna dict page_id -> {"name":..., "access_token":...}
+    """
+    if not user_token:
+        return {}
+    url = f"https://graph.facebook.com/{FB_GRAPH_VERSION}/me/accounts"
+    params = {
+        "fields": "id,name,access_token",
+        "limit": 200,
+        "access_token": user_token
+    }
+    r = requests.get(url, params=params, timeout=25)
+    if not r.ok:
+        _fb_raise_details(r)
+    j = r.json() or {}
+    data = j.get("data", []) or []
+    out={}
+    for p in data:
+        pid = str(p.get("id") or "").strip()
+        if not pid:
+            continue
+        out[pid] = {
+            "name": str(p.get("name") or "").strip(),
+            "access_token": str(p.get("access_token") or "").strip()
+        }
+    return out
 
 def _fb_post_text(pid, token, message, link=None):
-    url=f"https://graph.facebook.com/v19.0/{pid}/feed"
+    url=f"https://graph.facebook.com/{FB_GRAPH_VERSION}/{pid}/feed"
     data={"access_token":token}
     if message:
         data["message"]=message
@@ -718,21 +720,36 @@ def _fb_post_text(pid, token, message, link=None):
     return (r.json() or {}).get("id")
 
 def _fb_post_photo(pid, token, caption, image_bytes):
-    url=f"https://graph.facebook.com/v19.0/{pid}/photos"
+    url=f"https://graph.facebook.com/{FB_GRAPH_VERSION}/{pid}/photos"
     files={"source":("resultado.png", image_bytes, "image/png")}
     data={"access_token":token}
     if caption:
         data["caption"]=caption
-    # NÃO usar published="true" (pode causar 400 em alguns cenários)
     r=requests.post(url, data=data, files=files, timeout=60)
     if not r.ok:
         _fb_raise_details(r)
     return (r.json() or {}).get("id")
 
 def publicar_em_facebook(ws, candidatos):
-    pairs = _fb_pairs_from_cofre()
-    if not pairs:
-        _log("[FACEBOOK] Sem credenciais no Cofre (por Conta: PAGE_ID + PAGE_ACCESS_TOKEN/PAGE_TOKEN). Pulando Facebook.")
+    pages = _fb_pages_declared_in_cofre()
+    if not pages:
+        _log("[FACEBOOK] Nenhuma PAGE_ID cadastrada no Cofre. Pulando Facebook.")
+        return 0
+
+    user_tok = _fb_user_token()
+    if not user_tok:
+        _log("[FACEBOOK] Sem USER_ACCESS_TOKEN no Cofre. Pulando Facebook.")
+        return 0
+
+    # opcional: troca por token longo (se APP_ID/APP_SECRET existirem no Cofre)
+    user_tok = _fb_exchange_long_lived_user_token(user_tok)
+
+    # busca page tokens corretos (fonte de verdade)
+    try:
+        page_map = _fb_fetch_page_tokens(user_tok)
+        _log(f"[FACEBOOK] Páginas retornadas por /me/accounts: {len(page_map)}")
+    except Exception as e:
+        _log(f"[FACEBOOK] Falha ao ler /me/accounts (token/permissões). Erro: {e}")
         return 0
 
     mode = _cofre_text_mode("FACEBOOK", default="TEXT_AND_IMAGE")
@@ -747,31 +764,39 @@ def publicar_em_facebook(ws, candidatos):
         url_post = _strip_invisible(row[COL_URL-1]) if _safe_len(row,COL_URL) else ""
 
         ok_any=False
-        for conta, pid, ptok in pairs:
+        for conta, pid, saved_tok in pages:
+            # prioridade: token correto via /me/accounts; fallback: token salvo (se existir)
+            page_tok = (page_map.get(str(pid), {}) or {}).get("access_token") or (saved_tok or "")
+            page_name = (page_map.get(str(pid), {}) or {}).get("name") or conta
+
+            if not page_tok:
+                _log(f"[Facebook][{page_name}] PAGE_ID={pid} não encontrado em /me/accounts e sem token salvo. Verifique se seu usuário é admin dessa página e se o token tem pages_show_list/pages_manage_posts.")
+                continue
+
             try:
                 if DRY_RUN:
-                    _log(f"[Facebook][{conta}] DRY_RUN")
+                    _log(f"[Facebook][{page_name}] DRY_RUN")
                     ok=True
                 else:
                     if post_with_image:
                         buf=_build_image_from_row(row)
                         try:
-                            fb_id=_fb_post_photo(pid, ptok, msg, buf.getvalue())
-                            _log(f"[Facebook][{conta}] OK (/photos) → {fb_id}")
+                            fb_id=_fb_post_photo(pid, page_tok, msg, buf.getvalue())
+                            _log(f"[Facebook][{page_name}] OK (/photos) → {fb_id}")
                             ok=True
                         except Exception as e_photo:
-                            # Fallback: tenta /feed com link
-                            _log(f"[Facebook][{conta}] Falhou /photos; tentando /feed com link. Detalhe: {e_photo}")
-                            fb_id=_fb_post_text(pid, ptok, msg, link=url_post or None)
-                            _log(f"[Facebook][{conta}] OK (/feed) → {fb_id}")
+                            _log(f"[Facebook][{page_name}] Falhou /photos; tentando /feed com link. Detalhe: {e_photo}")
+                            fb_id=_fb_post_text(pid, page_tok, msg, link=(url_post or None))
+                            _log(f"[Facebook][{page_name}] OK (/feed) → {fb_id}")
                             ok=True
                     else:
-                        fb_id=_fb_post_text(pid, ptok, msg, link=url_post or None)
-                        _log(f"[Facebook][{conta}] OK (/feed) → {fb_id}")
+                        fb_id=_fb_post_text(pid, page_tok, msg, link=(url_post or None))
+                        _log(f"[Facebook][{page_name}] OK (/feed) → {fb_id}")
                         ok=True
             except Exception as e:
-                _log(f"[Facebook][{conta}] erro: {e}")
+                _log(f"[Facebook][{page_name}] erro: {e}")
                 ok=False
+
             ok_any = ok_any or ok
             time.sleep(0.7)
 
@@ -785,13 +810,12 @@ def publicar_em_facebook(ws, candidatos):
     return publicados
 
 # ============================================================
-# TELEGRAM (somente Cofre)
+# TELEGRAM (Cofre)
 # ============================================================
 def _tg_token_from_cofre():
     return (_cofre_get("TELEGRAM","BOT_TOKEN", default="") or "").strip()
 
 def _tg_chat_ids_from_cofre():
-    # aceita CHAT_ID, CHAT_ID_1..N
     out=set()
     v0 = (_cofre_get("TELEGRAM","CHAT_ID", default="") or "").strip()
     if v0: out.add(v0)
@@ -868,10 +892,9 @@ def publicar_em_telegram(ws, candidatos):
     return publicados
 
 # ============================================================
-# DISCORD (somente Cofre)
+# DISCORD (Cofre)
 # ============================================================
 def _discord_webhooks_from_cofre():
-    # aceita WEBHOOK e WEBHOOK_1..N
     out=set()
     v0 = (_cofre_get("DISCORD","WEBHOOK", default="") or "").strip()
     if v0: out.add(v0)
@@ -940,7 +963,7 @@ def publicar_em_discord(ws, candidatos):
     return publicados
 
 # ============================================================
-# PINTEREST (somente Cofre)
+# PINTEREST (Cofre)
 # ============================================================
 def _pin_token_from_cofre():
     return (_cofre_get("PINTEREST","ACCESS_TOKEN", default="") or "").strip()
@@ -1022,11 +1045,9 @@ def publicar_em_pinterest(ws, candidatos):
     return publicados
 
 # ============================================================
-# REDES ALVO x REDES COM CREDENCIAL
-# - regra: "rodar em todas; se não tiver credencial, só pula"
+# REDES ALVO x CREDENCIAIS
 # ============================================================
 def _target_networks():
-    # alvo fixo (ordem)
     return ["X","FACEBOOK","TELEGRAM","DISCORD","PINTEREST"]
 
 def _has_creds_for(rede: str) -> bool:
@@ -1035,13 +1056,13 @@ def _has_creds_for(rede: str) -> bool:
         x1_ok = all((_cofre_get("X", k, default="") or "") for k in ["TWITTER_API_KEY_1","TWITTER_API_SECRET_1","TWITTER_ACCESS_TOKEN_1","TWITTER_ACCESS_SECRET_1"])
         return bool(x1_ok)
     if rede == "FACEBOOK":
-        return bool(_fb_pairs_from_cofre())
+        return bool(_fb_pages_declared_in_cofre() and _fb_user_token())
     if rede == "TELEGRAM":
-        return bool(_tg_token_from_cofre() and _tg_chat_ids_from_cofre())
+        return bool((_cofre_get("TELEGRAM","BOT_TOKEN", default="") or "").strip() and _tg_chat_ids_from_cofre())
     if rede == "DISCORD":
         return bool(_discord_webhooks_from_cofre())
     if rede == "PINTEREST":
-        return bool(_pin_token_from_cofre() and _pin_board_from_cofre())
+        return bool((_cofre_get("PINTEREST","ACCESS_TOKEN", default="") or "").strip() and (_cofre_get("PINTEREST","BOARD_ID", default="") or "").strip())
     return False
 
 # ============================================================
@@ -1080,7 +1101,6 @@ def _print_config_summary(redes_alvo):
 # ============================================================
 def main():
     _log("Start", f"Origem={BOT_ORIGEM} | DRY_RUN={DRY_RUN} | KIT_FIRST={USE_KIT_IMAGE_FIRST}")
-
     keepalive_thread = iniciar_keepalive() if ENABLE_KEEPALIVE else None
 
     try:
@@ -1100,9 +1120,8 @@ def main():
                 continue
 
             if not _has_creds_for(rede):
-                # regra: roda, mas sem credencial não publica
                 if rede == "FACEBOOK":
-                    _log("[FACEBOOK] Sem credenciais no Cofre (PAGE_ID + PAGE_ACCESS_TOKEN/PAGE_TOKEN por Conta). Pulando Facebook.")
+                    _log("[FACEBOOK] Sem credenciais no Cofre (PAGE_ID por Conta + USER_ACCESS_TOKEN). Pulando Facebook.")
                 elif rede == "DISCORD":
                     _log("[DISCORD] Sem credenciais no Cofre (WEBHOOK/WEBHOOK_n). Pulando Discord.")
                 elif rede == "PINTEREST":
