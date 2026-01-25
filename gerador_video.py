@@ -1,44 +1,121 @@
 import os
-from moviepy.editor import TextClip, ColorClip, CompositeVideoClip
+import re
+from datetime import datetime
+
+from moviepy.editor import (
+    TextClip,
+    ColorClip,
+    CompositeVideoClip,
+    ImageClip
+)
 
 def gerar_video_loteria(dados):
     """
-    Recebe um dicionário com os dados da loteria e gera um MP4.
+    Gera um vídeo MP4 a partir do dicionário de dados.
+    Suporta usar imagem pronta como fundo (recomendado).
+    
+    Espera (mínimo):
+      dados['loteria'], dados['concurso'], dados['numeros']
+    Opcionais:
+      dados['premio']
+      dados['imagem_path']  -> caminho local do PNG/JPG (arte final)
+      dados['cor_fundo_rgb'] -> tuple (R,G,B)
+      dados['duracao'] -> int/float (segundos)
     """
-    _log_video(f"Gerando vídeo para {dados['loteria']}...")
+    loteria = str(dados.get("loteria", "")).strip() or "LOTERIA"
+    concurso = str(dados.get("concurso", "")).strip() or "-"
+    numeros = str(dados.get("numeros", "")).strip() or "-"
+    premio = str(dados.get("premio", "")).strip() or ""
+    imagem_path = str(dados.get("imagem_path", "")).strip()
+    cor_fundo = dados.get("cor_fundo_rgb", (0, 114, 54))  # fallback
+    duracao = float(dados.get("duracao", 8))
 
-    # Configurações de layout (Vertical para Redes Sociais)
+    _log_video(f"Gerando vídeo para {loteria} concurso {concurso}...")
+
+    # Vertical (Reels/Shorts)
     LARGURA, ALTURA = 1080, 1920
-    DURACAO = 8
-    COR_FUNDO = (0, 114, 54) # Verde oficial
 
-    # 1. Fundo
-    fundo = ColorClip(size=(LARGURA, ALTURA), color=COR_FUNDO, duration=DURACAO)
+    # 1) Fundo: preferencialmente a IMAGEM FINAL já gerada
+    clips = []
+    if imagem_path and os.path.exists(imagem_path):
+        fundo_img = (
+            ImageClip(imagem_path)
+            .resize(height=ALTURA)  # encaixa altura
+        )
+        # Se sobrar largura, corta ao centro para 1080
+        if fundo_img.w > LARGURA:
+            x1 = (fundo_img.w - LARGURA) / 2
+            fundo_img = fundo_img.crop(x1=x1, y1=0, x2=x1 + LARGURA, y2=ALTURA)
+        else:
+            # Se faltar, redimensiona por largura
+            fundo_img = fundo_img.resize(width=LARGURA)
+            if fundo_img.h > ALTURA:
+                y1 = (fundo_img.h - ALTURA) / 2
+                fundo_img = fundo_img.crop(x1=0, y1=y1, x2=LARGURA, y2=y1 + ALTURA)
 
-    # 2. Textos
-    txt_concurso = TextClip(
-        f"{dados['loteria'].upper()}\nCONCURSO {dados['concurso']}",
-        fontsize=80, color='white', font='Arial-Bold', method='caption', size=(LARGURA*0.8, None)
-    ).set_position(('center', 300)).set_duration(DURACAO)
+        clips.append(fundo_img.set_duration(duracao))
+    else:
+        # fallback: cor sólida
+        clips.append(ColorClip(size=(LARGURA, ALTURA), color=cor_fundo, duration=duracao))
 
-    txt_numeros = TextClip(
-        dados['numeros'],
-        fontsize=120, color='yellow', font='Arial-Bold', method='caption', size=(LARGURA*0.9, None)
-    ).set_position('center').set_duration(DURACAO).crossfadein(1)
+    # 2) Textos (mantenha simples para evitar problemas de fonte)
+    # Use fonte que existe no Ubuntu: DejaVu-Sans-Bold (mais confiável)
+    fonte = "DejaVu-Sans-Bold"
 
-    txt_premio = TextClip(
-        f"PRÊMIO ESTIMADO:\n{dados['premio']}",
-        fontsize=65, color='white', font='Arial-Bold', method='caption', size=(LARGURA*0.8, None)
-    ).set_position(('center', 1450)).set_duration(DURACAO)
+    txt_topo = TextClip(
+        f"{loteria.upper()}  |  CONCURSO {concurso}",
+        fontsize=68,
+        color="white",
+        font=fonte,
+        method="caption",
+        size=(int(LARGURA * 0.92), None)
+    ).set_position(("center", 120)).set_duration(duracao)
 
-    # 3. Composição e Exportação
-    video = CompositeVideoClip([fundo, txt_concurso, txt_numeros, txt_premio])
-    output_path = "video_resultado.mp4"
-    
-    # Renderização sem áudio para ser rápido no GitHub Actions
-    video.write_videofile(output_path, fps=24, codec="libx264", audio=False, logger=None)
-    
+    txt_nums = TextClip(
+        numeros,
+        fontsize=110,
+        color="yellow",
+        font=fonte,
+        method="caption",
+        size=(int(LARGURA * 0.92), None)
+    ).set_position(("center", "center")).set_duration(duracao)
+
+    clips.append(txt_topo)
+    clips.append(txt_nums)
+
+    if premio:
+        txt_premio = TextClip(
+            f"PRÊMIO ESTIMADO:\n{premio}",
+            fontsize=58,
+            color="white",
+            font=fonte,
+            method="caption",
+            size=(int(LARGURA * 0.92), None)
+        ).set_position(("center", 1480)).set_duration(duracao)
+        clips.append(txt_premio)
+
+    # 3) Nome de saída único por loteria+concurso
+    safe_loteria = re.sub(r"[^a-zA-Z0-9_-]+", "-", loteria.lower()).strip("-")
+    safe_concurso = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(concurso)).strip("-")
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    os.makedirs("output", exist_ok=True)
+    output_path = os.path.join("output", f"video_{safe_loteria}_{safe_concurso}_{ts}.mp4")
+
+    video = CompositeVideoClip(clips, size=(LARGURA, ALTURA))
+
+    # Render sem áudio (rápido)
+    video.write_videofile(
+        output_path,
+        fps=24,
+        codec="libx264",
+        audio=False,
+        threads=2,
+        logger=None
+    )
+
+    _log_video(f"OK: {output_path}")
     return output_path
 
+
 def _log_video(*a):
-    print(f"[VÍDEO] ", *a, flush=True)
+    print("[VÍDEO]", *a, flush=True)
