@@ -112,6 +112,18 @@ jobs:
           pip install --no-cache-dir -r requirements.txt
 
       # =========================
+      # DEPENDÊNCIAS DE VÍDEO (NOVO)
+      # - MoviePy geralmente precisa de ffmpeg
+      # - TextClip costuma precisar de imagemagick + fontes
+      # =========================
+      - name: Instalar dependências do sistema para VÍDEO (ffmpeg, imagemagick, fontes)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg imagemagick fonts-dejavu-core
+          echo "ffmpeg:" && ffmpeg -version | head -n 1 || true
+          echo "convert:" && convert -version | head -n 1 || true
+
+      # =========================
       # CLEANUP OUTPUT (NOVO)
       # =========================
       - name: Limpar/normalizar imagens em output (remover duplicados, ajustar nomes)
@@ -139,6 +151,52 @@ jobs:
 
           # push para a mesma branch
           git push origin HEAD:$GITHUB_REF_NAME
+
+      # =========================
+      # VÍDEOS (FILA/UPLOAD) — OPCIONAL (NOVO)
+      # Habilite com:
+      #   Variables: ENABLE_VIDEOS = true
+      #
+      # Colunas padrão:
+      #   ENFILEIRADO_VIDEOS_COL = Enfileirado_Videos
+      #   PUBLICADO_YT_COL       = Publicado_Youtube
+      # =========================
+      - name: Gerar/Enviar VÍDEOS (opcional — fila Enfileirado_Videos)
+        if: ${{ vars.ENABLE_VIDEOS == 'true' || secrets.ENABLE_VIDEOS == 'true' }}
+        env:
+          # Google
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+
+          # Colunas (padrão do Portal SimonSports)
+          ENFILEIRADO_VIDEOS_COL: ${{ vars.ENFILEIRADO_VIDEOS_COL || 'Enfileirado_Videos' }}
+          PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL || 'Publicado_Youtube' }}
+
+          # Cofre (se seu script de vídeo também usa)
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ secrets.COFRE_ABA_CRED || vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          COFRE_ABA_CANAIS: ${{ secrets.COFRE_ABA_CANAIS || vars.COFRE_ABA_CANAIS || 'Redes_Sociais_Canais' }}
+
+          # Ajustes de execução
+          MAX_VIDEOS_RODADA: ${{ vars.MAX_VIDEOS_RODADA || '10' }}
+          PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '2.0' }}
+
+          # Timezone (logs)
+          TZ: "America/Sao_Paulo"
+        run: |
+          echo "==== Iniciando pipeline de VÍDEOS ===="
+          if [ -f video_queue.py ]; then
+            echo "Executando: video_queue.py"
+            python video_queue.py
+          elif [ -f post_video.py ]; then
+            echo "Executando: post_video.py"
+            python post_video.py
+          else
+            echo "Nenhum runner encontrado (video_queue.py/post_video.py). Nada a fazer."
+            exit 0
+          fi
+          echo "==== Fim pipeline de VÍDEOS ===="
 
       # =========================
       # PUBLICAÇÃO (Python bot.py)
