@@ -21,8 +21,8 @@ jobs:
       - name: Checkout do repositório
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0            # <— necessário para pull/rebase
-          persist-credentials: true # usa o token padrão do Actions
+          fetch-depth: 0
+          persist-credentials: true
 
       # =========================
       # DIAGNÓSTICOS INICIAIS
@@ -91,7 +91,7 @@ jobs:
           ls -la output || true
 
       # =========================
-      # PYTHON (para cleanup + bot)
+      # PYTHON (para cleanup + bot + vídeos)
       # =========================
       - name: Configurar Python
         uses: actions/setup-python@v5
@@ -113,8 +113,6 @@ jobs:
 
       # =========================
       # DEPENDÊNCIAS DE VÍDEO (NOVO)
-      # - MoviePy geralmente precisa de ffmpeg
-      # - TextClip costuma precisar de imagemagick + fontes
       # =========================
       - name: Instalar dependências do sistema para VÍDEO (ffmpeg, imagemagick, fontes)
         run: |
@@ -124,7 +122,27 @@ jobs:
           echo "convert:" && convert -version | head -n 1 || true
 
       # =========================
-      # CLEANUP OUTPUT (NOVO)
+      # PATCH ImageMagick policy (para TextClip, se necessário)
+      # - Evita erro "not authorized" ao renderizar texto
+      # =========================
+      - name: Ajustar policy do ImageMagick (tolerante)
+        run: |
+          set +e
+          POLICY1="/etc/ImageMagick-6/policy.xml"
+          POLICY2="/etc/ImageMagick-7/policy.xml"
+          for P in "$POLICY1" "$POLICY2"; do
+            if [ -f "$P" ]; then
+              echo "Ajustando $P"
+              sudo sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@*"/g' "$P" || true
+              sudo sed -i 's/rights="none" pattern="LABEL"/rights="read|write" pattern="LABEL"/g' "$P" || true
+              sudo sed -i 's/rights="none" pattern="label"/rights="read|write" pattern="label"/g' "$P" || true
+            fi
+          done
+          echo "Policy ajustada (se aplicável)."
+          set -e
+
+      # =========================
+      # CLEANUP OUTPUT
       # =========================
       - name: Limpar/normalizar imagens em output (remover duplicados, ajustar nomes)
         if: steps.fila.outputs.itens != '0'
@@ -145,21 +163,14 @@ jobs:
           git add -A output || true
           git commit -m "chore: adiciona imagens geradas (${GITHUB_RUN_NUMBER})" || echo "Nada para commitar"
 
-          # integra possíveis commits que chegaram no remoto
           git fetch origin $GITHUB_REF_NAME
           git pull --rebase --autostash origin $GITHUB_REF_NAME
-
-          # push para a mesma branch
           git push origin HEAD:$GITHUB_REF_NAME
 
       # =========================
-      # VÍDEOS (FILA/UPLOAD) — OPCIONAL (NOVO)
-      # Habilite com:
-      #   Variables: ENABLE_VIDEOS = true
-      #
-      # Colunas padrão:
-      #   ENFILEIRADO_VIDEOS_COL = Enfileirado_Videos
-      #   PUBLICADO_YT_COL       = Publicado_Youtube
+      # VÍDEOS (OPCIONAL) — usa Enfileirado_Videos -> grava em Publicado_Youtube
+      # Habilite com Variable:
+      #   ENABLE_VIDEOS = true
       # =========================
       - name: Gerar/Enviar VÍDEOS (opcional — fila Enfileirado_Videos)
         if: ${{ vars.ENABLE_VIDEOS == 'true' || secrets.ENABLE_VIDEOS == 'true' }}
@@ -169,20 +180,19 @@ jobs:
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
           SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
 
-          # Colunas (padrão do Portal SimonSports)
+          # Cofre
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ secrets.COFRE_ABA_CRED || vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+
+          # Colunas
           ENFILEIRADO_VIDEOS_COL: ${{ vars.ENFILEIRADO_VIDEOS_COL || 'Enfileirado_Videos' }}
           PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL || 'Publicado_Youtube' }}
 
-          # Cofre (se seu script de vídeo também usa)
-          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
-          COFRE_ABA_CRED: ${{ secrets.COFRE_ABA_CRED || vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
-          COFRE_ABA_CANAIS: ${{ secrets.COFRE_ABA_CANAIS || vars.COFRE_ABA_CANAIS || 'Redes_Sociais_Canais' }}
-
-          # Ajustes de execução
+          # Execução
           MAX_VIDEOS_RODADA: ${{ vars.MAX_VIDEOS_RODADA || '10' }}
           PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '2.0' }}
+          DRY_RUN_VIDEOS: ${{ vars.DRY_RUN_VIDEOS || 'false' }}
 
-          # Timezone (logs)
           TZ: "America/Sao_Paulo"
         run: |
           echo "==== Iniciando pipeline de VÍDEOS ===="
@@ -190,8 +200,9 @@ jobs:
             echo "Executando: video_queue.py"
             python video_queue.py
           elif [ -f post_video.py ]; then
-            echo "Executando: post_video.py"
-            python post_video.py
+            echo "ATENÇÃO: sem video_queue.py. Rodar post_video.py sozinho não marca planilha."
+            echo "Crie video_queue.py (recomendado). Encerrando sem erro."
+            exit 0
           else
             echo "Nenhum runner encontrado (video_queue.py/post_video.py). Nada a fazer."
             exit 0
