@@ -25,6 +25,135 @@ jobs:
           persist-credentials: true
 
       # =========================
+      # DEFAULTS (evita quebrar YAML com "||" dentro do env)
+      # =========================
+      - name: Definir defaults do job (safe)
+        shell: bash
+        env:
+          # Vars (repo variables)
+          VAR_GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID }}
+          VAR_SHEET_TAB: ${{ vars.SHEET_TAB }}
+          VAR_COFRE_SHEET_ID: ${{ vars.COFRE_SHEET_ID }}
+          VAR_COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED }}
+          VAR_COFRE_ABA_CANAIS: ${{ vars.COFRE_ABA_CANAIS }}
+
+          VAR_ENFILEIRADO_VIDEOS_COL: ${{ vars.ENFILEIRADO_VIDEOS_COL }}
+          VAR_PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL }}
+          VAR_MAX_VIDEOS_RODADA: ${{ vars.MAX_VIDEOS_RODADA }}
+          VAR_PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS }}
+          VAR_DRY_RUN_VIDEOS: ${{ vars.DRY_RUN_VIDEOS }}
+
+          VAR_TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS }}
+          VAR_BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS }}
+          VAR_MAX_PUBLICACOES_RODADA: ${{ vars.MAX_PUBLICACOES_RODADA }}
+          VAR_PAUSA_ENTRE_POSTS: ${{ vars.PAUSA_ENTRE_POSTS }}
+          VAR_POST_X_WITH_IMAGE: ${{ vars.POST_X_WITH_IMAGE }}
+          VAR_X_POST_IN_ALL_ACCOUNTS: ${{ vars.X_POST_IN_ALL_ACCOUNTS }}
+          VAR_POST_TG_WITH_IMAGE: ${{ vars.POST_TG_WITH_IMAGE }}
+          VAR_POST_PINTEREST_WITH_IMAGE: ${{ vars.POST_PINTEREST_WITH_IMAGE }}
+          VAR_POST_FB_WITH_IMAGE: ${{ vars.POST_FB_WITH_IMAGE }}
+          VAR_X_SKIP_DUP_CHECK: ${{ vars.X_SKIP_DUP_CHECK }}
+
+          # Secrets (prioridade alta para IDs sensíveis)
+          SEC_COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID }}
+          SEC_ENABLE_VIDEOS: ${{ secrets.ENABLE_VIDEOS }}
+        run: |
+          set -e
+
+          # Defaults base
+          GOOGLE_SHEET_ID_DEFAULT="16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI"
+          SHEET_TAB_DEFAULT="ImportadosBlogger2"
+          COFRE_ABA_CRED_DEFAULT="Credenciais_Rede"
+          COFRE_ABA_CANAIS_DEFAULT="Redes_Sociais_Canais"
+
+          ENFILEIRADO_VIDEOS_COL_DEFAULT="Enfileirado_Videos"
+          PUBLICADO_YT_COL_DEFAULT="Publicado_Youtube"
+          MAX_VIDEOS_RODADA_DEFAULT="10"
+          PAUSA_ENTRE_VIDEOS_DEFAULT="2.0"
+          DRY_RUN_VIDEOS_DEFAULT="false"
+
+          BACKLOG_DAYS_DEFAULT="7"
+          MAX_PUBLICACOES_RODADA_DEFAULT="30"
+          PAUSA_ENTRE_POSTS_DEFAULT="2.5"
+          POST_X_WITH_IMAGE_DEFAULT="true"
+          X_POST_IN_ALL_ACCOUNTS_DEFAULT="true"
+          POST_TG_WITH_IMAGE_DEFAULT="true"
+          POST_PINTEREST_WITH_IMAGE_DEFAULT="true"
+          POST_FB_WITH_IMAGE_DEFAULT="true"
+          X_SKIP_DUP_CHECK_DEFAULT="true"
+
+          # Helper: escolhe o primeiro não-vazio
+          pick() {
+            for v in "$@"; do
+              if [ -n "$v" ]; then echo "$v"; return 0; fi
+            done
+            echo ""
+          }
+
+          GOOGLE_SHEET_ID="$(pick "$VAR_GOOGLE_SHEET_ID" "$GOOGLE_SHEET_ID_DEFAULT")"
+          SHEET_TAB="$(pick "$VAR_SHEET_TAB" "$SHEET_TAB_DEFAULT")"
+
+          # COFRE_SHEET_ID: SECRET > VAR (se vazio, mantém vazio mesmo)
+          COFRE_SHEET_ID="$(pick "$SEC_COFRE_SHEET_ID" "$VAR_COFRE_SHEET_ID")"
+          COFRE_ABA_CRED="$(pick "$VAR_COFRE_ABA_CRED" "$COFRE_ABA_CRED_DEFAULT")"
+          COFRE_ABA_CANAIS="$(pick "$VAR_COFRE_ABA_CANAIS" "$COFRE_ABA_CANAIS_DEFAULT")"
+
+          ENFILEIRADO_VIDEOS_COL="$(pick "$VAR_ENFILEIRADO_VIDEOS_COL" "$ENFILEIRADO_VIDEOS_COL_DEFAULT")"
+          PUBLICADO_YT_COL="$(pick "$VAR_PUBLICADO_YT_COL" "$PUBLICADO_YT_COL_DEFAULT")"
+          MAX_VIDEOS_RODADA="$(pick "$VAR_MAX_VIDEOS_RODADA" "$MAX_VIDEOS_RODADA_DEFAULT")"
+          PAUSA_ENTRE_VIDEOS="$(pick "$VAR_PAUSA_ENTRE_VIDEOS" "$PAUSA_ENTRE_VIDEOS_DEFAULT")"
+          DRY_RUN_VIDEOS="$(pick "$VAR_DRY_RUN_VIDEOS" "$DRY_RUN_VIDEOS_DEFAULT")"
+
+          TARGET_NETWORKS="$(pick "$VAR_TARGET_NETWORKS" "")"
+          BACKLOG_DAYS="$(pick "$VAR_BACKLOG_DAYS" "$BACKLOG_DAYS_DEFAULT")"
+          MAX_PUBLICACOES_RODADA="$(pick "$VAR_MAX_PUBLICACOES_RODADA" "$MAX_PUBLICACOES_RODADA_DEFAULT")"
+          PAUSA_ENTRE_POSTS="$(pick "$VAR_PAUSA_ENTRE_POSTS" "$PAUSA_ENTRE_POSTS_DEFAULT")"
+          POST_X_WITH_IMAGE="$(pick "$VAR_POST_X_WITH_IMAGE" "$POST_X_WITH_IMAGE_DEFAULT")"
+          X_POST_IN_ALL_ACCOUNTS="$(pick "$VAR_X_POST_IN_ALL_ACCOUNTS" "$X_POST_IN_ALL_ACCOUNTS_DEFAULT")"
+          POST_TG_WITH_IMAGE="$(pick "$VAR_POST_TG_WITH_IMAGE" "$POST_TG_WITH_IMAGE_DEFAULT")"
+          POST_PINTEREST_WITH_IMAGE="$(pick "$VAR_POST_PINTEREST_WITH_IMAGE" "$POST_PINTEREST_WITH_IMAGE_DEFAULT")"
+          POST_FB_WITH_IMAGE="$(pick "$VAR_POST_FB_WITH_IMAGE" "$POST_FB_WITH_IMAGE_DEFAULT")"
+          X_SKIP_DUP_CHECK="$(pick "$VAR_X_SKIP_DUP_CHECK" "$X_SKIP_DUP_CHECK_DEFAULT")"
+
+          # ENABLE_VIDEOS: usa VAR (principal) e aceita SECRET também (se você quiser)
+          ENABLE_VIDEOS="$(pick "${{ vars.ENABLE_VIDEOS }}" "$SEC_ENABLE_VIDEOS")"
+
+          {
+            echo "GOOGLE_SHEET_ID=$GOOGLE_SHEET_ID"
+            echo "SHEET_TAB=$SHEET_TAB"
+            echo "COFRE_SHEET_ID=$COFRE_SHEET_ID"
+            echo "COFRE_ABA_CRED=$COFRE_ABA_CRED"
+            echo "COFRE_ABA_CANAIS=$COFRE_ABA_CANAIS"
+
+            echo "ENFILEIRADO_VIDEOS_COL=$ENFILEIRADO_VIDEOS_COL"
+            echo "PUBLICADO_YT_COL=$PUBLICADO_YT_COL"
+            echo "MAX_VIDEOS_RODADA=$MAX_VIDEOS_RODADA"
+            echo "PAUSA_ENTRE_VIDEOS=$PAUSA_ENTRE_VIDEOS"
+            echo "DRY_RUN_VIDEOS=$DRY_RUN_VIDEOS"
+
+            echo "TARGET_NETWORKS=$TARGET_NETWORKS"
+            echo "BACKLOG_DAYS=$BACKLOG_DAYS"
+            echo "MAX_PUBLICACOES_RODADA=$MAX_PUBLICACOES_RODADA"
+            echo "PAUSA_ENTRE_POSTS=$PAUSA_ENTRE_POSTS"
+            echo "POST_X_WITH_IMAGE=$POST_X_WITH_IMAGE"
+            echo "X_POST_IN_ALL_ACCOUNTS=$X_POST_IN_ALL_ACCOUNTS"
+            echo "POST_TG_WITH_IMAGE=$POST_TG_WITH_IMAGE"
+            echo "POST_PINTEREST_WITH_IMAGE=$POST_PINTEREST_WITH_IMAGE"
+            echo "POST_FB_WITH_IMAGE=$POST_FB_WITH_IMAGE"
+            echo "X_SKIP_DUP_CHECK=$X_SKIP_DUP_CHECK"
+
+            echo "ENABLE_VIDEOS=$ENABLE_VIDEOS"
+            echo "TZ=America/Sao_Paulo"
+            echo "ENABLE_KEEPALIVE=false"
+          } >> "$GITHUB_ENV"
+
+          echo "Defaults aplicados:"
+          echo " - GOOGLE_SHEET_ID=$GOOGLE_SHEET_ID"
+          echo " - SHEET_TAB=$SHEET_TAB"
+          echo " - COFRE_SHEET_ID=${COFRE_SHEET_ID:+(definido)}"
+          echo " - ENABLE_VIDEOS=$ENABLE_VIDEOS"
+
+      # =========================
       # DIAGNÓSTICOS INICIAIS
       # =========================
       - name: Mostrar matriz de arquivos e vars
@@ -173,29 +302,32 @@ jobs:
       #   ENABLE_VIDEOS = true
       # =========================
       - name: Gerar/Enviar VÍDEOS (opcional — fila Enfileirado_Videos)
-        if: ${{ vars.ENABLE_VIDEOS == 'true' || secrets.ENABLE_VIDEOS == 'true' }}
+        if: ${{ env.ENABLE_VIDEOS == 'true' }}
         env:
           # Google
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
-          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
-          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+          GOOGLE_SHEET_ID: ${{ env.GOOGLE_SHEET_ID }}
+          SHEET_TAB: ${{ env.SHEET_TAB }}
 
           # Cofre
-          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
-          COFRE_ABA_CRED: ${{ secrets.COFRE_ABA_CRED || vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          COFRE_SHEET_ID: ${{ env.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ env.COFRE_ABA_CRED }}
 
           # Colunas
-          ENFILEIRADO_VIDEOS_COL: ${{ vars.ENFILEIRADO_VIDEOS_COL || 'Enfileirado_Videos' }}
-          PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL || 'Publicado_Youtube' }}
+          ENFILEIRADO_VIDEOS_COL: ${{ env.ENFILEIRADO_VIDEOS_COL }}
+          PUBLICADO_YT_COL: ${{ env.PUBLICADO_YT_COL }}
 
           # Execução
-          MAX_VIDEOS_RODADA: ${{ vars.MAX_VIDEOS_RODADA || '10' }}
-          PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '2.0' }}
-          DRY_RUN_VIDEOS: ${{ vars.DRY_RUN_VIDEOS || 'false' }}
+          MAX_VIDEOS_RODADA: ${{ env.MAX_VIDEOS_RODADA }}
+          PAUSA_ENTRE_VIDEOS: ${{ env.PAUSA_ENTRE_VIDEOS }}
+          DRY_RUN_VIDEOS: ${{ env.DRY_RUN_VIDEOS }}
 
           TZ: "America/Sao_Paulo"
         run: |
           echo "==== Iniciando pipeline de VÍDEOS ===="
+          test -n "$GOOGLE_SERVICE_JSON" || (echo "GOOGLE_SERVICE_JSON ausente" && exit 1)
+          test -n "$COFRE_SHEET_ID" || (echo "COFRE_SHEET_ID ausente" && exit 1)
+
           if [ -f video_queue.py ]; then
             echo "Executando: video_queue.py"
             python video_queue.py
@@ -235,13 +367,13 @@ jobs:
         env:
           # Google
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
-          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
-          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+          GOOGLE_SHEET_ID: ${{ env.GOOGLE_SHEET_ID }}
+          SHEET_TAB: ${{ env.SHEET_TAB }}
 
           # Cofre (via secrets/vars)
-          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
-          COFRE_ABA_CRED: ${{ secrets.COFRE_ABA_CRED || vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
-          COFRE_ABA_CANAIS: ${{ secrets.COFRE_ABA_CANAIS || vars.COFRE_ABA_CANAIS || 'Redes_Sociais_Canais' }}
+          COFRE_SHEET_ID: ${{ env.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ env.COFRE_ABA_CRED }}
+          COFRE_ABA_CANAIS: ${{ env.COFRE_ABA_CANAIS }}
 
           # X (obrigatória conta 1)
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
@@ -265,20 +397,21 @@ jobs:
           PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
 
           # Comportamento
-          TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS }}
-          BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS || '7' }}
-          MAX_PUBLICACOES_RODADA: ${{ vars.MAX_PUBLICACOES_RODADA || '30' }}
-          PAUSA_ENTRE_POSTS: ${{ vars.PAUSA_ENTRE_POSTS || '2.5' }}
-          POST_X_WITH_IMAGE: ${{ vars.POST_X_WITH_IMAGE || 'true' }}
-          X_POST_IN_ALL_ACCOUNTS: ${{ vars.X_POST_IN_ALL_ACCOUNTS || 'true' }}
-          POST_TG_WITH_IMAGE: ${{ vars.POST_TG_WITH_IMAGE || 'true' }}
-          POST_PINTEREST_WITH_IMAGE: ${{ vars.POST_PINTEREST_WITH_IMAGE || 'true' }}
-          POST_FB_WITH_IMAGE: ${{ vars.POST_FB_WITH_IMAGE || 'true' }}
+          TARGET_NETWORKS: ${{ env.TARGET_NETWORKS }}
+          BACKLOG_DAYS: ${{ env.BACKLOG_DAYS }}
+          MAX_PUBLICACOES_RODADA: ${{ env.MAX_PUBLICACOES_RODADA }}
+          PAUSA_ENTRE_POSTS: ${{ env.PAUSA_ENTRE_POSTS }}
+          POST_X_WITH_IMAGE: ${{ env.POST_X_WITH_IMAGE }}
+          X_POST_IN_ALL_ACCOUNTS: ${{ env.X_POST_IN_ALL_ACCOUNTS }}
+          POST_TG_WITH_IMAGE: ${{ env.POST_TG_WITH_IMAGE }}
+          POST_PINTEREST_WITH_IMAGE: ${{ env.POST_PINTEREST_WITH_IMAGE }}
+          POST_FB_WITH_IMAGE: ${{ env.POST_FB_WITH_IMAGE }}
 
           # 401 no X: desliga checagem de duplicados
-          X_SKIP_DUP_CHECK: ${{ vars.X_SKIP_DUP_CHECK || 'true' }}
+          X_SKIP_DUP_CHECK: ${{ env.X_SKIP_DUP_CHECK }}
 
           ENABLE_KEEPALIVE: "false"
+          TZ: "America/Sao_Paulo"
         run: |
           echo "==== Iniciando bot.py ===="
           python bot.py
