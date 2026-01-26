@@ -1,0 +1,131 @@
+name: Publicação de Vídeos (YouTube)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/20 * * * *"  # a cada 20 min (UTC) — ajuste se quiser
+
+concurrency:
+  group: publish-videos
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # =========================
+      # PYTHON
+      # =========================
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache do pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # =========================
+      # DEPENDÊNCIAS DO SISTEMA (VÍDEO)
+      # =========================
+      - name: Instalar dependências do sistema (ffmpeg, imagemagick, fontes)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg imagemagick fonts-dejavu-core
+          echo "ffmpeg:" && ffmpeg -version | head -n 1 || true
+          echo "convert:" && convert -version | head -n 1 || true
+
+      - name: Ajustar policy do ImageMagick (tolerante)
+        run: |
+          set +e
+          POLICY1="/etc/ImageMagick-6/policy.xml"
+          POLICY2="/etc/ImageMagick-7/policy.xml"
+          for P in "$POLICY1" "$POLICY2"; do
+            if [ -f "$P" ]; then
+              echo "Ajustando $P"
+              sudo sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@*"/g' "$P" || true
+              sudo sed -i 's/rights="none" pattern="LABEL"/rights="read|write" pattern="LABEL"/g' "$P" || true
+              sudo sed -i 's/rights="none" pattern="label"/rights="read|write" pattern="label"/g' "$P" || true
+            fi
+          done
+          echo "Policy ajustada (se aplicável)."
+          set -e
+
+      # =========================
+      # DEPENDÊNCIAS PYTHON
+      # =========================
+      - name: Instalar dependências Python
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
+
+      # =========================
+      # SAFE GUARD: só roda se ENABLE_VIDEOS=true
+      # + valida secrets essenciais do vídeo
+      # =========================
+      - name: Checar habilitação e secrets (safe)
+        env:
+          ENABLE_VIDEOS: ${{ vars.ENABLE_VIDEOS }}
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+        run: |
+          python - <<'PY'
+          import os, json, sys
+          if (os.getenv("ENABLE_VIDEOS") or "").strip().lower() != "true":
+              print("SKIP: ENABLE_VIDEOS != true"); sys.exit(0)
+          if not (os.getenv("GOOGLE_SERVICE_JSON") or "").strip():
+              print("ERRO: GOOGLE_SERVICE_JSON ausente"); sys.exit(1)
+          if not (os.getenv("COFRE_SHEET_ID") or "").strip():
+              print("ERRO: COFRE_SHEET_ID ausente"); sys.exit(1)
+          try:
+              json.loads(os.environ["GOOGLE_SERVICE_JSON"])
+          except Exception as e:
+              print("ERRO: GOOGLE_SERVICE_JSON inválido:", e); sys.exit(1)
+          print("OK: habilitado + secrets presentes")
+          PY
+
+      # =========================
+      # RODAR FILA DE VÍDEOS
+      # =========================
+      - name: Executar video_queue.py (fila Enfileirado_Videos)
+        if: ${{ vars.ENABLE_VIDEOS == 'true' }}
+        env:
+          # Google
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+
+          # Cofre
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+
+          # Colunas
+          ENFILEIRADO_VIDEOS_COL: ${{ vars.ENFILEIRADO_VIDEOS_COL || 'Enfileirado_Videos' }}
+          PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL || 'Publicado_Youtube' }}
+
+          # Execução
+          MAX_VIDEOS_RODADA: ${{ vars.MAX_VIDEOS_RODADA || '10' }}
+          PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '2.0' }}
+          DRY_RUN_VIDEOS: ${{ vars.DRY_RUN_VIDEOS || 'false' }}
+
+          TZ: "America/Sao_Paulo"
+        run: |
+          echo "==== Iniciando pipeline de VÍDEOS ===="
+          ls -la
+          test -f video_queue.py || (echo "ERRO: video_queue.py não encontrado" && exit 1)
+          python video_queue.py
+          echo "==== Fim pipeline de VÍDEOS ===="
