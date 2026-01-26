@@ -1,338 +1,281 @@
-# video_queue.py — Portal SimonSports — Fila de Vídeos (YouTube) via Planilha + Cofre
-# Rev: 2026-01-25b (ATUALIZADO)
-# - Corrige batch_update (gspread Worksheet.batch_update) com fallback seguro
-# - Garante colunas Enfileirado_Videos e Publicado_Youtube
-# - Processa:
-#     Enfileirado_Videos != vazio  E  Publicado_Youtube vazio
-# - Monta dados_video a partir da MESMA BASE (Loteria/Concurso/Data/Números/URL)
-# - Chama post_video.publicar_video_em_multicanais(...)
-# - Marca:
-#     Publicado_Youtube = mark_value retornado
-#     Enfileirado_Videos = "OK dd/mm/aaaa hh:mm" ou "ERRO dd/mm/aaaa hh:mm" (mantém histórico)
-#
-# ENV necessários:
-#   GOOGLE_SERVICE_JSON (Secret)
-#   COFRE_SHEET_ID (Secret/Var)  -> Planilha Cofre Credenciais
-#
-# Opcional:
-#   GOOGLE_SHEET_ID (default: 16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI)
-#   SHEET_TAB (default: ImportadosBlogger2)
-#   COFRE_ABA_CRED (default: Credenciais_Rede)
-#   ENFILEIRADO_VIDEOS_COL (default: Enfileirado_Videos)
-#   PUBLICADO_YT_COL (default: Publicado_Youtube)
-#   MAX_VIDEOS_RODADA (default: 10)
-#   PAUSA_ENTRE_VIDEOS (default: 2.0)
-#   DRY_RUN_VIDEOS ('true'/'false')
-
-import os
-import json
-import time
-import datetime as dt
-from typing import Dict, Any, List, Tuple, Optional
-
-import gspread
-from google.oauth2.service_account import Credentials
-
-from post_video import publicar_video_em_multicanais
-
-
-TZ_NAME = "America/Sao_Paulo"
-
-
-def _log(*a):
-    print("[VIDEO_QUEUE]", *a, flush=True)
-
-
-def _now_br() -> dt.datetime:
-    try:
-        import pytz
-        tz = pytz.timezone(TZ_NAME)
-        return dt.datetime.now(tz)
-    except Exception:
-        return dt.datetime.now()
-
-
-def _ts_br() -> str:
-    return _now_br().strftime("%d/%m/%Y %H:%M")
-
-
-def _as_bool(v: str) -> bool:
-    return (v or "").strip().lower() in ("1", "true", "sim", "yes", "y", "on")
-
-
-def _load_service_account() -> Credentials:
-    raw = os.getenv("GOOGLE_SERVICE_JSON", "").strip()
-    if not raw:
-        raise RuntimeError("GOOGLE_SERVICE_JSON ausente.")
-    info = json.loads(raw)
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive.readonly",
-    ]
-    return Credentials.from_service_account_info(info, scopes=scopes)
-
-
-def _open_ws(sheet_id: str, tab_name: str):
-    creds = _load_service_account()
-    gc = gspread.authorize(creds)
-    ss = gc.open_by_key(sheet_id)
-    return ss.worksheet(tab_name)
-
-
-def _norm(s: Any) -> str:
-    return str(s or "").strip()
-
-
-def _upper(s: Any) -> str:
-    return _norm(s).upper()
-
-
-def _ensure_col(headers: List[str], want: str) -> Tuple[List[str], int, bool]:
-    """
-    Garante que existe a coluna `want` nos headers.
-    Retorna (headers, idx0, created)
-    """
-    want_n = want.strip()
-    for i, h in enumerate(headers):
-        if (h or "").strip() == want_n:
-            return headers, i, False
-    headers.append(want_n)
-    return headers, len(headers) - 1, True
-
-
-def _worksheet_set_headers(ws, headers: List[str]):
-    ws.update("A1", [headers], value_input_option="RAW")
-
-
-def _read_all(ws) -> Tuple[List[str], List[List[Any]]]:
-    values = ws.get_all_values()
-    if not values:
-        return [], []
-    headers = values[0]
-    rows = values[1:]
-    return headers, rows
-
-
-def _cofre_load(creds_ws_id: str, aba_cred: str) -> Dict[str, Any]:
-    """
-    Lê aba do Cofre no formato:
-    Rede | Conta | Chave | Valor
-    """
-    ws = _open_ws(creds_ws_id, aba_cred)
-    vals = ws.get_all_values()
-    if not vals or len(vals) < 2:
-        return {"creds_rc": {}}
-
-    headers = [c.strip() for c in vals[0]]
-
-    def col(name: str) -> int:
-        for i, h in enumerate(headers):
-            if h.strip().lower() == name.lower():
-                return i
-        return -1
-
-    i_rede = col("Rede")
-    i_conta = col("Conta")
-    i_chave = col("Chave")
-    i_valor = col("Valor")
-
-    if min(i_rede, i_conta, i_chave, i_valor) < 0:
-        raise RuntimeError(f"Cofre aba '{aba_cred}' precisa ter cabeçalho: Rede, Conta, Chave, Valor")
-
-    creds_rc = {}
-    for r in vals[1:]:
-        rede = _upper(r[i_rede] if i_rede < len(r) else "")
-        conta = _norm(r[i_conta] if i_conta < len(r) else "")
-        chave = _upper(r[i_chave] if i_chave < len(r) else "")
-        valor = _norm(r[i_valor] if i_valor < len(r) else "")
-        if rede and chave and valor:
-            creds_rc[(rede, conta, chave)] = valor
-
-    return {"creds_rc": creds_rc}
-
-
-def _cofre_get(cofre_cache: Dict[str, Any], rede: str, chave: str, conta: Optional[str] = None, default: str = "") -> str:
-    creds_rc = cofre_cache.get("creds_rc", {}) or {}
-    r = _upper(rede)
-    k = _upper(chave)
-    c = _norm(conta or "")
-    v = _norm(creds_rc.get((r, c, k), ""))
-    if v:
-        return v
-    v2 = _norm(creds_rc.get((r, "", k), ""))
-    if v2:
-        return v2
-    return default
-
-
-def _is_pending(enf_val: str, pub_val: str) -> bool:
-    """
-    Pendência: enfileirado tem algo, publicado está vazio.
-    E evita reprocessar se Enfileirado já marcado como OK/ERRO/FALHA.
-    """
-    enf = _norm(enf_val)
-    pub = _norm(pub_val)
-    if not enf or pub:
-        return False
-    low = enf.lower()
-    if low.startswith("ok ") or low.startswith("erro ") or low.startswith("falha "):
-        return False
-    return True
-
-
-def _batch_apply(ws, updates: List[Tuple[str, Any]]):
-    """
-    updates: [(A1, valor), ...]
-    Usa Worksheet.batch_update (gspread) no formato correto.
-    Fallback para ws.update se necessário.
-    """
-    if not updates:
-        return
-
-    data = [{"range": a1, "values": [[val]]} for (a1, val) in updates]
-    try:
-        # gspread Worksheet.batch_update(data, **kwargs)
-        ws.batch_update(data, value_input_option="USER_ENTERED")
-        return
-    except Exception as e:
-        _log("batch_update falhou, aplicando fallback update 1 a 1:", e)
-
-    # fallback seguro (mais lento, mas garante)
-    for a1, val in updates:
-        try:
-            ws.update(a1, [[val]], value_input_option="USER_ENTERED")
-        except Exception as ee:
-            _log("Falha no update fallback:", a1, "->", ee)
-
-
-def main():
-    sheet_id = os.getenv("GOOGLE_SHEET_ID", "").strip() or "16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI"
-    tab = os.getenv("SHEET_TAB", "").strip() or "ImportadosBlogger2"
-
-    cofre_id = (os.getenv("COFRE_SHEET_ID", "") or "").strip()
-    cofre_aba = (os.getenv("COFRE_ABA_CRED", "") or "").strip() or "Credenciais_Rede"
-    if not cofre_id:
-        raise RuntimeError("COFRE_SHEET_ID ausente (necessário para YOUTUBE Cofre Only).")
-
-    enf_col_name = (os.getenv("ENFILEIRADO_VIDEOS_COL", "") or "").strip() or "Enfileirado_Videos"
-    pub_col_name = (os.getenv("PUBLICADO_YT_COL", "") or "").strip() or "Publicado_Youtube"
-
-    max_videos = int((os.getenv("MAX_VIDEOS_RODADA", "") or "10").strip())
-    pausa = float((os.getenv("PAUSA_ENTRE_VIDEOS", "") or "2.0").strip())
-    dry_run = _as_bool(os.getenv("DRY_RUN_VIDEOS", "") or "false")
-
-    _log("Planilha:", sheet_id, "Aba:", tab)
-    _log("Colunas:", enf_col_name, "/", pub_col_name, "MAX:", max_videos, "DRY_RUN:", dry_run)
-
-    # Carrega Cofre
-    cofre_cache = _cofre_load(cofre_id, cofre_aba)
-
-    # Abre planilha principal
-    ws = _open_ws(sheet_id, tab)
-    headers, rows = _read_all(ws)
-    if not headers:
-        _log("Aba vazia. Nada a fazer.")
-        return
-
-    # Garante colunas necessárias
-    headers2 = [h for h in headers]
-    headers2, _, created_enf = _ensure_col(headers2, enf_col_name)
-    headers2, _, created_pub = _ensure_col(headers2, pub_col_name)
-
-    if created_enf or created_pub:
-        _log("Criando colunas faltantes:", ("ENF" if created_enf else ""), ("PUB" if created_pub else ""))
-        _worksheet_set_headers(ws, headers2)
-        headers, rows = _read_all(ws)
-
-    # Busca colunas base por nome (com fallback A-E)
-    def find_col(possible: List[str], fallback_idx: int) -> int:
-        lower = [(_norm(h).lower()) for h in headers]
-        for name in possible:
-            n = name.lower()
-            if n in lower:
-                return lower.index(n)
-        return fallback_idx
-
-    idx_loteria = find_col(["Loteria"], 0)
-    idx_concurso = find_col(["Concurso"], 1)
-    idx_data = find_col(["Data"], 2)
-    idx_numeros = find_col(["Números", "Numeros"], 3)
-    idx_url = find_col(["URL", "Url"], 4)
-
-    # Índices exatos de ENF/PUB
-    idx_enf = headers.index(enf_col_name)
-    idx_pub = headers.index(pub_col_name)
-
-    pendentes: List[Tuple[int, List[Any]]] = []
-    for i, row in enumerate(rows, start=2):  # linha real na planilha (1 = header)
-        enf = row[idx_enf] if idx_enf < len(row) else ""
-        pub = row[idx_pub] if idx_pub < len(row) else ""
-        if _is_pending(enf, pub):
-            pendentes.append((i, row))
-
-    if not pendentes:
-        _log("Sem vídeos pendentes (Enfileirado preenchido e Publicado vazio).")
-        return
-
-    _log("Pendentes encontrados:", len(pendentes))
-    pendentes = pendentes[:max_videos]
-
-    updates: List[Tuple[str, Any]] = []
-    ok_any_count = 0
-
-    for (rownum, row) in pendentes:
-        loteria = _norm(row[idx_loteria] if idx_loteria < len(row) else "")
-        concurso = _norm(row[idx_concurso] if idx_concurso < len(row) else "")
-        data_s = _norm(row[idx_data] if idx_data < len(row) else "")
-        numeros = _norm(row[idx_numeros] if idx_numeros < len(row) else "")
-        url = _norm(row[idx_url] if idx_url < len(row) else "")
-
-        dados_video = {
-            "loteria": loteria,
-            "concurso": concurso,
-            "data": data_s,
-            "numeros": numeros,
-            "url": url,
-            "premio": "",  # não existe na base — mantém vazio
-        }
-
-        _log(f"Processando linha {rownum}: {loteria} {concurso} ({data_s})")
-
-        pub_a1 = gspread.utils.rowcol_to_a1(rownum, idx_pub + 1)
-        enf_a1 = gspread.utils.rowcol_to_a1(rownum, idx_enf + 1)
-
-        try:
-            res = publicar_video_em_multicanais(
-                dados_video=dados_video,
-                cofre_get_fn=lambda rede, chave, conta=None, default="": _cofre_get(cofre_cache, rede, chave, conta=conta, default=default),
-                cofre_cache=cofre_cache,
-                dry_run=dry_run,
-                sleep_between_channels=1.0,
-                tz_name=TZ_NAME,
-            )
-
-            mark_value = _norm(res.get("mark_value", "")) or f"Processado em {_ts_br()}"
-            ok_any = bool(res.get("ok_any"))
-
-            updates.append((pub_a1, mark_value))
-            if ok_any:
-                ok_any_count += 1
-                updates.append((enf_a1, f"OK {_ts_br()}"))
-            else:
-                updates.append((enf_a1, f"ERRO {_ts_br()}"))
-
-        except Exception as e:
-            _log("ERRO na linha", rownum, "->", e)
-            updates.append((pub_a1, f"Falha YOUTUBE em {_ts_br()} | {e}"))
-            updates.append((enf_a1, f"ERRO {_ts_br()}"))
-
-        time.sleep(pausa)
-
-    _log("Aplicando updates na planilha:", len(updates))
-    _batch_apply(ws, updates)
-
-    _log(f"Concluído. Linhas com OK em pelo menos 1 canal: {ok_any_count}/{len(pendentes)}")
-
-
-if __name__ == "__main__":
-    main()
+name: Publicação Automática de Loterias
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"  # a cada 10 min (UTC)
+
+concurrency:
+  group: publish-loterias
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      # =========================
+      # DIAGNÓSTICOS INICIAIS
+      # =========================
+      - name: Mostrar matriz de arquivos e vars
+        run: |
+          echo "Branch: $GITHUB_REF_NAME"
+          echo "Arquivos no repo:" && ls -la
+          echo "Subpastas:" && find . -maxdepth 2 -type d -print | sort
+          echo "Arquivos de vídeo no repo (se existirem):"
+          ls -la video_queue.py post_video.py gerador_video.py youtube_auth.py youtube_upload.py 2>/dev/null || true
+          echo "Existe data/to_publish.json?"
+          test -f data/to_publish.json && cat data/to_publish.json || echo "NÃO ENCONTRADO"
+
+      # =========================
+      # GARANTIR output/ no repo
+      # =========================
+      - name: Garantir pasta output/ + .gitkeep
+        run: |
+          mkdir -p output
+          [ -f output/.gitkeep ] || echo "" > output/.gitkeep
+          echo "Pasta output preparada."
+
+      # =========================
+      # RENDER (Node + Puppeteer)
+      # =========================
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar deps do render
+        run: |
+          if [ -f package.json ]; then
+            npm i --silent
+          else
+            npm init -y >/dev/null 2>&1
+            npm i puppeteer@22.13.1 --silent
+          fi
+
+      - name: Validar template e assets
+        run: |
+          test -f templates/post-instagram.html || (echo "templates/post-instagram.html não existe" && exit 1)
+          test -d assets/fundos || (echo "assets/fundos ausente. Criando..." && mkdir -p assets/fundos)
+          test -d assets/logos  || (echo "assets/logos ausente. Criando..." && mkdir -p assets/logos)
+
+      - name: Instalar jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Conferir se há itens na fila
+        id: fila
+        run: |
+          if [ -f data/to_publish.json ]; then
+            N=$(jq 'length' data/to_publish.json || echo 0)
+          else
+            N=0
+          fi
+          echo "itens=$N" >> $GITHUB_OUTPUT
+          echo "Itens na fila: $N"
+
+      - name: Renderizar imagens (se houver itens)
+        if: steps.fila.outputs.itens != '0'
+        run: |
+          node render.js
+          echo "Arquivos gerados em /output:"
+          ls -la output || true
+
+      # =========================
+      # PYTHON (para cleanup + bot + vídeos)
+      # =========================
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache do pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
+
+      # =========================
+      # DEPENDÊNCIAS DE VÍDEO
+      # =========================
+      - name: Instalar dependências do sistema para VÍDEO (ffmpeg, imagemagick, fontes)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg imagemagick fonts-dejavu-core
+          echo "ffmpeg:" && ffmpeg -version | head -n 1 || true
+          echo "convert:" && convert -version | head -n 1 || true
+
+      # =========================
+      # PATCH ImageMagick policy (para TextClip, se necessário)
+      # =========================
+      - name: Ajustar policy do ImageMagick (tolerante)
+        run: |
+          set +e
+          POLICY1="/etc/ImageMagick-6/policy.xml"
+          POLICY2="/etc/ImageMagick-7/policy.xml"
+          for P in "$POLICY1" "$POLICY2"; do
+            if [ -f "$P" ]; then
+              echo "Ajustando $P"
+              sudo sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@*"/g' "$P" || true
+              sudo sed -i 's/rights="none" pattern="LABEL"/rights="read|write" pattern="LABEL"/g' "$P" || true
+              sudo sed -i 's/rights="none" pattern="label"/rights="read|write" pattern="label"/g' "$P" || true
+            fi
+          done
+          echo "Policy ajustada (se aplicável)."
+          set -e
+
+      # =========================
+      # CLEANUP OUTPUT
+      # =========================
+      - name: Limpar/normalizar imagens em output (remover duplicados, ajustar nomes)
+        if: steps.fila.outputs.itens != '0'
+        run: |
+          python cleanup_output.py
+          echo "Após cleanup, conteúdo de /output:"
+          ls -la output || true
+
+      # =========================
+      # COMMIT DAS IMAGENS
+      # =========================
+      - name: Commitar /output (se gerado)
+        if: steps.fila.outputs.itens != '0'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          git add -A output || true
+          git commit -m "chore: adiciona imagens geradas (${GITHUB_RUN_NUMBER})" || echo "Nada para commitar"
+
+          git fetch origin $GITHUB_REF_NAME
+          git pull --rebase --autostash origin $GITHUB_REF_NAME
+          git push origin HEAD:$GITHUB_REF_NAME
+
+      # =========================
+      # VÍDEOS (OPCIONAL) — Enfileirado_Videos -> Publicado_Youtube
+      # Habilite com Variable/Secret:
+      #   ENABLE_VIDEOS = true
+      # =========================
+      - name: Gerar/Enviar VÍDEOS (fila Enfileirado_Videos)
+        if: ${{ vars.ENABLE_VIDEOS == 'true' || secrets.ENABLE_VIDEOS == 'true' }}
+        env:
+          # Google
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+
+          # Cofre (obrigatório para YOUTUBE Cofre Only)
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ secrets.COFRE_ABA_CRED || vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+
+          # Colunas
+          ENFILEIRADO_VIDEOS_COL: ${{ vars.ENFILEIRADO_VIDEOS_COL || 'Enfileirado_Videos' }}
+          PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL || 'Publicado_Youtube' }}
+
+          # Execução
+          MAX_VIDEOS_RODADA: ${{ vars.MAX_VIDEOS_RODADA || '10' }}
+          PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '2.0' }}
+          DRY_RUN_VIDEOS: ${{ vars.DRY_RUN_VIDEOS || 'false' }}
+
+          TZ: "America/Sao_Paulo"
+        run: |
+          echo "==== Iniciando pipeline de VÍDEOS ===="
+          echo "ENABLE_VIDEOS ativo."
+          if [ ! -f video_queue.py ]; then
+            echo "ERRO: video_queue.py NÃO encontrado no repo. Verifique o nome do arquivo (sem acentos)."
+            exit 1
+          fi
+          python video_queue.py
+          echo "==== Fim pipeline de VÍDEOS ===="
+
+      # =========================
+      # PUBLICAÇÃO (Python bot.py)
+      # =========================
+      - name: Verificar secrets mínimos (Google + X conta 1)
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
+          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
+          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
+        run: |
+          python - <<'PY'
+          import os, sys, json
+          need = ["GOOGLE_SERVICE_JSON","TWITTER_API_KEY_1","TWITTER_API_SECRET_1","TWITTER_ACCESS_TOKEN_1","TWITTER_ACCESS_SECRET_1"]
+          miss = [k for k in need if not os.getenv(k)]
+          if miss:
+            print("FALTAM SECRETS:", miss); sys.exit(1)
+          try: json.loads(os.environ["GOOGLE_SERVICE_JSON"])
+          except Exception as e: print("GOOGLE_SERVICE_JSON inválido:", e); sys.exit(1)
+          print("Secrets mínimos OK")
+          PY
+
+      - name: Executar bot.py (X/Telegram/Discord/FB/Pinterest conforme vars)
+        env:
+          # Google
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+
+          # Cofre (via secrets/vars)
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ secrets.COFRE_ABA_CRED || vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          COFRE_ABA_CANAIS: ${{ secrets.COFRE_ABA_CANAIS || vars.COFRE_ABA_CANAIS || 'Redes_Sociais_Canais' }}
+
+          # X (obrigatória conta 1)
+          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
+          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
+          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
+          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
+
+          # X conta 2 (opcional)
+          TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
+          TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
+          TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
+          TWITTER_ACCESS_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
+
+          # Outras redes (opcionais)
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_IDS: ${{ secrets.TG_CHAT_IDS }}
+          DISCORD_WEBHOOKS: ${{ secrets.DISCORD_WEBHOOKS }}
+          FB_PAGE_IDS: ${{ secrets.FB_PAGE_IDS }}
+          FB_PAGE_TOKENS: ${{ secrets.FB_PAGE_TOKENS }}
+          PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
+          PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
+
+          # Comportamento
+          TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS }}
+          BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS || '7' }}
+          MAX_PUBLICACOES_RODADA: ${{ vars.MAX_PUBLICACOES_RODADA || '30' }}
+          PAUSA_ENTRE_POSTS: ${{ vars.PAUSA_ENTRE_POSTS || '2.5' }}
+          POST_X_WITH_IMAGE: ${{ vars.POST_X_WITH_IMAGE || 'true' }}
+          X_POST_IN_ALL_ACCOUNTS: ${{ vars.X_POST_IN_ALL_ACCOUNTS || 'true' }}
+          POST_TG_WITH_IMAGE: ${{ vars.POST_TG_WITH_IMAGE || 'true' }}
+          POST_PINTEREST_WITH_IMAGE: ${{ vars.POST_PINTEREST_WITH_IMAGE || 'true' }}
+          POST_FB_WITH_IMAGE: ${{ vars.POST_FB_WITH_IMAGE || 'true' }}
+
+          # 401 no X: desliga checagem de duplicados
+          X_SKIP_DUP_CHECK: ${{ vars.X_SKIP_DUP_CHECK || 'true' }}
+
+          ENABLE_KEEPALIVE: "false"
+        run: |
+          echo "==== Iniciando bot.py ===="
+          python bot.py
+          echo "==== Fim do bot.py ===="
