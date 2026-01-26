@@ -6,8 +6,8 @@ on:
     - cron: "*/10 * * * *"  # a cada 10 min (UTC)
 
 concurrency:
-  group: publish-loterias
-  cancel-in-progress: true
+  group: publish-loterias-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -25,12 +25,11 @@ jobs:
           persist-credentials: true
 
       # =========================
-      # DEFAULTS (evita quebrar YAML com "||" dentro do env)
+      # DEFAULTS (safe)
       # =========================
       - name: Definir defaults do job (safe)
         shell: bash
         env:
-          # Vars (repo variables)
           VAR_GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID }}
           VAR_SHEET_TAB: ${{ vars.SHEET_TAB }}
           VAR_COFRE_SHEET_ID: ${{ vars.COFRE_SHEET_ID }}
@@ -54,13 +53,11 @@ jobs:
           VAR_POST_FB_WITH_IMAGE: ${{ vars.POST_FB_WITH_IMAGE }}
           VAR_X_SKIP_DUP_CHECK: ${{ vars.X_SKIP_DUP_CHECK }}
 
-          # Secrets (prioridade alta para IDs sensíveis)
           SEC_COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID }}
           SEC_ENABLE_VIDEOS: ${{ secrets.ENABLE_VIDEOS }}
         run: |
           set -e
 
-          # Defaults base
           GOOGLE_SHEET_ID_DEFAULT="16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI"
           SHEET_TAB_DEFAULT="ImportadosBlogger2"
           COFRE_ABA_CRED_DEFAULT="Credenciais_Rede"
@@ -82,18 +79,11 @@ jobs:
           POST_FB_WITH_IMAGE_DEFAULT="true"
           X_SKIP_DUP_CHECK_DEFAULT="true"
 
-          # Helper: escolhe o primeiro não-vazio
-          pick() {
-            for v in "$@"; do
-              if [ -n "$v" ]; then echo "$v"; return 0; fi
-            done
-            echo ""
-          }
+          pick() { for v in "$@"; do [ -n "$v" ] && echo "$v" && return 0; done; echo ""; }
 
           GOOGLE_SHEET_ID="$(pick "$VAR_GOOGLE_SHEET_ID" "$GOOGLE_SHEET_ID_DEFAULT")"
           SHEET_TAB="$(pick "$VAR_SHEET_TAB" "$SHEET_TAB_DEFAULT")"
 
-          # COFRE_SHEET_ID: SECRET > VAR (se vazio, mantém vazio mesmo)
           COFRE_SHEET_ID="$(pick "$SEC_COFRE_SHEET_ID" "$VAR_COFRE_SHEET_ID")"
           COFRE_ABA_CRED="$(pick "$VAR_COFRE_ABA_CRED" "$COFRE_ABA_CRED_DEFAULT")"
           COFRE_ABA_CANAIS="$(pick "$VAR_COFRE_ABA_CANAIS" "$COFRE_ABA_CANAIS_DEFAULT")"
@@ -115,7 +105,6 @@ jobs:
           POST_FB_WITH_IMAGE="$(pick "$VAR_POST_FB_WITH_IMAGE" "$POST_FB_WITH_IMAGE_DEFAULT")"
           X_SKIP_DUP_CHECK="$(pick "$VAR_X_SKIP_DUP_CHECK" "$X_SKIP_DUP_CHECK_DEFAULT")"
 
-          # ENABLE_VIDEOS: usa VAR (principal) e aceita SECRET também (se você quiser)
           ENABLE_VIDEOS="$(pick "${{ vars.ENABLE_VIDEOS }}" "$SEC_ENABLE_VIDEOS")"
 
           {
@@ -147,12 +136,6 @@ jobs:
             echo "ENABLE_KEEPALIVE=false"
           } >> "$GITHUB_ENV"
 
-          echo "Defaults aplicados:"
-          echo " - GOOGLE_SHEET_ID=$GOOGLE_SHEET_ID"
-          echo " - SHEET_TAB=$SHEET_TAB"
-          echo " - COFRE_SHEET_ID=${COFRE_SHEET_ID:+(definido)}"
-          echo " - ENABLE_VIDEOS=$ENABLE_VIDEOS"
-
       # =========================
       # DIAGNÓSTICOS INICIAIS
       # =========================
@@ -181,13 +164,25 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Cache do NPM
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json', 'package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
       - name: Instalar deps do render
         run: |
           if [ -f package.json ]; then
-            npm i --silent
+            if [ -f package-lock.json ]; then
+              npm ci --silent --no-audit --no-fund
+            else
+              npm i --silent --no-audit --no-fund
+            fi
           else
             npm init -y >/dev/null 2>&1
-            npm i puppeteer@22.13.1 --silent
+            npm i puppeteer@22.13.1 --silent --no-audit --no-fund
           fi
 
       - name: Validar template e assets
@@ -240,9 +235,6 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      # =========================
-      # DEPENDÊNCIAS DE VÍDEO (NOVO)
-      # =========================
       - name: Instalar dependências do sistema para VÍDEO (ffmpeg, imagemagick, fontes)
         run: |
           sudo apt-get update
@@ -250,10 +242,6 @@ jobs:
           echo "ffmpeg:" && ffmpeg -version | head -n 1 || true
           echo "convert:" && convert -version | head -n 1 || true
 
-      # =========================
-      # PATCH ImageMagick policy (para TextClip, se necessário)
-      # - Evita erro "not authorized" ao renderizar texto
-      # =========================
       - name: Ajustar policy do ImageMagick (tolerante)
         run: |
           set +e
@@ -270,9 +258,6 @@ jobs:
           echo "Policy ajustada (se aplicável)."
           set -e
 
-      # =========================
-      # CLEANUP OUTPUT
-      # =========================
       - name: Limpar/normalizar imagens em output (remover duplicados, ajustar nomes)
         if: steps.fila.outputs.itens != '0'
         run: |
@@ -280,9 +265,6 @@ jobs:
           echo "Após cleanup, conteúdo de /output:"
           ls -la output || true
 
-      # =========================
-      # COMMIT DAS IMAGENS
-      # =========================
       - name: Commitar /output (se gerado)
         if: steps.fila.outputs.itens != '0'
         run: |
@@ -296,28 +278,19 @@ jobs:
           git pull --rebase --autostash origin $GITHUB_REF_NAME
           git push origin HEAD:$GITHUB_REF_NAME
 
-      # =========================
-      # VÍDEOS (OPCIONAL) — usa Enfileirado_Videos -> grava em Publicado_Youtube
-      # Habilite com Variable:
-      #   ENABLE_VIDEOS = true
-      # =========================
       - name: Gerar/Enviar VÍDEOS (opcional — fila Enfileirado_Videos)
         if: ${{ env.ENABLE_VIDEOS == 'true' }}
         env:
-          # Google
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ env.GOOGLE_SHEET_ID }}
           SHEET_TAB: ${{ env.SHEET_TAB }}
 
-          # Cofre
           COFRE_SHEET_ID: ${{ env.COFRE_SHEET_ID }}
           COFRE_ABA_CRED: ${{ env.COFRE_ABA_CRED }}
 
-          # Colunas
           ENFILEIRADO_VIDEOS_COL: ${{ env.ENFILEIRADO_VIDEOS_COL }}
           PUBLICADO_YT_COL: ${{ env.PUBLICADO_YT_COL }}
 
-          # Execução
           MAX_VIDEOS_RODADA: ${{ env.MAX_VIDEOS_RODADA }}
           PAUSA_ENTRE_VIDEOS: ${{ env.PAUSA_ENTRE_VIDEOS }}
           DRY_RUN_VIDEOS: ${{ env.DRY_RUN_VIDEOS }}
@@ -333,7 +306,6 @@ jobs:
             python video_queue.py
           elif [ -f post_video.py ]; then
             echo "ATENÇÃO: sem video_queue.py. Rodar post_video.py sozinho não marca planilha."
-            echo "Crie video_queue.py (recomendado). Encerrando sem erro."
             exit 0
           else
             echo "Nenhum runner encontrado (video_queue.py/post_video.py). Nada a fazer."
@@ -341,9 +313,6 @@ jobs:
           fi
           echo "==== Fim pipeline de VÍDEOS ===="
 
-      # =========================
-      # PUBLICAÇÃO (Python bot.py)
-      # =========================
       - name: Verificar secrets mínimos (Google + X conta 1)
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
@@ -365,29 +334,24 @@ jobs:
 
       - name: Executar bot.py (X/Telegram/Discord/FB/Pinterest conforme vars)
         env:
-          # Google
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ env.GOOGLE_SHEET_ID }}
           SHEET_TAB: ${{ env.SHEET_TAB }}
 
-          # Cofre (via secrets/vars)
           COFRE_SHEET_ID: ${{ env.COFRE_SHEET_ID }}
           COFRE_ABA_CRED: ${{ env.COFRE_ABA_CRED }}
           COFRE_ABA_CANAIS: ${{ env.COFRE_ABA_CANAIS }}
 
-          # X (obrigatória conta 1)
           TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
           TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
           TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
           TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
 
-          # X conta 2 (opcional)
           TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
           TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
           TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
           TWITTER_ACCESS_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
 
-          # Outras redes (opcionais)
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_IDS: ${{ secrets.TG_CHAT_IDS }}
           DISCORD_WEBHOOKS: ${{ secrets.DISCORD_WEBHOOKS }}
@@ -396,7 +360,6 @@ jobs:
           PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
           PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
 
-          # Comportamento
           TARGET_NETWORKS: ${{ env.TARGET_NETWORKS }}
           BACKLOG_DAYS: ${{ env.BACKLOG_DAYS }}
           MAX_PUBLICACOES_RODADA: ${{ env.MAX_PUBLICACOES_RODADA }}
@@ -406,8 +369,6 @@ jobs:
           POST_TG_WITH_IMAGE: ${{ env.POST_TG_WITH_IMAGE }}
           POST_PINTEREST_WITH_IMAGE: ${{ env.POST_PINTEREST_WITH_IMAGE }}
           POST_FB_WITH_IMAGE: ${{ env.POST_FB_WITH_IMAGE }}
-
-          # 401 no X: desliga checagem de duplicados
           X_SKIP_DUP_CHECK: ${{ env.X_SKIP_DUP_CHECK }}
 
           ENABLE_KEEPALIVE: "false"
