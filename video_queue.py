@@ -1,26 +1,27 @@
 # video_queue.py — Portal SimonSports — Fila de Vídeos (YouTube) via Planilha + Cofre
-# Rev: 2026-01-25a
-# - Lê Google Sheets (Service Account via GOOGLE_SERVICE_JSON)
-# - Processa linhas onde:
+# Rev: 2026-01-25b (ATUALIZADO)
+# - Corrige batch_update (gspread Worksheet.batch_update) com fallback seguro
+# - Garante colunas Enfileirado_Videos e Publicado_Youtube
+# - Processa:
 #     Enfileirado_Videos != vazio  E  Publicado_Youtube vazio
 # - Monta dados_video a partir da MESMA BASE (Loteria/Concurso/Data/Números/URL)
 # - Chama post_video.publicar_video_em_multicanais(...)
 # - Marca:
 #     Publicado_Youtube = mark_value retornado
-#     Enfileirado_Videos = "OK ..." ou "ERRO ..." (mantém histórico)
+#     Enfileirado_Videos = "OK dd/mm/aaaa hh:mm" ou "ERRO dd/mm/aaaa hh:mm" (mantém histórico)
 #
 # ENV necessários:
 #   GOOGLE_SERVICE_JSON (Secret)
-#   GOOGLE_SHEET_ID (opcional, default no YAML)
-#   SHEET_TAB (opcional, default no YAML)
 #   COFRE_SHEET_ID (Secret/Var)  -> Planilha Cofre Credenciais
-#   COFRE_ABA_CRED (opcional, default 'Credenciais_Rede')
 #
 # Opcional:
-#   ENFILEIRADO_VIDEOS_COL (default 'Enfileirado_Videos')
-#   PUBLICADO_YT_COL (default 'Publicado_Youtube')
-#   MAX_VIDEOS_RODADA (default 10)
-#   PAUSA_ENTRE_VIDEOS (default 2.0)
+#   GOOGLE_SHEET_ID (default: 16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI)
+#   SHEET_TAB (default: ImportadosBlogger2)
+#   COFRE_ABA_CRED (default: Credenciais_Rede)
+#   ENFILEIRADO_VIDEOS_COL (default: Enfileirado_Videos)
+#   PUBLICADO_YT_COL (default: Publicado_Youtube)
+#   MAX_VIDEOS_RODADA (default: 10)
+#   PAUSA_ENTRE_VIDEOS (default: 2.0)
 #   DRY_RUN_VIDEOS ('true'/'false')
 
 import os
@@ -100,7 +101,7 @@ def _ensure_col(headers: List[str], want: str) -> Tuple[List[str], int, bool]:
 
 
 def _worksheet_set_headers(ws, headers: List[str]):
-    ws.update("A1", [headers])
+    ws.update("A1", [headers], value_input_option="RAW")
 
 
 def _read_all(ws) -> Tuple[List[str], List[List[Any]]]:
@@ -123,7 +124,7 @@ def _cofre_load(creds_ws_id: str, aba_cred: str) -> Dict[str, Any]:
         return {"creds_rc": {}}
 
     headers = [c.strip() for c in vals[0]]
-    # tenta mapear colunas por nome (tolerante)
+
     def col(name: str) -> int:
         for i, h in enumerate(headers):
             if h.strip().lower() == name.lower():
@@ -158,7 +159,6 @@ def _cofre_get(cofre_cache: Dict[str, Any], rede: str, chave: str, conta: Option
     v = _norm(creds_rc.get((r, c, k), ""))
     if v:
         return v
-    # fallback: conta vazia
     v2 = _norm(creds_rc.get((r, "", k), ""))
     if v2:
         return v2
@@ -168,7 +168,7 @@ def _cofre_get(cofre_cache: Dict[str, Any], rede: str, chave: str, conta: Option
 def _is_pending(enf_val: str, pub_val: str) -> bool:
     """
     Pendência: enfileirado tem algo, publicado está vazio.
-    E evita reprocessar se Enfileirado já marcado como OK/ERRO.
+    E evita reprocessar se Enfileirado já marcado como OK/ERRO/FALHA.
     """
     enf = _norm(enf_val)
     pub = _norm(pub_val)
@@ -178,6 +178,31 @@ def _is_pending(enf_val: str, pub_val: str) -> bool:
     if low.startswith("ok ") or low.startswith("erro ") or low.startswith("falha "):
         return False
     return True
+
+
+def _batch_apply(ws, updates: List[Tuple[str, Any]]):
+    """
+    updates: [(A1, valor), ...]
+    Usa Worksheet.batch_update (gspread) no formato correto.
+    Fallback para ws.update se necessário.
+    """
+    if not updates:
+        return
+
+    data = [{"range": a1, "values": [[val]]} for (a1, val) in updates]
+    try:
+        # gspread Worksheet.batch_update(data, **kwargs)
+        ws.batch_update(data, value_input_option="USER_ENTERED")
+        return
+    except Exception as e:
+        _log("batch_update falhou, aplicando fallback update 1 a 1:", e)
+
+    # fallback seguro (mais lento, mas garante)
+    for a1, val in updates:
+        try:
+            ws.update(a1, [[val]], value_input_option="USER_ENTERED")
+        except Exception as ee:
+            _log("Falha no update fallback:", a1, "->", ee)
 
 
 def main():
@@ -211,19 +236,15 @@ def main():
 
     # Garante colunas necessárias
     headers2 = [h for h in headers]
-    headers2, idx_enf, created_enf = _ensure_col(headers2, enf_col_name)
-    headers2, idx_pub, created_pub = _ensure_col(headers2, pub_col_name)
+    headers2, _, created_enf = _ensure_col(headers2, enf_col_name)
+    headers2, _, created_pub = _ensure_col(headers2, pub_col_name)
 
     if created_enf or created_pub:
         _log("Criando colunas faltantes:", ("ENF" if created_enf else ""), ("PUB" if created_pub else ""))
         _worksheet_set_headers(ws, headers2)
-        headers = headers2  # atualiza local
-        # recarrega após criar colunas (para manter alinhamento)
         headers, rows = _read_all(ws)
 
-    # Mapeia colunas base (mesma fonte das imagens)
-    # Esperado: A=Loteria B=Concurso C=Data D=Números E=URL
-    # Mas vamos buscar por nome também, para tolerar rearranjos.
+    # Busca colunas base por nome (com fallback A-E)
     def find_col(possible: List[str], fallback_idx: int) -> int:
         lower = [(_norm(h).lower()) for h in headers]
         for name in possible:
@@ -238,7 +259,7 @@ def main():
     idx_numeros = find_col(["Números", "Numeros"], 3)
     idx_url = find_col(["URL", "Url"], 4)
 
-    # Reprocessa índices de enf/pub após possíveis updates
+    # Índices exatos de ENF/PUB
     idx_enf = headers.index(enf_col_name)
     idx_pub = headers.index(pub_col_name)
 
@@ -256,8 +277,8 @@ def main():
     _log("Pendentes encontrados:", len(pendentes))
     pendentes = pendentes[:max_videos]
 
-    updates: List[Tuple[str, Any]] = []  # (A1, value)
-    ok_count = 0
+    updates: List[Tuple[str, Any]] = []
+    ok_any_count = 0
 
     for (rownum, row) in pendentes:
         loteria = _norm(row[idx_loteria] if idx_loteria < len(row) else "")
@@ -272,12 +293,13 @@ def main():
             "data": data_s,
             "numeros": numeros,
             "url": url,
-            # premio não existe na sua base — mantém vazio/placeholder para o gerador
-            "premio": "",
-            # título/descrição opcionais (o post_video tem defaults)
+            "premio": "",  # não existe na base — mantém vazio
         }
 
         _log(f"Processando linha {rownum}: {loteria} {concurso} ({data_s})")
+
+        pub_a1 = gspread.utils.rowcol_to_a1(rownum, idx_pub + 1)
+        enf_a1 = gspread.utils.rowcol_to_a1(rownum, idx_enf + 1)
 
         try:
             res = publicar_video_em_multicanais(
@@ -292,34 +314,24 @@ def main():
             mark_value = _norm(res.get("mark_value", "")) or f"Processado em {_ts_br()}"
             ok_any = bool(res.get("ok_any"))
 
-            # Publicado_Youtube recebe o resumo (mesmo se parcial)
-            pub_cell = gspread.utils.rowcol_to_a1(rownum, idx_pub + 1)
-            updates.append((pub_cell, mark_value))
-
-            # Enfileirado_Videos vira OK/ERRO com timestamp
-            enf_cell = gspread.utils.rowcol_to_a1(rownum, idx_enf + 1)
+            updates.append((pub_a1, mark_value))
             if ok_any:
-                ok_count += 1
-                updates.append((enf_cell, f"OK {_ts_br()}"))
+                ok_any_count += 1
+                updates.append((enf_a1, f"OK {_ts_br()}"))
             else:
-                updates.append((enf_cell, f"ERRO {_ts_br()}"))
+                updates.append((enf_a1, f"ERRO {_ts_br()}"))
 
         except Exception as e:
             _log("ERRO na linha", rownum, "->", e)
-            pub_cell = gspread.utils.rowcol_to_a1(rownum, idx_pub + 1)
-            enf_cell = gspread.utils.rowcol_to_a1(rownum, idx_enf + 1)
-            updates.append((pub_cell, f"Falha YOUTUBE em {_ts_br()} | {e}"))
-            updates.append((enf_cell, f"ERRO {_ts_br()}"))
+            updates.append((pub_a1, f"Falha YOUTUBE em {_ts_br()} | {e}"))
+            updates.append((enf_a1, f"ERRO {_ts_br()}"))
 
         time.sleep(pausa)
 
-    if updates:
-        _log("Aplicando updates na planilha:", len(updates))
-        # batch_update no formato A1 -> valor
-        body = [{"range": a1, "values": [[val]]} for (a1, val) in updates]
-        ws.batch_update(body)
+    _log("Aplicando updates na planilha:", len(updates))
+    _batch_apply(ws, updates)
 
-    _log(f"Concluído. OK em pelo menos 1 canal: {ok_count}/{len(pendentes)}")
+    _log(f"Concluído. Linhas com OK em pelo menos 1 canal: {ok_any_count}/{len(pendentes)}")
 
 
 if __name__ == "__main__":
