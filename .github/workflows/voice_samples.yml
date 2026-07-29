@@ -1,0 +1,79 @@
+name: Gerar amostras de voz
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/voice_samples.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar gerador de voz
+        run: |
+          python -m pip install --upgrade pip
+          pip install edge-tts
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Gerar seis amostras comparáveis
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p voice_samples
+          TEXT='SimonSports, simplesmente o melhor. Confira agora o resultado oficial da Dupla Sena, concurso dois mil novecentos e dezessete.'
+
+          edge-tts --voice pt-BR-AntonioNeural --rate=-4% --pitch=-2Hz --text "$TEXT" --write-media voice_samples/01_antonio_masculina_institucional.mp3
+          edge-tts --voice pt-BR-DonatoNeural --rate=-2% --pitch=-1Hz --text "$TEXT" --write-media voice_samples/02_donato_masculina_firme.mp3
+          edge-tts --voice pt-BR-FabioNeural --rate=-3% --pitch=-2Hz --text "$TEXT" --write-media voice_samples/03_fabio_masculina_informativa.mp3
+          edge-tts --voice pt-BR-FranciscaNeural --rate=-3% --pitch=-1Hz --text "$TEXT" --write-media voice_samples/04_francisca_feminina_clara.mp3
+          edge-tts --voice pt-BR-ThalitaNeural --rate=-2% --pitch=-1Hz --text "$TEXT" --write-media voice_samples/05_thalita_feminina_moderna.mp3
+          edge-tts --voice pt-BR-LeilaNeural --rate=-3% --pitch=-1Hz --text "$TEXT" --write-media voice_samples/06_leila_feminina_informativa.mp3
+
+          for f in voice_samples/*.mp3; do
+            tmp="${f%.mp3}_norm.mp3"
+            ffmpeg -y -i "$f" -af loudnorm=I=-16:TP=-1.5:LRA=11 -codec:a libmp3lame -b:a 160k "$tmp"
+            mv "$tmp" "$f"
+          done
+
+          cat > voice_samples/README.txt <<'TXT'
+Amostras de voz do Portal SimonSports
+
+Texto utilizado em todas as vozes:
+SimonSports, simplesmente o melhor. Confira agora o resultado oficial da Dupla Sena, concurso dois mil novecentos e dezessete.
+
+01 Antonio — masculina institucional
+02 Donato — masculina firme
+03 Fabio — masculina informativa
+04 Francisca — feminina clara
+05 Thalita — feminina moderna
+06 Leila — feminina informativa
+TXT
+
+      - name: Gravar amostras no repositório
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add voice_samples
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteração nas amostras."
+          else
+            git commit -m "Gera amostras brasileiras para seleção da voz oficial"
+            git push
+          fi
