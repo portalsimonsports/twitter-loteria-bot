@@ -1,54 +1,45 @@
 # ===============================================================
 # Portal SimonSports — Publicador Automático de Loterias
 # Arquivo: requirements.txt
-# Revisão: 2026-01-20 (Atualizado para Vídeo)
+# Revisão: 2026-07-29 (Identidade audiovisual V8)
 # ---------------------------------------------------------------
 # Contém todas as dependências necessárias para:
 # - Publicação automática (X, Facebook, Telegram, Discord, Pinterest)
 # - Leitura/escrita na planilha Google (Sheets API)
-# - Geração de imagens 3D e arte HTML/CSS via Pillow
-# - Geração de vídeos automáticos via MoviePy (FFmpeg)
+# - Geração de imagens e vídeos verticais
+# - Identidade sonora e locução automática em português do Brasil
 # - Servidor Flask Keepalive para Render/Replit
 # ===============================================================
 
-# ------------------------------
 # Google Sheets / Drive API
-# ------------------------------
 gspread>=6.1.4
 oauth2client>=4.1.3
 google-auth>=2.15.0
 google-api-python-client>=2.100.0
 
-# ------------------------------
 # Redes sociais / comunicação
-# ------------------------------
-tweepy>=4.14.0           # X (Twitter)
-requests>=2.28.0         # HTTP base para Facebook, Telegram, Discord, Pinterest
+tweepy>=4.14.0
+requests>=2.28.0
 
-# ------------------------------
 # Utilitários e ambiente
-# ------------------------------
-python-dotenv>=1.0.1     # Leitura de variáveis .env
-pytz>=2023.3             # Timezone America/Sao_Paulo
+python-dotenv>=1.0.1
+pytz>=2023.3
 
-# ------------------------------
 # Servidor opcional KeepAlive
-# ------------------------------
 Flask>=2.3.0
 gunicorn>=21.2.0
 
-# ------------------------------
-# Imagem / Geração visual
-# ------------------------------
-Pillow>=10.4.0           # Renderização e manipulação de imagens
+# Imagem / geração visual
+Pillow>=10.4.0
 
-# ------------------------------
-# Vídeo / Geração visual (Novo)
-# ------------------------------
-moviepy>=1.0.3           # Core para edição de vídeo
-proglog>=0.1.10          # Gerenciamento de logs de renderização
-decorator>=5.1.1         # Dependência de processamento do MoviePy
-imageio-ffmpeg>=0.4.9    # Interface para o motor FFmpeg
+# Vídeo / geração visual
+moviepy>=1.0.3
+proglog>=0.1.10
+decorator>=5.1.1
+imageio-ffmpeg>=0.4.9
+
+# Identidade audiovisual / locução neural
+edge-tts>=6.1.12
 
 # ===============================================================
 # Fim do arquivo
