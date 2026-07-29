@@ -19,6 +19,8 @@ on:
       - gerador_video_v5.py
       - gerador_video_v6.py
       - gerador_video_v7.py
+      - gerador_video_v8.py
+      - audio_identity_v8.py
       - video_visual_v3.py
       - video_visual_v5.py
       - video_visual_v6.py
@@ -28,6 +30,7 @@ on:
       - post_video.py
       - youtube_auth.py
       - youtube_upload.py
+      - requirements.txt
       - .github/workflows/videos_publish.yml
   schedule:
     - cron: "15 2 * * *"
@@ -41,10 +44,10 @@ permissions:
 
 jobs:
   preview:
-    name: Gerar prévia profissional de 60 segundos
+    name: Gerar prévia com identidade audiovisual de 60 segundos
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.modo == 'preview' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
 
     steps:
       - name: Checkout do repositório
@@ -55,16 +58,16 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Instalar FFmpeg, fontes e Pillow
+      - name: Instalar FFmpeg, fontes, voz offline e dependências
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core
-          python -m pip install --upgrade pip
-          pip install "Pillow>=10.4.0"
+          sudo apt-get install -y ffmpeg fonts-dejavu-core espeak-ng
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
 
       - name: Validar módulos
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py audio_identity_v8.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
 
       - name: Gerar vídeo de prévia
         env:
@@ -72,6 +75,10 @@ jobs:
           VIDEO_HEIGHT: "1920"
           VIDEO_FPS: "30"
           DURACAO_VIDEO: "60"
+          ENABLE_VOICEOVER: "true"
+          VOICEOVER_VOICE: "pt-BR-AntonioNeural"
+          VOICEOVER_RATE: "-4%"
+          VOICEOVER_PITCH: "-2Hz"
         run: |
           rm -rf preview_output
           python video_preview.py --source data/to_publish.json --output-dir preview_output --duration 60
@@ -81,7 +88,7 @@ jobs:
       - name: Disponibilizar artefato da prévia
         uses: actions/upload-artifact@v4
         with:
-          name: previa-youtube-loterias-60s-${{ github.run_number }}
+          name: previa-youtube-identidade-audiovisual-60s-${{ github.run_number }}
           path: |
             preview_output/*.mp4
             preview_output/*.png
@@ -92,7 +99,7 @@ jobs:
     name: Gerar e publicar Shorts no YouTube
     if: ${{ github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'publish') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
 
     steps:
       - name: Checkout do repositório
@@ -106,7 +113,7 @@ jobs:
       - name: Instalar dependências do sistema
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          sudo apt-get install -y ffmpeg fonts-dejavu-core espeak-ng
           ffmpeg -version | head -n 1
 
       - name: Instalar dependências Python
@@ -119,7 +126,7 @@ jobs:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py audio_identity_v8.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
           import os
@@ -162,6 +169,10 @@ jobs:
           VIDEO_WIDTH: "1080"
           VIDEO_HEIGHT: "1920"
           VIDEO_FPS: "30"
+          ENABLE_VOICEOVER: "true"
+          VOICEOVER_VOICE: "pt-BR-AntonioNeural"
+          VOICEOVER_RATE: "-4%"
+          VOICEOVER_PITCH: "-2Hz"
           TZ: America/Sao_Paulo
         run: |
           mkdir -p output
