@@ -1,5 +1,5 @@
 # post_video.py — Portal SimonSports — YouTube Multi-Canal (Cofre Only)
-# Rev: 2026-07-29 — Shorts públicos com metadados e tags padrão
+# Rev: 2026-07-29 — Shorts V4 com áudio, fonte oficial e metadados otimizados
 
 import datetime as dt
 import time
@@ -88,18 +88,27 @@ def publicar_video_em_multicanais(
 
     lottery = str(dados_video.get("loteria") or "Loteria").strip()
     contest = str(dados_video.get("concurso") or "").strip()
+    draw_date = str(dados_video.get("data") or "").strip()
+    numbers = str(dados_video.get("numeros") or dados_video.get("descricao") or "").strip()
     reference_url = str(dados_video.get("url") or "https://www.portalsimonsports.com/").strip()
 
-    default_title = f"Resultado {lottery} — Concurso {contest} #Shorts".strip(" —")
+    contest_part = f" {contest}" if contest else ""
+    default_title = f"Resultado {lottery}{contest_part}: números sorteados #Shorts"[:100]
+    date_line = f"Sorteio de {draw_date}.\n" if draw_date else ""
+    numbers_line = f"Números sorteados: {numbers}\n" if numbers else ""
     default_description = (
-        f"Resultado da {lottery} — Concurso {contest}.\n"
-        f"Confira o resultado completo: {reference_url}\n\n"
+        f"Resultado oficial da {lottery} — Concurso {contest}.\n"
+        f"{date_line}"
+        f"{numbers_line}"
+        "Fonte: CAIXA Loterias.\n\n"
+        f"Confira o resultado completo: {reference_url}\n"
+        "Link também disponível na descrição do canal.\n\n"
         "Portal SimonSports — conteúdo informativo sobre resultados de loterias.\n"
-        "#Shorts #Loterias #Resultados #PortalSimonSports"
+        "#Shorts #Loterias #Resultados #CaixaLoterias #PortalSimonSports"
     )
     default_tags = [
-        "Shorts", "loterias", "resultado", "resultados de loterias",
-        lottery, f"concurso {contest}", "Portal SimonSports",
+        "Shorts", "loterias", "resultado oficial", "resultados de loterias",
+        "Caixa Loterias", lottery, f"concurso {contest}", "Portal SimonSports",
     ]
 
     for account in accounts:
@@ -141,6 +150,8 @@ def publicar_video_em_multicanais(
         if "#Shorts" not in title and len(title) <= 92:
             title = f"{title} #Shorts"
         description = str(dados_video.get("description") or default_description)
+        if "Fonte: CAIXA Loterias" not in description:
+            description += "\nFonte: CAIXA Loterias."
         if "#Shorts" not in description:
             description += "\n\n#Shorts #Loterias #PortalSimonSports"
         description = description[:4500]
