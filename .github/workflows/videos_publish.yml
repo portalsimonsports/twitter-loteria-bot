@@ -74,7 +74,7 @@ jobs:
 
   publish:
     name: Processar fila e publicar no YouTube
-    if: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'publish')) && vars.ENABLE_VIDEOS == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'publish')) && vars.ENABLE_VIDEOS == 'true' && vars.YOUTUBE_APPROVED == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
