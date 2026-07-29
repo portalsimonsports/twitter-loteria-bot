@@ -66,10 +66,10 @@ def _load_latest(path: Path) -> Dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Gera uma prévia MP4 para aprovação visual.")
+    parser = argparse.ArgumentParser(description="Gera uma prévia MP4 de 30 segundos para aprovação visual.")
     parser.add_argument("--source", default="data/to_publish.json")
     parser.add_argument("--output-dir", default="preview_output")
-    parser.add_argument("--duration", type=float, default=8.0)
+    parser.add_argument("--duration", type=float, default=30.0)
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
