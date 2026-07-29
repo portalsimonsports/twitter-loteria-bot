@@ -1,30 +1,19 @@
 # post_video.py — Portal SimonSports — YouTube Multi-Canal (Cofre Only)
-# Rev: 2026-01-20a
-# - Publica em TODOS os canais/contas do YOUTUBE cadastrados no Cofre (por Conta)
-# - Gera o vídeo 1x e reutiliza
-# - Retorna resultados e um resumo pronto para marcar 1 coluna (Publicado_YOUTUBE)
-#
-# Dependências:
-# - youtube_auth.py  -> get_access_token(client_id, client_secret, refresh_token) -> str
-# - youtube_upload.py -> upload_video(...)-> video_id | build_watch_url(video_id)-> url
-# - gerador_video.py -> executar(dados)-> caminho mp4
+# Rev: 2026-07-29 — Shorts públicos com metadados e tags padrão
 
-import os
-import time
 import datetime as dt
-from typing import Dict, List, Any, Optional
-
-from youtube_auth import get_access_token
-from youtube_upload import upload_video, build_watch_url
+import time
+from typing import Any, Dict, List, Optional
 
 from gerador_video import executar as gerar_video
+from youtube_auth import get_access_token
+from youtube_upload import build_watch_url, upload_video
 
 
 def _now_br(tz_name: str = "America/Sao_Paulo") -> dt.datetime:
     try:
         import pytz
-        tz = pytz.timezone(tz_name)
-        return dt.datetime.now(tz)
+        return dt.datetime.now(pytz.timezone(tz_name))
     except Exception:
         return dt.datetime.now()
 
@@ -33,40 +22,30 @@ def _ts_br(tz_name: str = "America/Sao_Paulo") -> str:
     return _now_br(tz_name).strftime("%d/%m/%Y %H:%M")
 
 
-def _log(*a):
-    print("[YOUTUBE]", *a, flush=True)
+def _log(*args: Any) -> None:
+    print("[YOUTUBE]", *args, flush=True)
 
 
-def _parse_tags(v: str) -> List[str]:
-    if not v:
+def _parse_tags(value: str) -> List[str]:
+    if not value:
         return []
-    v = v.replace(";", ",")
-    return [t.strip() for t in v.split(",") if t.strip()]
+    return [tag.strip() for tag in value.replace(";", ",").split(",") if tag.strip()]
 
 
 def _cofre_get_safe(cofre_get_fn, rede: str, chave: str, conta: Optional[str] = None, default: str = "") -> str:
-    """
-    Busca no Cofre tentando:
-    1) rede+conta+chave
-    2) rede+chave (conta vazia)
-    """
-    v = (cofre_get_fn(rede, chave, conta=conta, default="") or "").strip()
-    if v:
-        return v
+    value = (cofre_get_fn(rede, chave, conta=conta, default="") or "").strip()
+    if value:
+        return value
     return (cofre_get_fn(rede, chave, default=default) or "").strip()
 
 
 def listar_contas_youtube(cofre_cache: Dict[str, Any]) -> List[str]:
-    """
-    Descobre contas YOUTUBE existentes no Cofre pela presença de REFRESH_TOKEN por conta.
-    Retorna lista de contas (strings).
-    """
     creds_rc = cofre_cache.get("creds_rc", {}) or {}
-    contas = set()
-    for (r, c, k), v in creds_rc.items():
-        if (r or "").strip().upper() == "YOUTUBE" and (k or "").strip().upper() == "REFRESH_TOKEN" and v:
-            contas.add((c or "").strip())
-    return sorted([c for c in contas if c])
+    accounts = set()
+    for (network, account, key), value in creds_rc.items():
+        if (network or "").strip().upper() == "YOUTUBE" and (key or "").strip().upper() == "REFRESH_TOKEN" and value:
+            accounts.add((account or "").strip())
+    return sorted(account for account in accounts if account)
 
 
 def publicar_video_em_multicanais(
@@ -76,106 +55,161 @@ def publicar_video_em_multicanais(
     *,
     dry_run: bool = False,
     sleep_between_channels: float = 1.0,
-    tz_name: str = "America/Sao_Paulo"
+    tz_name: str = "America/Sao_Paulo",
 ) -> Dict[str, Any]:
-    """
-    Gera vídeo e publica em TODOS os canais YOUTUBE cadastrados no Cofre.
+    accounts = listar_contas_youtube(cofre_cache)
+    if not accounts:
+        message = "Nenhuma conta YOUTUBE com REFRESH_TOKEN no Cofre. Pulando."
+        _log(message)
+        return {
+            "ok_any": False,
+            "video_path": "",
+            "results": [],
+            "mark_value": f"Sem contas YOUTUBE no Cofre em {_ts_br(tz_name)}",
+        }
 
-    Retorno:
-    {
-      "ok_any": bool,
-      "video_path": str,
-      "results": [ {conta, status, video_id, url, error} ],
-      "mark_value": str   # resumo curto para marcar 1 coluna
-    }
-    """
-    contas = listar_contas_youtube(cofre_cache)
-    if not contas:
-        msg = "Nenhuma conta YOUTUBE com REFRESH_TOKEN no Cofre. Pulando."
-        _log(msg)
-        return {"ok_any": False, "video_path": "", "results": [], "mark_value": f"Sem contas YOUTUBE no Cofre em {_ts_br(tz_name)}"}
-
-    # 1) Gera o vídeo 1x
     try:
         if dry_run:
             video_path = "DRYRUN_resultado_loteria.mp4"
             _log("DRY_RUN: pulando geração real do vídeo.")
         else:
             video_path = gerar_video(dados_video)
-    except Exception as e:
-        _log("Erro ao gerar vídeo:", e)
-        return {"ok_any": False, "video_path": "", "results": [], "mark_value": f"Erro ao gerar vídeo: {e}"}
+    except Exception as error:
+        _log("Erro ao gerar vídeo:", error)
+        return {
+            "ok_any": False,
+            "video_path": "",
+            "results": [],
+            "mark_value": f"Erro ao gerar vídeo: {error}",
+        }
 
     results: List[Dict[str, Any]] = []
     ok_any = False
 
-    # Defaults por vídeo (se não vierem)
-    loteria = str(dados_video.get("loteria") or "Loteria")
-    concurso = str(dados_video.get("concurso") or "")
-    url_ref = str(dados_video.get("url") or "")
+    lottery = str(dados_video.get("loteria") or "Loteria").strip()
+    contest = str(dados_video.get("concurso") or "").strip()
+    reference_url = str(dados_video.get("url") or "https://www.portalsimonsports.com/").strip()
 
-    default_title = dados_video.get("title") or f"{loteria} — Concurso {concurso}".strip()
-    default_desc = dados_video.get("description") or f"Resultado completo: {url_ref}\n\nPortal SimonSports\nGerado em {_ts_br(tz_name)}"
+    default_title = f"Resultado {lottery} — Concurso {contest} #Shorts".strip(" —")
+    default_description = (
+        f"Resultado da {lottery} — Concurso {contest}.\n"
+        f"Confira o resultado completo: {reference_url}\n\n"
+        "Portal SimonSports — conteúdo informativo sobre resultados de loterias.\n"
+        "#Shorts #Loterias #Resultados #PortalSimonSports"
+    )
+    default_tags = [
+        "Shorts", "loterias", "resultado", "resultados de loterias",
+        lottery, f"concurso {contest}", "Portal SimonSports",
+    ]
 
-    for conta in contas:
-        client_id = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "CLIENT_ID", conta=conta)
-        client_secret = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "CLIENT_SECRET", conta=conta)
-        refresh_token = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "REFRESH_TOKEN", conta=conta)
+    for account in accounts:
+        client_id = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "CLIENT_ID", conta=account)
+        client_secret = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "CLIENT_SECRET", conta=account)
+        refresh_token = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "REFRESH_TOKEN", conta=account)
 
         if not (client_id and client_secret and refresh_token):
-            _log(f"[{conta}] Credenciais incompletas (CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN).")
-            results.append({"conta": conta, "status": "ERRO", "video_id": "", "url": "", "error": "Credenciais incompletas"})
+            _log(f"[{account}] Credenciais incompletas (CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN).")
+            results.append({
+                "conta": account,
+                "status": "ERRO",
+                "video_id": "",
+                "url": "",
+                "error": "Credenciais incompletas",
+            })
             continue
 
-        privacy = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "PRIVACY_STATUS", conta=conta, default="unlisted") or "unlisted"
-        cat_id = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "CATEGORY_ID", conta=conta, default="17") or "17"
-        tags_s = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "TAGS", conta=conta, default="")
-        tags = _parse_tags(tags_s)
+        privacy = _cofre_get_safe(
+            cofre_get_fn,
+            "YOUTUBE",
+            "PRIVACY_STATUS",
+            conta=account,
+            default="public",
+        ) or "public"
+        category_id = _cofre_get_safe(
+            cofre_get_fn,
+            "YOUTUBE",
+            "CATEGORY_ID",
+            conta=account,
+            default="24",
+        ) or "24"
+        custom_tags = _parse_tags(
+            _cofre_get_safe(cofre_get_fn, "YOUTUBE", "TAGS", conta=account, default="")
+        )
+        tags = custom_tags or default_tags
 
         title = str(dados_video.get("title") or default_title)[:100]
-        desc = str(dados_video.get("description") or default_desc)[:4500]
+        if "#Shorts" not in title and len(title) <= 92:
+            title = f"{title} #Shorts"
+        description = str(dados_video.get("description") or default_description)
+        if "#Shorts" not in description:
+            description += "\n\n#Shorts #Loterias #PortalSimonSports"
+        description = description[:4500]
 
         try:
             if dry_run:
-                vid = f"DRYRUN_{conta.replace(' ', '_')}"
-                watch_url = build_watch_url(vid)
-                _log(f"[{conta}] DRY_RUN OK → {watch_url}")
+                video_id = f"DRYRUN_{account.replace(' ', '_')}"
+                watch_url = build_watch_url(video_id)
+                _log(f"[{account}] DRY_RUN OK → {watch_url}")
                 ok_any = True
-                results.append({"conta": conta, "status": "OK", "video_id": vid, "url": watch_url, "error": ""})
+                results.append({
+                    "conta": account,
+                    "status": "OK",
+                    "video_id": video_id,
+                    "url": watch_url,
+                    "error": "",
+                })
             else:
                 access_token = get_access_token(client_id, client_secret, refresh_token)
-                vid = upload_video(
+                video_id = upload_video(
                     access_token=access_token,
                     video_path=video_path,
                     title=title,
-                    description=desc,
+                    description=description,
                     tags=tags,
-                    category_id=cat_id,
-                    privacy_status=privacy
+                    category_id=category_id,
+                    privacy_status=privacy,
                 )
-                watch_url = build_watch_url(vid)
-                _log(f"[{conta}] OK → {watch_url}")
+                watch_url = build_watch_url(video_id)
+                _log(f"[{account}] OK → {watch_url}")
                 ok_any = True
-                results.append({"conta": conta, "status": "OK", "video_id": vid, "url": watch_url, "error": ""})
-        except Exception as e:
-            _log(f"[{conta}] ERRO:", e)
-            results.append({"conta": conta, "status": "ERRO", "video_id": "", "url": "", "error": str(e)})
+                results.append({
+                    "conta": account,
+                    "status": "OK",
+                    "video_id": video_id,
+                    "url": watch_url,
+                    "error": "",
+                })
+        except Exception as error:
+            _log(f"[{account}] ERRO:", error)
+            results.append({
+                "conta": account,
+                "status": "ERRO",
+                "video_id": "",
+                "url": "",
+                "error": str(error),
+            })
 
         time.sleep(sleep_between_channels)
 
-    # 3) Monta mark_value curto (para célula única)
-    ok_links = [f"{r['conta']}: {r['url']}" for r in results if r.get("status") == "OK" and r.get("url")]
-    if ok_links:
-        resumo = " | ".join(ok_links[:3])  # limita 3 links para não estourar célula
-        mark_value = f"Publicado YOUTUBE em {_ts_br(tz_name)} | {resumo}"
+    published_links = [
+        f"{result['conta']}: {result['url']}"
+        for result in results
+        if result.get("status") == "OK" and result.get("url")
+    ]
+    if published_links:
+        summary = " | ".join(published_links[:3])
+        mark_value = f"Publicado YOUTUBE em {_ts_br(tz_name)} | {summary}"
     else:
-        # pega até 2 erros para resumo
-        errs = [f"{r['conta']}: {r.get('error','')}" for r in results if r.get("status") == "ERRO"]
-        mark_value = f"Falha YOUTUBE em {_ts_br(tz_name)} | " + " | ".join(errs[:2])
+        errors = [
+            f"{result['conta']}: {result.get('error', '')}"
+            for result in results
+            if result.get("status") == "ERRO"
+        ]
+        mark_value = f"Falha YOUTUBE em {_ts_br(tz_name)} | " + " | ".join(errors[:2])
 
     return {
         "ok_any": ok_any,
         "video_path": video_path,
         "results": results,
-        "mark_value": mark_value
+        "mark_value": mark_value,
     }
