@@ -14,7 +14,7 @@ permissions:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -30,41 +30,82 @@ jobs:
           python -m pip install --upgrade pip
           pip install edge-tts
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg zip
 
-      - name: Gerar seis amostras comparáveis
-        shell: bash
+      - name: Gerar todas as vozes pt-BR disponíveis
         run: |
-          set -euo pipefail
+          rm -rf voice_samples
           mkdir -p voice_samples
-          TEXT='SimonSports, simplesmente o melhor. Confira agora o resultado oficial da Dupla Sena, concurso dois mil novecentos e dezessete.'
+          python - <<'PY'
+          import asyncio
+          import json
+          import re
+          from pathlib import Path
+          import edge_tts
 
-          edge-tts --voice pt-BR-AntonioNeural --rate=-4% --pitch=-2Hz --text "$TEXT" --write-media voice_samples/01_antonio_masculina_institucional.mp3
-          edge-tts --voice pt-BR-DonatoNeural --rate=-2% --pitch=-1Hz --text "$TEXT" --write-media voice_samples/02_donato_masculina_firme.mp3
-          edge-tts --voice pt-BR-FabioNeural --rate=-3% --pitch=-2Hz --text "$TEXT" --write-media voice_samples/03_fabio_masculina_informativa.mp3
-          edge-tts --voice pt-BR-FranciscaNeural --rate=-3% --pitch=-1Hz --text "$TEXT" --write-media voice_samples/04_francisca_feminina_clara.mp3
-          edge-tts --voice pt-BR-ThalitaNeural --rate=-2% --pitch=-1Hz --text "$TEXT" --write-media voice_samples/05_thalita_feminina_moderna.mp3
-          edge-tts --voice pt-BR-LeilaNeural --rate=-3% --pitch=-1Hz --text "$TEXT" --write-media voice_samples/06_leila_feminina_informativa.mp3
+          TEXT = (
+              "SimonSports, simplesmente o melhor. "
+              "Confira agora o resultado oficial da Dupla Sena, "
+              "concurso dois mil novecentos e dezessete."
+          )
+          OUT = Path("voice_samples")
+
+          def slug(text):
+              text = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")
+              return text.lower()
+
+          async def main():
+              voices = await edge_tts.list_voices()
+              selected = [v for v in voices if v.get("Locale") == "pt-BR"]
+              selected.sort(key=lambda v: (v.get("Gender", ""), v.get("ShortName", "")))
+              if not selected:
+                  raise RuntimeError("Nenhuma voz pt-BR encontrada")
+
+              readme = [
+                  "Amostras de voz do Portal SimonSports",
+                  "",
+                  "Todas leem exatamente o mesmo texto.",
+                  "",
+              ]
+              manifest = []
+              for index, voice in enumerate(selected, start=1):
+                  short = voice["ShortName"]
+                  gender = voice.get("Gender", "")
+                  friendly = voice.get("FriendlyName", short)
+                  filename = f"{index:02d}_{slug(short)}.mp3"
+                  await edge_tts.Communicate(
+                      text=TEXT,
+                      voice=short,
+                      rate="-2%",
+                      pitch="-1Hz",
+                  ).save(str(OUT / filename))
+                  readme.append(f"{index:02d} | {short} | {gender} | {friendly}")
+                  manifest.append({
+                      "numero": index,
+                      "arquivo": filename,
+                      "voz": short,
+                      "genero": gender,
+                      "nome": friendly,
+                  })
+
+              (OUT / "README.txt").write_text("\n".join(readme) + "\n", encoding="utf-8")
+              (OUT / "manifest.json").write_text(
+                  json.dumps(manifest, ensure_ascii=False, indent=2),
+                  encoding="utf-8",
+              )
+
+          asyncio.run(main())
+          PY
 
           for f in voice_samples/*.mp3; do
             tmp="${f%.mp3}_norm.mp3"
-            ffmpeg -y -i "$f" -af loudnorm=I=-16:TP=-1.5:LRA=11 -codec:a libmp3lame -b:a 160k "$tmp"
+            ffmpeg -y -i "$f" -af loudnorm=I=-16:TP=-1.5:LRA=11 -codec:a libmp3lame -b:a 128k "$tmp"
             mv "$tmp" "$f"
           done
 
-          cat > voice_samples/README.txt <<'TXT'
-Amostras de voz do Portal SimonSports
-
-Texto utilizado em todas as vozes:
-SimonSports, simplesmente o melhor. Confira agora o resultado oficial da Dupla Sena, concurso dois mil novecentos e dezessete.
-
-01 Antonio — masculina institucional
-02 Donato — masculina firme
-03 Fabio — masculina informativa
-04 Francisca — feminina clara
-05 Thalita — feminina moderna
-06 Leila — feminina informativa
-TXT
+          cd voice_samples
+          zip -9 pacote_todas_vozes_ptbr_simonsports.zip ./*.mp3 README.txt manifest.json
+          cd ..
 
       - name: Gravar amostras no repositório
         run: |
@@ -74,8 +115,6 @@ TXT
           if git diff --cached --quiet; then
             echo "Nenhuma alteração nas amostras."
           else
-            git commit -m "Gera amostras brasileiras para seleção da voz oficial"
+            git commit -m "Gera todas as vozes brasileiras para aprovação"
             git push
           fi
-
-# Atualização para disparar a primeira geração de amostras.
