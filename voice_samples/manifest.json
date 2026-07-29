@@ -1,0 +1,23 @@
+[
+  {
+    "numero": 1,
+    "arquivo": "01_pt_br_franciscaneural.mp3",
+    "voz": "pt-BR-FranciscaNeural",
+    "genero": "Female",
+    "nome": "Microsoft Francisca Online (Natural) - Portuguese (Brazil)"
+  },
+  {
+    "numero": 2,
+    "arquivo": "02_pt_br_thalitamultilingualneural.mp3",
+    "voz": "pt-BR-ThalitaMultilingualNeural",
+    "genero": "Female",
+    "nome": "Microsoft ThalitaMultilingual Online (Natural) - Portuguese (Brazil)"
+  },
+  {
+    "numero": 3,
+    "arquivo": "03_pt_br_antonioneural.mp3",
+    "voz": "pt-BR-AntonioNeural",
+    "genero": "Male",
+    "nome": "Microsoft Antonio Online (Natural) - Portuguese (Brazil)"
+  }
+]
