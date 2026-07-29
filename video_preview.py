@@ -66,17 +66,17 @@ def _load_latest(path: Path) -> Dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Gera uma prévia MP4 de 30 segundos para aprovação visual.")
+    parser = argparse.ArgumentParser(description="Gera uma prévia MP4 contínua de 60 segundos para aprovação visual.")
     parser.add_argument("--source", default="data/to_publish.json")
     parser.add_argument("--output-dir", default="preview_output")
-    parser.add_argument("--duration", type=float, default=30.0)
+    parser.add_argument("--duration", type=float, default=60.0)
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     data = _load_latest(Path(args.source))
-    data.update({"previa": True, "duracao": args.duration, "output_dir": str(output_dir)})
+    data.update({"previa": True, "duracao": 60.0, "output_dir": str(output_dir)})
 
     poster = criar_poster(data, output_dir / "previa_youtube_loterias.png")
     video = executar(data)
