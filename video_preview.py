@@ -7,7 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from gerador_video import criar_poster, executar
+from gerador_pacote_v10 import gerar_pacote
+from gerador_video_v9 import criar_poster
 
 
 def _date_key(value: Any) -> datetime:
@@ -66,22 +67,23 @@ def _load_latest(path: Path) -> Dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Gera uma prévia MP4 contínua de 60 segundos para aprovação visual.")
+    parser = argparse.ArgumentParser(description="Gera o pacote V10 para aprovação: Short vertical e vídeo completo horizontal.")
     parser.add_argument("--source", default="data/to_publish.json")
     parser.add_argument("--output-dir", default="preview_output")
-    parser.add_argument("--duration", type=float, default=60.0)
+    parser.add_argument("--duration", type=float, default=60.0, help="Mantido apenas por compatibilidade.")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     data = _load_latest(Path(args.source))
-    data.update({"previa": True, "duracao": 60.0, "output_dir": str(output_dir)})
+    data.update({"previa": True, "output_dir": str(output_dir)})
 
     poster = criar_poster(data, output_dir / "previa_youtube_loterias.png")
-    video = executar(data)
+    pacote = gerar_pacote(data)
     print(f"[PREVIEW] Poster: {poster}")
-    print(f"[PREVIEW] Vídeo: {video}")
+    print(f"[PREVIEW] Short: {pacote['short']}")
+    print(f"[PREVIEW] Vídeo completo: {pacote['completo']}")
 
 
 if __name__ == "__main__":
