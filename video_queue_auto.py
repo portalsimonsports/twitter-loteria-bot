@@ -51,7 +51,8 @@ def _parse_date(value: Any) -> datetime | None:
 
 def _candidate_rows(values: List[List[str]], headers: List[str], published_index: int) -> List[Tuple[int, Sequence[str], Dict[str, Any], datetime | None]]:
     auto_enqueue = _env_bool("AUTO_ENQUEUE_VIDEOS", True)
-    backlog_days = _env_int("VIDEO_BACKLOG_DAYS", 14, 1, 3650)
+    backlog_days = _env_int("VIDEO_BACKLOG_DAYS", 7, 1, 3650)
+    allow_old_queued = _env_bool("ALLOW_OLD_QUEUED_VIDEOS", False)
     cutoff = datetime.now() - timedelta(days=backlog_days)
     queue_index = _find_col(headers, ["Enfileirado_Videos", "Enfileirado Videos", "Fila_Video"])
 
@@ -74,13 +75,17 @@ def _candidate_rows(values: List[List[str]], headers: List[str], published_index
             continue
 
         result_date = _parse_date(data.get("data"))
-        if not queued and result_date is not None and result_date < cutoff:
+        if result_date is not None and result_date < cutoff and not allow_old_queued:
+            _log(
+                f"Linha {sheet_row} ignorada: concurso antigo ({data.get('data')}); "
+                f"janela automática={backlog_days} dias."
+            )
             continue
 
         candidates.append((sheet_row, row, data, result_date))
 
-    # Publica os resultados mais antigos primeiro dentro do período recente.
-    candidates.sort(key=lambda item: (item[3] or datetime.max, item[0]))
+    # Sempre publica primeiro o concurso mais recente. Datas desconhecidas ficam no fim.
+    candidates.sort(key=lambda item: (item[3] or datetime.min, item[0]), reverse=True)
     return candidates
 
 
@@ -108,7 +113,7 @@ def processar_fila_automatica() -> int:
         _log("Nenhum resultado recente pendente para o YouTube.")
         return 0
 
-    _log(f"Pendentes encontrados: {len(candidates)}; processando até {config.max_videos}.")
+    _log(f"Pendentes recentes encontrados: {len(candidates)}; processando até {config.max_videos}.")
     successes = 0
 
     for sheet_row, _row, data, _result_date in candidates[: config.max_videos]:
