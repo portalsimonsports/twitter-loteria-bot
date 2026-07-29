@@ -52,7 +52,12 @@ def extract_numbers(data: Dict[str, Any]) -> List[str]:
     return values
 
 
-def reveal_times_full(lottery: str, count: int, factor: float) -> List[float]:
+def reveal_times_full(
+    lottery: str,
+    count: int,
+    intro_duration: float = 25.0,
+    result_duration: float = 71.0,
+) -> List[float]:
     if count <= 0:
         return []
     key = _slug(lottery)
@@ -60,23 +65,37 @@ def reveal_times_full(lottery: str, count: int, factor: float) -> List[float]:
         base = [7.60 + index * 3.15 for index in range(6)] + [29.00 + index * 3.15 for index in range(6)]
         if count > 12:
             base.extend(47.0 + (index + 1) * 0.65 for index in range(count - 12))
-        return [value * factor for value in base[:count]]
+        source_start = 7.0
+        ratio = result_duration / 47.0
+        return [intro_duration + max(0.0, value - source_start) * ratio for value in base[:count]]
     start = 7.60
     end = 40.0 if count <= 6 else 44.0 if count <= 10 else 46.0 if count <= 15 else 47.0
     if count == 1:
-        return [start * factor]
+        return [intro_duration + max(0.0, start - 7.0) * (result_duration / 47.0)]
     interval = (end - start) / (count - 1)
-    return [(start + index * interval) * factor for index in range(count)]
+    ratio = result_duration / 47.0
+    return [intro_duration + max(0.0, (start + index * interval) - 7.0) * ratio for index in range(count)]
 
 
 def reveal_times_short(lottery: str, count: int, intro_duration: float = 5.4, result_duration: float = 18.1) -> List[float]:
     if count <= 0:
         return []
-    full_base = reveal_times_full(lottery, count, 1.0)
+    key = _slug(lottery)
+    if "dupla-sena" in key and count >= 12:
+        base = [7.60 + index * 3.15 for index in range(6)] + [29.00 + index * 3.15 for index in range(6)]
+        if count > 12:
+            base.extend(47.0 + (index + 1) * 0.65 for index in range(count - 12))
+    else:
+        start = 7.60
+        end = 40.0 if count <= 6 else 44.0 if count <= 10 else 46.0 if count <= 15 else 47.0
+        if count == 1:
+            base = [start]
+        else:
+            interval = (end - start) / (count - 1)
+            base = [start + index * interval for index in range(count)]
     source_start = 7.0
-    source_end = 54.0
-    ratio = result_duration / (source_end - source_start)
-    return [intro_duration + max(0.0, value - source_start) * ratio for value in full_base]
+    ratio = result_duration / 47.0
+    return [intro_duration + max(0.0, value - source_start) * ratio for value in base[:count]]
 
 
 def _opening_segments(data: Dict[str, Any], first_reveal: float, compact: bool) -> List[SpeechSegment]:
@@ -88,10 +107,10 @@ def _opening_segments(data: Dict[str, Any], first_reveal: float, compact: bool) 
 
     if compact:
         texts = [
-            (VOICE_FRANCISCA, f"Olá! Você está no Portal SimonSports. Confira agora o resultado da {lottery}{contest_text}."),
-            (VOICE_ANTONIO, "As três vozes do canal vão apresentar as dezenas sorteadas. Deixe seu like e acompanhe."),
+            (VOICE_FRANCISCA, f"Portal SimonSports. Resultado da {lottery}{contest_text}."),
+            (VOICE_ANTONIO, "Confira as dezenas e deixe o seu like."),
         ]
-        starts = [0.25, 2.75]
+        starts = [0.20, 3.05]
         return [SpeechSegment(start, voice, text) for start, (voice, text) in zip(starts, texts)]
 
     texts = [
@@ -108,7 +127,7 @@ def _opening_segments(data: Dict[str, Any], first_reveal: float, compact: bool) 
             "Antes de começarmos, aproveite para deixar o seu like, inscrever-se no canal e ativar as notificações. Assim você recebe os próximos resultados publicados pelo SimonSports.",
         ),
     ]
-    starts = [0.35, max(4.25, first_reveal - 8.8), max(8.1, first_reveal - 4.65)]
+    starts = [0.35, 7.45, 14.55]
     return [SpeechSegment(start, voice, text) for start, (voice, text) in zip(starts, texts)]
 
 
@@ -151,11 +170,11 @@ def _closing_segments(data: Dict[str, Any], duration: float, last_reveal: float,
             SpeechSegment(26.35, VOICE_ANTONIO, "Inscreva-se no SimonSports para receber os próximos resultados."),
         ]
 
-    start = max(last_reveal + 4.5, duration - 21.0)
+    start = max(last_reveal + 4.0, duration - 24.0)
     return [
         SpeechSegment(start, VOICE_FRANCISCA, f"Esses foram os números sorteados da {lottery}. Confira novamente o resultado exibido na tela antes de finalizar a sua conferência."),
-        SpeechSegment(start + 6.4, VOICE_ANTONIO, "Agora queremos saber de você: acertou alguma dezena? Escreva nos comentários e compartilhe este vídeo com quem também acompanha as loterias."),
-        SpeechSegment(start + 13.4, VOICE_THALITA, "Deixe o seu like, inscreva-se no canal e ative as notificações. Portal SimonSports, simplesmente o melhor. Até o próximo resultado!"),
+        SpeechSegment(start + 7.4, VOICE_ANTONIO, "Agora queremos saber de você: acertou alguma dezena? Escreva nos comentários e compartilhe este vídeo com quem também acompanha as loterias."),
+        SpeechSegment(start + 15.3, VOICE_THALITA, "Deixe o seu like, inscreva-se no canal e ative as notificações. Portal SimonSports, simplesmente o melhor. Até o próximo resultado!"),
     ]
 
 
