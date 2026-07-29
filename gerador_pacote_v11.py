@@ -179,15 +179,21 @@ def _create_short(base_video: Path, data: Dict[str, Any], output_dir: Path) -> P
 
 def _create_full(base_video: Path, data: Dict[str, Any], output_dir: Path) -> Path:
     numbers = extract_numbers(data)
-    count = max(1, len(numbers))
-    duration = float(min(120, max(108, round(90 + count * 2.8))))
-    factor = duration / 60.0
+    duration = 120.0
+    intro_duration = 25.0
+    result_duration = 71.0
+    closing_duration = 24.0
     lottery_text = str(data.get("loteria") or "Loteria").strip()
     contest_text = str(data.get("concurso") or "").strip()
     lottery = _slug(lottery_text) or "loteria"
     contest = _slug(contest_text or "resultado") or "resultado"
     output = output_dir / f"video_completo_{lottery}_{contest}_{round(duration)}s_dialogo_v11.mp4"
-    reveals = reveal_times_full(lottery_text, len(numbers), factor)
+    reveals = reveal_times_full(
+        lottery_text,
+        len(numbers),
+        intro_duration=intro_duration,
+        result_duration=result_duration,
+    )
 
     with tempfile.TemporaryDirectory(prefix="portalsimonsports-completo-v11-") as temp_dir:
         temp = Path(temp_dir)
@@ -195,11 +201,16 @@ def _create_full(base_video: Path, data: Dict[str, Any], output_dir: Path) -> Pa
         music = temp / "trilha_completa.wav"
         narrated = temp / "audio_completo_narrado.wav"
         _horizontal_overlay(data, overlay)
-        write_soundtrack(music, duration, lottery_text, contest_text, 49.0 * factor, 54.2 * factor)
+        write_soundtrack(music, duration, lottery_text, contest_text, 91.0, 96.0)
         synthesize_dialogue_mix(data, duration, reveals, music, narrated, compact=False)
 
         filter_complex = (
-            f"[0:v]setpts={factor:.9f}*PTS,split=2[bg][fg];"
+            f"[0:v]trim=start=0:end=0.9,setpts=PTS-STARTPTS,"
+            f"tpad=stop_mode=clone:stop_duration={intro_duration - 0.9:.3f}[intro];"
+            f"[0:v]trim=start=7.0:end=54.0,setpts={(result_duration / 47.0):.9f}*PTS[result];"
+            f"[0:v]trim=start=53.1:end=54.0,setpts=PTS-STARTPTS,"
+            f"tpad=stop_mode=clone:stop_duration={closing_duration - 0.9:.3f}[closing];"
+            "[intro][result][closing]concat=n=3:v=1:a=0,trim=duration=120,setpts=PTS-STARTPTS,split=2[bg][fg];"
             "[bg]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
             "boxblur=28:2,eq=brightness=-0.24:saturation=1.18[bg2];"
             "[fg]scale=-2:1080[fg2];"
