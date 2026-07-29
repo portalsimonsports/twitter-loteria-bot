@@ -1,14 +1,10 @@
 # ===============================================================
 # Portal SimonSports — Publicador Automático de Loterias
 # Arquivo: requirements.txt
-# Revisão: 2026-07-29 (Identidade audiovisual V8)
+# Revisão: 2026-07-29 (Identidade audiovisual V9 sem locução)
 # ---------------------------------------------------------------
-# Contém todas as dependências necessárias para:
-# - Publicação automática (X, Facebook, Telegram, Discord, Pinterest)
-# - Leitura/escrita na planilha Google (Sheets API)
-# - Geração de imagens e vídeos verticais
-# - Identidade sonora e locução automática em português do Brasil
-# - Servidor Flask Keepalive para Render/Replit
+# Dependências para publicação automática, Google Sheets,
+# geração visual, vídeo e identidade sonora original.
 # ===============================================================
 
 # Google Sheets / Drive API
@@ -38,8 +34,8 @@ proglog>=0.1.10
 decorator>=5.1.1
 imageio-ffmpeg>=0.4.9
 
-# Identidade audiovisual / locução neural
-edge-tts>=6.1.12
+# A identidade sonora V9 é sintetizada localmente pelo código.
+# Não utiliza TTS, voz neural ou serviço externo de locução.
 
 # ===============================================================
 # Fim do arquivo
