@@ -77,3 +77,5 @@ TXT
             git commit -m "Gera amostras brasileiras para seleção da voz oficial"
             git push
           fi
+
+# Atualização para disparar a primeira geração de amostras.
