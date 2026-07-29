@@ -16,7 +16,11 @@ on:
       - main
     paths:
       - gerador_video.py
+      - gerador_video_v5.py
+      - gerador_video_v6.py
       - video_visual_v3.py
+      - video_visual_v5.py
+      - video_visual_v6.py
       - video_preview.py
       - video_queue.py
       - video_queue_auto.py
@@ -36,10 +40,10 @@ permissions:
 
 jobs:
   preview:
-    name: Gerar prévia de 30 segundos
+    name: Gerar prévia contínua de 60 segundos
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.modo == 'preview' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
 
     steps:
       - name: Checkout do repositório
@@ -59,23 +63,24 @@ jobs:
 
       - name: Validar módulos
         run: |
-          python -m py_compile gerador_video.py video_visual_v3.py video_preview.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
 
       - name: Gerar vídeo de prévia
         env:
           VIDEO_WIDTH: "1080"
           VIDEO_HEIGHT: "1920"
           VIDEO_FPS: "30"
+          DURACAO_VIDEO: "60"
         run: |
           rm -rf preview_output
-          python video_preview.py --source data/to_publish.json --output-dir preview_output --duration 30
+          python video_preview.py --source data/to_publish.json --output-dir preview_output --duration 60
           ls -lh preview_output
           test -n "$(find preview_output -maxdepth 1 -name '*.mp4' -print -quit)"
 
       - name: Disponibilizar artefato da prévia
         uses: actions/upload-artifact@v4
         with:
-          name: previa-youtube-loterias-30s-${{ github.run_number }}
+          name: previa-youtube-loterias-60s-${{ github.run_number }}
           path: |
             preview_output/*.mp4
             preview_output/*.png
@@ -86,7 +91,7 @@ jobs:
     name: Gerar e publicar Shorts no YouTube
     if: ${{ github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'publish') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout do repositório
@@ -113,7 +118,7 @@ jobs:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
-          python -m py_compile gerador_video.py video_visual_v3.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
           import os
@@ -152,7 +157,7 @@ jobs:
           VIDEO_BACKLOG_DAYS: ${{ vars.VIDEO_BACKLOG_DAYS || '7' }}
           ALLOW_OLD_QUEUED_VIDEOS: "false"
           DRY_RUN_VIDEOS: "false"
-          DURACAO_VIDEO: "30"
+          DURACAO_VIDEO: "60"
           VIDEO_WIDTH: "1080"
           VIDEO_HEIGHT: "1920"
           VIDEO_FPS: "30"
