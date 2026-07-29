@@ -3,8 +3,10 @@ from __future__ import annotations
 import math
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
+from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
@@ -107,7 +109,12 @@ def _split_raw(value: Any) -> List[str]:
     if isinstance(value, (list, tuple)):
         return [str(item).strip() for item in value if str(item).strip()]
     text = re.sub(r"^n[uú]meros?\s*:\s*", "", str(value or "").strip(), flags=re.I)
-    return [part.strip() for part in re.split(r"[,;|\n]+", text) if part.strip()]
+    parts = [part.strip() for part in re.split(r"[,;|\n]+", text) if part.strip()]
+    if len(parts) <= 1:
+        numeric_tokens = re.findall(r"(?<!\d)\d{1,6}(?!\d)", text)
+        if len(numeric_tokens) > 1:
+            return numeric_tokens
+    return parts
 
 
 def prepare_numbers(loteria: str, value: Any) -> Tuple[List[str], str]:
@@ -121,7 +128,7 @@ def prepare_numbers(loteria: str, value: Any) -> Tuple[List[str], str]:
     for token in raw:
         cleaned = token.strip().replace("+", "")
         if re.fullmatch(r"\d{1,6}", cleaned):
-            numeric.append(cleaned)
+            numeric.append(cleaned.zfill(2) if len(cleaned) <= 2 else cleaned)
         elif token not in {"-", "+", "x", "X"}:
             extras.append(token)
 
@@ -208,12 +215,30 @@ def _number_layout(count: int) -> Tuple[int, int, int, int]:
     return 5, math.ceil(count / 5), 90, 22
 
 
+def _draw_ball(draw: ImageDraw.ImageDraw, x: int, y: int, diameter: int, number: str, shown: bool, is_new: bool, accent, secondary) -> None:
+    box = tuple(_s(value) for value in (x, y, x + diameter, y + diameter))
+    if shown:
+        glow = _s(17 if is_new else 8)
+        draw.ellipse((box[0]-glow, box[1]-glow, box[2]+glow, box[3]+glow), fill=(*accent, 58 if is_new else 24))
+        draw.ellipse(box, fill=(250, 253, 255, 255), outline=(*accent, 255), width=max(3, _s(7 if is_new else 4)))
+        highlight = _s(max(8, diameter * 0.12))
+        draw.ellipse((box[0]+highlight, box[1]+highlight, box[0]+highlight*3, box[1]+highlight*2), fill=(255, 255, 255, 150))
+        font_size = 54 if diameter >= 116 else 43 if diameter >= 100 else 34
+        if len(number) > 3:
+            font_size = max(20, round(font_size * 0.62))
+        _center(draw, ((box[0]+box[2])//2, (box[1]+box[3])//2 + _s(2)), number, font_size, secondary, True)
+    else:
+        draw.ellipse(box, fill=(4, 12, 20, 90), outline=(*accent, 82), width=max(2, _s(3)))
+        _center(draw, ((box[0]+box[2])//2, (box[1]+box[3])//2), "?", 39, (*accent, 95), True)
+
+
 def _draw_numbers(draw: ImageDraw.ImageDraw, numbers: Sequence[str], visible_count: int, accent, secondary, top_y: int = 590) -> None:
     count = max(1, len(numbers))
     columns, rows, diameter, gap = _number_layout(count)
     vertical_gap = 28 if rows <= 2 else 22
     total_height = rows * diameter + (rows - 1) * vertical_gap
     start_y = top_y + max(0, (690 - total_height) // 2)
+    new_group = max(1, math.ceil(count / 6))
 
     for index in range(count):
         row = index // columns
@@ -223,22 +248,37 @@ def _draw_numbers(draw: ImageDraw.ImageDraw, numbers: Sequence[str], visible_cou
         start_x = (1080 - row_width) // 2
         x = start_x + column * (diameter + gap)
         y = start_y + row * (diameter + vertical_gap)
-        box = tuple(_s(value) for value in (x, y, x + diameter, y + diameter))
         shown = index < visible_count
-        is_new = shown and index >= max(0, visible_count - math.ceil(count / 6))
+        is_new = shown and index >= max(0, visible_count - new_group)
+        _draw_ball(draw, x, y, diameter, numbers[index], shown, is_new, accent, secondary)
 
-        if shown:
-            glow = _s(15 if is_new else 8)
-            draw.ellipse((box[0]-glow, box[1]-glow, box[2]+glow, box[3]+glow), fill=(*accent, 45 if is_new else 22))
-            draw.ellipse(box, fill=(250, 253, 255, 255), outline=(*accent, 255), width=max(3, _s(6 if is_new else 4)))
-            number = numbers[index]
-            font_size = 54 if diameter >= 116 else 43 if diameter >= 100 else 34
-            if len(number) > 3:
-                font_size = max(20, round(font_size * 0.62))
-            _center(draw, ((box[0]+box[2])//2, (box[1]+box[3])//2 + _s(2)), number, font_size, secondary, True)
-        else:
-            draw.ellipse(box, fill=(4, 12, 20, 90), outline=(*accent, 82), width=max(2, _s(3)))
-            _center(draw, ((box[0]+box[2])//2, (box[1]+box[3])//2), "?", 39, (*accent, 95), True)
+
+def _draw_dupla_sena(draw: ImageDraw.ImageDraw, numbers: Sequence[str], visible_count: int, accent, secondary) -> None:
+    groups = [("1º SORTEIO", list(numbers[:6]), 600), ("2º SORTEIO", list(numbers[6:12]), 985)]
+    for group_index, (label, group_numbers, label_y) in enumerate(groups):
+        _panel(draw, (345, label_y, 735, label_y + 64), 24, (3, 16, 24, 215), (*accent, 170), 2)
+        _center(draw, (_s(540), _s(label_y + 32)), label, 28, accent, True)
+        start_y = label_y + 98
+        diameter = 118
+        gap = 28
+        row_width = len(group_numbers) * diameter + max(0, len(group_numbers) - 1) * gap
+        start_x = (1080 - row_width) // 2
+        group_visible = max(0, min(6, visible_count - group_index * 6))
+        for index, number in enumerate(group_numbers):
+            shown = index < group_visible
+            is_new = shown and index == group_visible - 1
+            _draw_ball(draw, start_x + index * (diameter + gap), start_y, diameter, number, shown, is_new, accent, secondary)
+
+
+def _official_footer(draw: ImageDraw.ImageDraw, data: Dict[str, Any], accent) -> None:
+    updated = str(data.get("atualizado_em") or "").strip()
+    if not updated:
+        try:
+            updated = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y às %H:%M")
+        except Exception:
+            updated = datetime.now().strftime("%d/%m/%Y às %H:%M")
+    _center(draw, (_s(540), _s(1805)), f"FONTE: CAIXA LOTERIAS  •  ATUALIZADO EM {updated}", 18, (*accent, 225), True)
+    _center(draw, (_s(540), _s(1850)), "CONTEÚDO INFORMATIVO • RESULTADO OFICIAL", 20, (255, 255, 255, 178), False)
 
 
 def scene_image(data: Dict[str, Any], scene: str, visible_count: int = 0, seed: int = 1) -> Image.Image:
@@ -250,6 +290,7 @@ def scene_image(data: Dict[str, Any], scene: str, visible_count: int = 0, seed: 
     image_path = str(data.get("imagem_path") or "").strip()
     preview = bool(data.get("previa", False))
     numbers, extra = prepare_numbers(loteria, data.get("numeros") or data.get("descricao") or "")
+    key = _slug(loteria)
     primary, secondary, accent = _palette(loteria, data.get("cor_fundo_rgb"))
 
     image = _base_image(image_path, (primary, secondary, accent))
@@ -259,20 +300,25 @@ def scene_image(data: Dict[str, Any], scene: str, visible_count: int = 0, seed: 
     _brand(draw, accent, secondary, preview)
 
     if scene == "intro":
-        _center(draw, (_s(540), _s(480)), loteria.upper(), 112 if len(loteria) <= 13 else 78, (255, 255, 255), True, 3, (0, 0, 0, 180))
+        _center(draw, (_s(540), _s(420)), loteria.upper(), 110 if len(loteria) <= 13 else 78, (255, 255, 255), True, 3, (0, 0, 0, 180))
         if concurso:
-            _panel(draw, (255, 600, 825, 684), 30, (*accent, 235), (255, 255, 255, 90), 2)
-            _center(draw, (_s(540), _s(642)), f"CONCURSO {concurso}", 38, secondary, True)
-        _center(draw, (_s(540), _s(815)), "OS NÚMEROS ESTÃO CHEGANDO", 35, (235, 255, 243), True)
-        _center(draw, (_s(540), _s(910)), "ACOMPANHE ATÉ O FINAL", 45, accent, True)
-        _panel(draw, (130, 1515, 950, 1642), 42, (3, 15, 22, 210), (*accent, 150), 2)
-        _center(draw, (_s(540), _s(1578)), "PORTAL SIMONSPORTS", 42, (255, 255, 255), True)
+            _panel(draw, (255, 565, 825, 653), 30, (*accent, 238), (255, 255, 255, 90), 2)
+            _center(draw, (_s(540), _s(609)), f"CONCURSO {concurso}", 39, secondary, True)
+        _center(draw, (_s(540), _s(785)), "RESULTADO OFICIAL", 42, (245, 255, 248), True)
+        _center(draw, (_s(540), _s(895)), "CONFIRA AGORA", 62, accent, True, 2, (0, 0, 0, 165))
+        if date:
+            _center(draw, (_s(540), _s(1000)), f"SORTEIO DE {date}", 29, (235, 255, 242), True)
+        _panel(draw, (150, 1440, 930, 1570), 42, (3, 15, 22, 210), (*accent, 155), 2)
+        _center(draw, (_s(540), _s(1505)), "NÚMEROS EM SEGUIDA", 39, (255, 255, 255), True)
 
     elif scene == "reveal":
         _draw_title(draw, loteria, concurso, date, accent)
-        _center(draw, (_s(540), _s(510)), "NÚMEROS SORTEADOS", 31, (230, 255, 238), True)
+        _center(draw, (_s(540), _s(510)), "RESULTADO OFICIAL • NÚMEROS SORTEADOS", 29, (235, 255, 242), True)
         if numbers:
-            _draw_numbers(draw, numbers, visible_count, accent, secondary)
+            if "dupla-sena" in key and len(numbers) >= 12:
+                _draw_dupla_sena(draw, numbers, visible_count, accent, secondary)
+            else:
+                _draw_numbers(draw, numbers, visible_count, accent, secondary)
             _panel(draw, (148, 1485, 932, 1598), 38, (3, 18, 24, 215), (*accent, 145), 2)
             _center(draw, (_s(540), _s(1540)), f"{visible_count} DE {len(numbers)} REVELADOS", 31, accent, True)
         else:
@@ -284,7 +330,10 @@ def scene_image(data: Dict[str, Any], scene: str, visible_count: int = 0, seed: 
         _draw_title(draw, loteria, concurso, date, accent)
         _center(draw, (_s(540), _s(505)), "RESULTADO COMPLETO", 38, (255, 255, 255), True)
         if numbers:
-            _draw_numbers(draw, numbers, len(numbers), accent, secondary)
+            if "dupla-sena" in key and len(numbers) >= 12:
+                _draw_dupla_sena(draw, numbers, len(numbers), accent, secondary)
+            else:
+                _draw_numbers(draw, numbers, len(numbers), accent, secondary)
         else:
             _center(draw, (_s(540), _s(820)), "14 JOGOS", 102, accent, True)
             _center(draw, (_s(540), _s(940)), "RESULTADO COMPLETO NO PORTAL", 38, (255, 255, 255), True)
@@ -296,25 +345,25 @@ def scene_image(data: Dict[str, Any], scene: str, visible_count: int = 0, seed: 
             _center(draw, (_s(540), _s(1572)), prize, 51, secondary, True)
 
     else:
-        _center(draw, (_s(540), _s(370)), "CONFIRA O", 72, (255, 255, 255), True, 2, (0, 0, 0, 160))
-        _center(draw, (_s(540), _s(500)), "RESULTADO", 103, accent, True, 3, (0, 0, 0, 180))
-        _center(draw, (_s(540), _s(610)), "COMPLETO", 75, (255, 255, 255), True, 2, (0, 0, 0, 160))
-        _center(draw, (_s(540), _s(735)), "NO PORTAL SIMONSPORTS", 35, (230, 255, 238), True)
+        _center(draw, (_s(540), _s(350)), "RESULTADO COMPLETO", 68, (255, 255, 255), True, 2, (0, 0, 0, 160))
+        _center(draw, (_s(540), _s(500)), "PORTAL", 78, accent, True, 3, (0, 0, 0, 180))
+        _center(draw, (_s(540), _s(605)), "SIMONSPORTS", 74, (255, 255, 255), True, 2, (0, 0, 0, 160))
+        _panel(draw, (160, 730, 920, 855), 42, (*accent, 225), (255, 255, 255, 85), 2)
+        _center(draw, (_s(540), _s(792)), "LINK NA DESCRIÇÃO", 42, secondary, True)
         domain = re.sub(r"^https?://", "", url).split("/")[0] or "www.portalsimonsports.com"
-        _panel(draw, (94, 835, 986, 955), 42, (250, 253, 255, 245), (*accent, 190), 3)
-        _center(draw, (_s(540), _s(895)), domain, 34, secondary, True)
-        labels = [("RESULTADOS", "ATUALIZADOS"), ("INFORMAÇÃO", "CONFIÁVEL"), ("TUDO SOBRE", "LOTERIAS")]
+        _center(draw, (_s(540), _s(925)), domain, 31, (235, 255, 242), True)
+        labels = [("RESULTADOS", "ATUALIZADOS"), ("FONTE", "OFICIAL"), ("TODAS AS", "LOTERIAS")]
         for index, (line1, line2) in enumerate(labels):
             center_x = 220 + index * 320
-            draw.ellipse((_s(center_x-54), _s(1085), _s(center_x+54), _s(1193)), fill=(3, 20, 25, 220), outline=(*accent, 175), width=_s(3))
-            _center(draw, (_s(center_x), _s(1139)), "✓", 44, accent, True)
-            _center(draw, (_s(center_x), _s(1250)), line1, 20, (255, 255, 255), True)
-            _center(draw, (_s(center_x), _s(1283)), line2, 20, accent, True)
-        _panel(draw, (170, 1440, 910, 1575), 42, (*accent, 215))
-        _center(draw, (_s(540), _s(1482)), "ACESSE AGORA", 38, secondary, True)
-        _center(draw, (_s(540), _s(1530)), "E ACOMPANHE OS PRÓXIMOS SORTEIOS", 22, secondary, True)
+            draw.ellipse((_s(center_x-54), _s(1080), _s(center_x+54), _s(1188)), fill=(3, 20, 25, 220), outline=(*accent, 175), width=_s(3))
+            _center(draw, (_s(center_x), _s(1134)), "✓", 44, accent, True)
+            _center(draw, (_s(center_x), _s(1245)), line1, 20, (255, 255, 255), True)
+            _center(draw, (_s(center_x), _s(1278)), line2, 20, accent, True)
+        _panel(draw, (150, 1430, 930, 1580), 42, (3, 16, 24, 225), (*accent, 175), 2)
+        _center(draw, (_s(540), _s(1475)), "INSCREVA-SE NO CANAL", 36, (255, 255, 255), True)
+        _center(draw, (_s(540), _s(1530)), "E ATIVE AS NOTIFICAÇÕES", 25, accent, True)
 
-    _center(draw, (_s(540), _s(1855)), "CONTEÚDO INFORMATIVO • RESULTADOS DE LOTERIAS", 21, (255, 255, 255, 175), False)
+    _official_footer(draw, data, accent)
     return image.convert("RGB")
 
 
