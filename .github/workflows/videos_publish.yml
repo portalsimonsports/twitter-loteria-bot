@@ -18,6 +18,7 @@ on:
       - gerador_video.py
       - gerador_video_v5.py
       - gerador_video_v6.py
+      - gerador_video_v7.py
       - video_visual_v3.py
       - video_visual_v5.py
       - video_visual_v6.py
@@ -40,7 +41,7 @@ permissions:
 
 jobs:
   preview:
-    name: Gerar prévia contínua de 60 segundos
+    name: Gerar prévia profissional de 60 segundos
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.modo == 'preview' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -63,7 +64,7 @@ jobs:
 
       - name: Validar módulos
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
 
       - name: Gerar vídeo de prévia
         env:
@@ -118,7 +119,7 @@ jobs:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
           import os
