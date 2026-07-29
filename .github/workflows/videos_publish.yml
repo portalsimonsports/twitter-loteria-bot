@@ -29,7 +29,7 @@ on:
 
 concurrency:
   group: youtube-loterias-publicacao
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -146,10 +146,11 @@ jobs:
           COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
           ENFILEIRADO_VIDEOS_COL: ${{ vars.ENFILEIRADO_VIDEOS_COL || 'Enfileirado_Videos' }}
           PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL || 'Publicado_Youtube' }}
-          MAX_VIDEOS_RODADA: ${{ vars.MAX_VIDEOS_RODADA || '3' }}
+          MAX_VIDEOS_RODADA: ${{ vars.MAX_VIDEOS_RODADA || '1' }}
           PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '2.0' }}
           AUTO_ENQUEUE_VIDEOS: "true"
-          VIDEO_BACKLOG_DAYS: ${{ vars.VIDEO_BACKLOG_DAYS || '14' }}
+          VIDEO_BACKLOG_DAYS: ${{ vars.VIDEO_BACKLOG_DAYS || '7' }}
+          ALLOW_OLD_QUEUED_VIDEOS: "false"
           DRY_RUN_VIDEOS: "false"
           DURACAO_VIDEO: "30"
           VIDEO_WIDTH: "1080"
