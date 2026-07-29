@@ -21,6 +21,7 @@ on:
       - gerador_video_v7.py
       - gerador_video_v8.py
       - gerador_video_v9.py
+      - gerador_pacote_v10.py
       - audio_identity_v8.py
       - audio_identity_v9.py
       - video_visual_v3.py
@@ -46,10 +47,10 @@ permissions:
 
 jobs:
   preview:
-    name: Gerar prévia V9 sem locução de 60 segundos
+    name: Gerar prévia V10 — Short e vídeo completo
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.modo == 'preview' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 120
 
     steps:
       - name: Checkout do repositório
@@ -63,30 +64,30 @@ jobs:
       - name: Instalar FFmpeg, fontes e dependências
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation2
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
       - name: Validar módulos
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
 
-      - name: Gerar vídeo de prévia
+      - name: Gerar pacote de prévia
         env:
           VIDEO_WIDTH: "1080"
           VIDEO_HEIGHT: "1920"
           VIDEO_FPS: "30"
-          DURACAO_VIDEO: "60"
         run: |
           rm -rf preview_output
           python video_preview.py --source data/to_publish.json --output-dir preview_output --duration 60
           ls -lh preview_output
-          test -n "$(find preview_output -maxdepth 1 -name '*.mp4' -print -quit)"
+          test -n "$(find preview_output -maxdepth 1 -name 'short_*.mp4' -print -quit)"
+          test -n "$(find preview_output -maxdepth 1 -name 'video_completo_*.mp4' -print -quit)"
 
-      - name: Disponibilizar artefato da prévia
+      - name: Disponibilizar pacote para aprovação
         uses: actions/upload-artifact@v4
         with:
-          name: previa-youtube-v9-sem-locucao-60s-${{ github.run_number }}
+          name: previa-youtube-v10-short-e-completo-${{ github.run_number }}
           path: |
             preview_output/*.mp4
             preview_output/*.png
@@ -94,10 +95,10 @@ jobs:
           retention-days: 14
 
   publish:
-    name: Gerar e publicar Shorts no YouTube
-    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'publish') }}
+    name: Publicar Short e vídeo completo no YouTube
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'publish') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 120
 
     steps:
       - name: Checkout do repositório
@@ -111,7 +112,7 @@ jobs:
       - name: Instalar dependências do sistema
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation2
           ffmpeg -version | head -n 1
 
       - name: Instalar dependências Python
@@ -124,7 +125,7 @@ jobs:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
           import os
@@ -148,7 +149,7 @@ jobs:
           print("Código e configurações obrigatórias validados.")
           PY
 
-      - name: Executar fila automática e publicar
+      - name: Executar fila automática e publicar pacote
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
@@ -163,7 +164,6 @@ jobs:
           VIDEO_BACKLOG_DAYS: ${{ vars.VIDEO_BACKLOG_DAYS || '7' }}
           ALLOW_OLD_QUEUED_VIDEOS: "false"
           DRY_RUN_VIDEOS: "false"
-          DURACAO_VIDEO: "60"
           VIDEO_WIDTH: "1080"
           VIDEO_HEIGHT: "1920"
           VIDEO_FPS: "30"
@@ -176,7 +176,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: videos-youtube-gerados-${{ github.run_number }}
+          name: videos-youtube-v10-${{ github.run_number }}
           path: output/*.mp4
           if-no-files-found: ignore
           retention-days: 7
