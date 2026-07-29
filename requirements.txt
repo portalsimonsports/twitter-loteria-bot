@@ -1,10 +1,10 @@
 # ===============================================================
 # Portal SimonSports — Publicador Automático de Loterias
 # Arquivo: requirements.txt
-# Revisão: 2026-07-29 (Identidade audiovisual V9 sem locução)
+# Revisão: 2026-07-29 (V11 com diálogo neural de três vozes)
 # ---------------------------------------------------------------
 # Dependências para publicação automática, Google Sheets,
-# geração visual, vídeo e identidade sonora original.
+# geração visual, vídeo, trilha e locução neural.
 # ===============================================================
 
 # Google Sheets / Drive API
@@ -34,8 +34,9 @@ proglog>=0.1.10
 decorator>=5.1.1
 imageio-ffmpeg>=0.4.9
 
-# A identidade sonora V9 é sintetizada localmente pelo código.
-# Não utiliza TTS, voz neural ou serviço externo de locução.
+# Locução neural V11
+# Vozes aprovadas: Francisca, Thalita e Antônio.
+edge-tts>=7.2.0
 
 # ===============================================================
 # Fim do arquivo
