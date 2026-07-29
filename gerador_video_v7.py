@@ -144,7 +144,8 @@ def _draw_focus_ball(
         center_x = focus_center[0] + (target_x - focus_center[0]) * phase
         center_y = focus_center[1] + (target_y - focus_center[1]) * phase
         diameter = FOCUS_DIAMETER + (target_diameter - FOCUS_DIAMETER) * phase
-        opacity = 1.0
+        settle = _ease((progress - 0.84) / 0.16) if progress > 0.84 else 0.0
+        opacity = 1.0 - settle
 
     loteria = str(data.get("loteria") or data.get("produto") or "Loteria").strip()
     primary, _dark, light = v5._palette(loteria, data.get("cor_fundo_rgb"))
@@ -256,12 +257,22 @@ def gerar_video_loteria(data: Dict[str, Any]) -> str:
                             None,
                         )
                         if active is not None:
-                            base_frame = _moving_crop(cumulative[active], t)
+                            event_progress = (t - reveal_times[active]) / animation_duration
+                            base_before = _moving_crop(cumulative[active], t)
+                            if event_progress > 0.82:
+                                base_after = _moving_crop(cumulative[active + 1], t)
+                                base_frame = Image.blend(
+                                    base_before,
+                                    base_after,
+                                    _ease((event_progress - 0.82) / 0.18),
+                                )
+                            else:
+                                base_frame = base_before
                             target = _target_geometry(positions[active], cumulative[active], t)
                             frame = _draw_focus_ball(
                                 base_frame,
                                 sprites[active],
-                                (t - reveal_times[active]) / animation_duration,
+                                event_progress,
                                 target,
                                 data,
                             )
