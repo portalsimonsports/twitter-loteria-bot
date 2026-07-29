@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       modo:
-        description: "Escolha prévia para gerar MP4 sem publicar ou publicar para processar a fila"
+        description: "Gerar prévia ou processar a fila e publicar"
         required: true
         default: preview
         type: choice
@@ -16,6 +16,7 @@ on:
       - main
     paths:
       - gerador_video.py
+      - video_visual_v3.py
       - video_preview.py
       - video_queue.py
       - post_video.py
@@ -23,21 +24,21 @@ on:
       - youtube_upload.py
       - .github/workflows/videos_publish.yml
   schedule:
-    - cron: "*/20 * * * *"
+    - cron: "15 2 * * *"
 
 concurrency:
-  group: publish-videos-${{ github.event_name }}
-  cancel-in-progress: true
+  group: youtube-loterias-publicacao
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   preview:
-    name: Gerar prévia para aprovação
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'preview') }}
+    name: Gerar prévia de 30 segundos
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.modo == 'preview' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
 
     steps:
       - name: Checkout do repositório
@@ -55,17 +56,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install "Pillow>=10.4.0"
 
+      - name: Validar módulos
+        run: |
+          python -m py_compile gerador_video.py video_visual_v3.py video_preview.py
+
       - name: Gerar vídeo de prévia
+        env:
+          VIDEO_WIDTH: "1080"
+          VIDEO_HEIGHT: "1920"
+          VIDEO_FPS: "30"
         run: |
           rm -rf preview_output
-          python video_preview.py --source data/to_publish.json --output-dir preview_output --duration 8
+          python video_preview.py --source data/to_publish.json --output-dir preview_output --duration 30
           ls -lh preview_output
           test -n "$(find preview_output -maxdepth 1 -name '*.mp4' -print -quit)"
 
-      - name: Publicar artefato da prévia
+      - name: Disponibilizar artefato da prévia
         uses: actions/upload-artifact@v4
         with:
-          name: previa-youtube-loterias-${{ github.run_number }}
+          name: previa-youtube-loterias-30s-${{ github.run_number }}
           path: |
             preview_output/*.mp4
             preview_output/*.png
@@ -73,10 +82,10 @@ jobs:
           retention-days: 14
 
   publish:
-    name: Processar fila e publicar no YouTube
-    if: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'publish')) && vars.ENABLE_VIDEOS == 'true' && vars.YOUTUBE_APPROVED == 'true' }}
+    name: Gerar e publicar Shorts no YouTube
+    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'publish') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout do repositório
@@ -98,11 +107,12 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar configuração obrigatória
+      - name: Validar código e configuração obrigatória
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
+          python -m py_compile gerador_video.py video_visual_v3.py video_queue.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
           import os
@@ -123,10 +133,10 @@ jobs:
           except Exception as exc:
               print("GOOGLE_SERVICE_JSON inválido:", exc)
               sys.exit(1)
-          print("Configuração obrigatória validada.")
+          print("Código e configurações obrigatórias validados.")
           PY
 
-      - name: Executar fila de vídeos
+      - name: Executar fila e publicar
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
@@ -135,10 +145,23 @@ jobs:
           COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
           ENFILEIRADO_VIDEOS_COL: ${{ vars.ENFILEIRADO_VIDEOS_COL || 'Enfileirado_Videos' }}
           PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL || 'Publicado_Youtube' }}
-          MAX_VIDEOS_RODADA: ${{ vars.MAX_VIDEOS_RODADA || '10' }}
+          MAX_VIDEOS_RODADA: ${{ vars.MAX_VIDEOS_RODADA || '3' }}
           PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '2.0' }}
-          DRY_RUN_VIDEOS: ${{ vars.DRY_RUN_VIDEOS || 'false' }}
-          DURACAO_VIDEO: ${{ vars.DURACAO_VIDEO || '8' }}
+          DRY_RUN_VIDEOS: "false"
+          DURACAO_VIDEO: "30"
+          VIDEO_WIDTH: "1080"
+          VIDEO_HEIGHT: "1920"
+          VIDEO_FPS: "30"
           TZ: America/Sao_Paulo
         run: |
+          mkdir -p output
           python video_queue.py
+
+      - name: Guardar vídeos gerados para auditoria
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: videos-youtube-gerados-${{ github.run_number }}
+          path: output/*.mp4
+          if-no-files-found: ignore
+          retention-days: 7
