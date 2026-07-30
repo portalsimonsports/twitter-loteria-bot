@@ -17,10 +17,19 @@ v15.VOICE_SETTINGS.setdefault(
     {"rate": "-1%", "pitch": "+0Hz", "volume": "+0%"},
 )
 
+# Nomes públicos exibidos nos vídeos, capas e chamadas.
+# Os identificadores técnicos das vozes permanecem distintos internamente.
 VOICE_LABELS = {
     VOICE_FRANCISCA: "Francisca",
-    VOICE_THALITA_MULTILINGUAL: "Thalita Multilingual",
+    VOICE_THALITA_MULTILINGUAL: "Thalita",
     VOICE_ANTONIO: "Antônio",
+    VOICE_THALITA_NEURAL: "Thalita",
+}
+
+TECHNICAL_VOICE_LABELS = {
+    VOICE_FRANCISCA: "Francisca Neural",
+    VOICE_THALITA_MULTILINGUAL: "Thalita Multilingual Neural",
+    VOICE_ANTONIO: "Antônio Neural",
     VOICE_THALITA_NEURAL: "Thalita Neural",
 }
 
@@ -47,7 +56,13 @@ _BASE_SYNTHESIZE = v15.synthesize_narration_mix
 
 
 def voice_label(voice: str) -> str:
-    return VOICE_LABELS.get(voice, v15.voice_label(voice))
+    """Nome público curto usado no vídeo."""
+    return VOICE_LABELS.get(voice, v15.voice_label(voice).split()[0])
+
+
+def technical_voice_label(voice: str) -> str:
+    """Nome técnico reservado a logs e diagnóstico."""
+    return TECHNICAL_VOICE_LABELS.get(voice, str(voice or "Voz"))
 
 
 def _seed(data: Dict[str, Any]) -> int:
@@ -70,7 +85,12 @@ def select_presenter_pair(data: Dict[str, Any]) -> Tuple[str, str]:
 
 
 def pair_label(pair: Sequence[str]) -> str:
+    """Rótulo público com apenas os primeiros nomes."""
     return " e ".join(voice_label(voice) for voice in pair)
+
+
+def technical_pair_label(pair: Sequence[str]) -> str:
+    return " e ".join(technical_voice_label(voice) for voice in pair)
 
 
 def _slug(value: str) -> str:
@@ -237,5 +257,7 @@ __all__ = [
     "select_single_voice",
     "synthesize_dialogue_mix",
     "synthesize_single_mix",
+    "technical_pair_label",
+    "technical_voice_label",
     "voice_label",
 ]
