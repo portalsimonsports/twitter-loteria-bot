@@ -1,0 +1,29 @@
+AMOSTRAS DE APRESENTADORES — PORTAL SIMONSPORTS
+
+Texto: Portal SimonSports. Chegou a hora de conferir o resultado oficial da Mega-Sena, concurso três mil e vinte e um. Tenha o seu comprovante em mãos. Vamos ao resultado.
+
+Vozes válidas: 1
+01. Thalita Neural | pt-BR-ThalitaNeural | thalita_neural.mp3
+
+Vozes recusadas pelo serviço: 19
+- Macerio Multilingual | pt-BR-MacerioMultilingualNeural | No audio was received. Please verify that your parameters are correct.
+- Brenda | pt-BR-BrendaNeural | No audio was received. Please verify that your parameters are correct.
+- Donato | pt-BR-DonatoNeural | No audio was received. Please verify that your parameters are correct.
+- Elza | pt-BR-ElzaNeural | No audio was received. Please verify that your parameters are correct.
+- Fábio | pt-BR-FabioNeural | No audio was received. Please verify that your parameters are correct.
+- Giovanna | pt-BR-GiovannaNeural | No audio was received. Please verify that your parameters are correct.
+- Humberto | pt-BR-HumbertoNeural | No audio was received. Please verify that your parameters are correct.
+- Júlio | pt-BR-JulioNeural | No audio was received. Please verify that your parameters are correct.
+- Leila | pt-BR-LeilaNeural | No audio was received. Please verify that your parameters are correct.
+- Manuela | pt-BR-ManuelaNeural | No audio was received. Please verify that your parameters are correct.
+- Nicolau | pt-BR-NicolauNeural | No audio was received. Please verify that your parameters are correct.
+- Valério | pt-BR-ValerioNeural | No audio was received. Please verify that your parameters are correct.
+- Yara | pt-BR-YaraNeural | No audio was received. Please verify that your parameters are correct.
+- Macerio HD | pt-BR-Macerio:DragonHDLatestNeural | No audio was received. Please verify that your parameters are correct.
+- Thalita HD | pt-BR-Thalita:DragonHDLatestNeural | No audio was received. Please verify that your parameters are correct.
+- Caio | pt-BR-Caio:MAI-Voice-2 | Invalid voice 'pt-BR-Caio:MAI-Voice-2'.
+- Luana | pt-BR-Luana:MAI-Voice-2 | Invalid voice 'pt-BR-Luana:MAI-Voice-2'.
+- Pedro | pt-BR-Pedro:MAI-Voice-2 | Invalid voice 'pt-BR-Pedro:MAI-Voice-2'.
+- Rafael | pt-BR-Rafael:MAI-Voice-2 | Invalid voice 'pt-BR-Rafael:MAI-Voice-2'.
+
+Nenhum áudio duplicado entre as vozes válidas.

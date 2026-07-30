@@ -1,0 +1,187 @@
+{
+  "texto": "Portal SimonSports. Chegou a hora de conferir o resultado oficial da Mega-Sena, concurso três mil e vinte e um. Tenha o seu comprovante em mãos. Vamos ao resultado.",
+  "validas": [
+    {
+      "label": "Thalita Neural",
+      "voice": "pt-BR-ThalitaNeural",
+      "file": "thalita_neural.mp3",
+      "bytes": 67968,
+      "sha256": "a93f5cdeadb3dc452c77121da58a6536882b39e16151f0110a9d99664f9c98bd",
+      "status": "ok"
+    }
+  ],
+  "rejeitadas": [
+    {
+      "label": "Macerio Multilingual",
+      "voice": "pt-BR-MacerioMultilingualNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Brenda",
+      "voice": "pt-BR-BrendaNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Donato",
+      "voice": "pt-BR-DonatoNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Elza",
+      "voice": "pt-BR-ElzaNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Fábio",
+      "voice": "pt-BR-FabioNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Giovanna",
+      "voice": "pt-BR-GiovannaNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Humberto",
+      "voice": "pt-BR-HumbertoNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Júlio",
+      "voice": "pt-BR-JulioNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Leila",
+      "voice": "pt-BR-LeilaNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Manuela",
+      "voice": "pt-BR-ManuelaNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Nicolau",
+      "voice": "pt-BR-NicolauNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Valério",
+      "voice": "pt-BR-ValerioNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Yara",
+      "voice": "pt-BR-YaraNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Macerio HD",
+      "voice": "pt-BR-Macerio:DragonHDLatestNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Thalita HD",
+      "voice": "pt-BR-Thalita:DragonHDLatestNeural",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "No audio was received. Please verify that your parameters are correct."
+    },
+    {
+      "label": "Caio",
+      "voice": "pt-BR-Caio:MAI-Voice-2",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "Invalid voice 'pt-BR-Caio:MAI-Voice-2'."
+    },
+    {
+      "label": "Luana",
+      "voice": "pt-BR-Luana:MAI-Voice-2",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "Invalid voice 'pt-BR-Luana:MAI-Voice-2'."
+    },
+    {
+      "label": "Pedro",
+      "voice": "pt-BR-Pedro:MAI-Voice-2",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "Invalid voice 'pt-BR-Pedro:MAI-Voice-2'."
+    },
+    {
+      "label": "Rafael",
+      "voice": "pt-BR-Rafael:MAI-Voice-2",
+      "file": "",
+      "bytes": 0,
+      "sha256": "",
+      "status": "erro",
+      "erro": "Invalid voice 'pt-BR-Rafael:MAI-Voice-2'."
+    }
+  ],
+  "duplicidades": []
+}
