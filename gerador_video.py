@@ -1,9 +1,10 @@
 """Compatibilidade do gerador de vídeos do Portal SimonSports.
 
-A implementação ativa está em gerador_pacote_v16.py. Cada edição utiliza uma
-única voz, alternando Francisca, Thalita e Antônio nos concursos seguintes. A
-locução anuncia diretamente as dezenas, sem ordinal, e começa quando o número já
-está visível no quadro, mantendo o áudio sem sobreposição.
+A implementação ativa está em gerador_pacote_v17.py. O vídeo completo utiliza
+dois apresentadores em diálogo natural, sem alternância entre as dezenas. O
+Short utiliza uma única voz. As quatro vozes aprovadas são alternadas de forma
+automática entre os concursos, com fallback individual se a dupla não puder ser
+gerada.
 """
 
-from gerador_pacote_v16 import *  # noqa: F401,F403
+from gerador_pacote_v17 import *  # noqa: F401,F403
