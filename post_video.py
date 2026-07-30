@@ -1,5 +1,5 @@
 # post_video.py — Portal SimonSports — YouTube Multi-Canal (Cofre Only)
-# Rev: 2026-07-30 — V17 final: diálogo, engajamento e metadados otimizados
+# Rev: 2026-07-30 — V18: especiais, Loteca, diálogo e metadados por modalidade
 
 import datetime as dt
 import re
@@ -8,6 +8,7 @@ import unicodedata
 from typing import Any, Dict, List, Optional
 
 from gerador_pacote_v10 import gerar_pacote
+from lottery_result_v18 import parse_lottery_result, team_name_without_code
 from youtube_auth import get_access_token
 from youtube_upload import build_watch_url, upload_video
 
@@ -90,53 +91,84 @@ def listar_contas_youtube(cofre_cache: Dict[str, Any]) -> List[str]:
     return sorted(account for account in accounts if account)
 
 
+def _loteca_lines(parts) -> List[str]:
+    lines = []
+    for game in parts.loteca_games:
+        home = team_name_without_code(game.home).title()
+        away = team_name_without_code(game.away).title()
+        lines.append(f"Jogo {game.index:02d}: {home} {game.home_score} x {game.away_score} {away}")
+    return lines
+
+
+def _special_lines(parts) -> List[str]:
+    if parts.trevos:
+        return ["Trevos da Sorte: " + " e ".join(parts.trevos) + "."]
+    if parts.team:
+        return [f"Time do Coração: {parts.team}."]
+    if parts.lucky_month:
+        return [f"Mês da Sorte: {parts.lucky_month}."]
+    return []
+
+
 def _metadata(dados_video: Dict[str, Any], tipo: str) -> Dict[str, Any]:
     lottery = str(dados_video.get("loteria") or "Loteria").strip()
     contest = str(dados_video.get("concurso") or "").strip()
     draw_date = str(dados_video.get("data") or "").strip()
-    numbers = _text_value(dados_video.get("numeros") or dados_video.get("descricao") or "")
-    numbers = re.sub(r"^n[uú]meros?\s*:\s*", "", numbers, flags=re.I).strip()
+    raw_result = dados_video.get("numeros") or dados_video.get("descricao") or dados_video.get("Descrição") or ""
+    parts = parse_lottery_result(lottery, raw_result)
+    numbers = ", ".join(parts.display_numbers)
     prize = _text_value(dados_video.get("premio") or "")
     reference_url = str(dados_video.get("url") or "https://www.portalsimonsports.com/").strip()
     contest_part = f" {contest}" if contest else ""
     contest_phrase = f", concurso {contest}" if contest else ""
     lottery_hashtag = _hashtag(lottery)
+    is_loteca = bool(parts.loteca_games)
 
     keyword_tags = [
-        f"resultado {lottery}",
-        f"{lottery} hoje",
-        f"resultado {lottery} hoje",
+        f"resultado {lottery}", f"{lottery} hoje", f"resultado {lottery} hoje",
         f"{lottery} concurso {contest}" if contest else f"concurso {lottery}",
         f"resultado {lottery} concurso {contest}" if contest else f"resultado oficial {lottery}",
-        "resultado loteria hoje",
-        "loterias Caixa hoje",
-        "dezenas sorteadas",
-        "resultado oficial Caixa",
-        "conferir resultado loteria",
-        "sorteio Caixa",
-        "Loterias Caixa",
-        "Portal SimonSports",
-        "SimonSports",
+        "resultado loteria hoje", "loterias Caixa hoje", "resultado oficial Caixa",
+        "conferir resultado loteria", "sorteio Caixa", "Loterias Caixa",
+        "Portal SimonSports", "SimonSports",
     ]
+    if is_loteca:
+        keyword_tags.extend(["14 jogos Loteca", "placares Loteca", "resultado Loteca completo", "conferir Loteca", "zebra Loteca"])
+    else:
+        keyword_tags.extend(["dezenas sorteadas", "números sorteados"])
+    if parts.trevos:
+        keyword_tags.extend(["Trevos da Sorte", "+Milionária trevos"])
+    if parts.team:
+        keyword_tags.extend(["Time do Coração", "Timemania time sorteado"])
+    if parts.lucky_month:
+        keyword_tags.extend(["Mês da Sorte", "Dia de Sorte mês sorteado"])
 
     if tipo == "completo":
-        title = str(
-            dados_video.get("title_completo")
-            or f"Resultado {lottery}{contest_part} — Dezenas Oficiais | SimonSports"
-        )[:100]
-
-        default_description = [
-            f"Resultado oficial da {lottery}{contest_phrase}. Confira todas as dezenas sorteadas e faça a sua conferência.",
-        ]
-        if numbers:
-            default_description.append(f"Dezenas sorteadas: {numbers}.")
+        default_title = (
+            f"Resultado Loteca{contest_part} — 14 Jogos e Placares | SimonSports"
+            if is_loteca else
+            f"Resultado {lottery}{contest_part} — Dezenas Oficiais | SimonSports"
+        )
+        title = str(dados_video.get("title_completo") or default_title)[:100]
+        if is_loteca:
+            default_description = [
+                f"Resultado oficial da Loteca{contest_phrase}. Confira os 14 jogos, placares e resultados do concurso.",
+                *_loteca_lines(parts),
+            ]
+        else:
+            default_description = [
+                f"Resultado oficial da {lottery}{contest_phrase}. Confira todas as dezenas sorteadas e faça a sua conferência."
+            ]
+            if numbers:
+                default_description.append(f"Dezenas sorteadas: {numbers}.")
+            default_description.extend(_special_lines(parts))
         if draw_date:
             default_description.append(f"Data do sorteio: {draw_date}.")
         if prize:
             default_description.append(f"Prêmio ou estimativa: {prize}.")
         default_description.extend([
             "",
-            "Comente quantas dezenas apareceram no seu jogo, deixe o like, compartilhe e inscreva-se no canal.",
+            "Comente como foi a sua conferência, deixe o like, compartilhe e inscreva-se no canal.",
             "",
             f"Resultado completo e informações desta edição: {reference_url}",
             f"Outros resultados da {lottery} e das Loterias Caixa: {RESULTS_INDEX_URL}",
@@ -148,20 +180,22 @@ def _metadata(dados_video: Dict[str, Any], tipo: str) -> Dict[str, Any]:
             f"{lottery_hashtag} #LoteriasCaixa #ResultadoOficial #PortalSimonSports #SimonSports",
         ])
         description = str(dados_video.get("description_completo") or "\n".join(default_description))[:4500]
-        tags = keyword_tags + [
-            "resultado completo",
-            "resultados de loterias",
-            "números sorteados",
-            "Simplesmente o Melhor",
-        ]
+        tags = keyword_tags + ["resultado completo", "resultados de loterias", "Simplesmente o Melhor"]
     else:
-        title = str(
-            dados_video.get("title_short")
-            or f"Resultado {lottery}{contest_part} Hoje #Shorts"
-        )[:100]
-
+        default_title = (
+            f"Loteca{contest_part} — 14 Placares #Shorts"
+            if is_loteca else
+            f"Resultado {lottery}{contest_part} Hoje #Shorts"
+        )
+        title = str(dados_video.get("title_short") or default_title)[:100]
+        lead = (
+            f"Resultado da Loteca{contest_phrase}. Confira os 14 placares neste Short."
+            if is_loteca else
+            f"Resultado da {lottery}{contest_phrase}. Confira as dezenas sorteadas neste Short."
+        )
         default_description = [
-            f"Resultado da {lottery}{contest_phrase}. Confira as dezenas sorteadas neste Short.",
+            lead,
+            *_special_lines(parts),
             "O vídeo completo está disponível no canal SimonSports.",
             "Toque no vídeo relacionado exibido no player do Short.",
             "",
@@ -174,12 +208,7 @@ def _metadata(dados_video: Dict[str, Any], tipo: str) -> Dict[str, Any]:
             f"#Shorts {lottery_hashtag} #LoteriasCaixa #PortalSimonSports",
         ]
         description = str(dados_video.get("description_short") or "\n".join(default_description))[:4500]
-        tags = keyword_tags + [
-            "Shorts",
-            "short de loteria",
-            "resultado em 30 segundos",
-            "resultado rápido",
-        ]
+        tags = keyword_tags + ["Shorts", "short de loteria", "resultado rápido"]
 
     return {"title": title, "description": description, "tags": tags}
 
@@ -198,30 +227,24 @@ def publicar_video_em_multicanais(
         message = "Nenhuma conta YOUTUBE com REFRESH_TOKEN no Cofre. Pulando."
         _log(message)
         return {
-            "ok_any": False,
-            "video_path": "",
-            "video_paths": {},
-            "results": [],
+            "ok_any": False, "video_path": "", "video_paths": {}, "results": [],
             "mark_value": f"Sem contas YOUTUBE no Cofre em {_ts_br(tz_name)}",
         }
 
     try:
         if dry_run:
             pacote = {
-                "short": "DRYRUN_short_resultado_30s.mp4",
+                "short": "DRYRUN_short_resultado.mp4",
                 "completo": "DRYRUN_video_completo_resultado.mp4",
                 "base": "",
             }
-            _log("DRY_RUN: pulando geração real do pacote V17.")
+            _log("DRY_RUN: pulando geração real do pacote V18.")
         else:
             pacote = gerar_pacote(dados_video)
     except Exception as error:
         _log("Erro ao gerar pacote de vídeos:", error)
         return {
-            "ok_any": False,
-            "video_path": "",
-            "video_paths": {},
-            "results": [],
+            "ok_any": False, "video_path": "", "video_paths": {}, "results": [],
             "mark_value": f"Erro ao gerar pacote de vídeos: {error}",
         }
 
@@ -236,13 +259,9 @@ def publicar_video_em_multicanais(
         client_id = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "CLIENT_ID", conta=account)
         client_secret = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "CLIENT_SECRET", conta=account)
         refresh_token = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "REFRESH_TOKEN", conta=account)
-
         if not (client_id and client_secret and refresh_token):
             _log(f"[{account}] Credenciais incompletas (CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN).")
-            results.append({
-                "conta": account, "status": "ERRO", "full_url": "", "short_url": "",
-                "error": "Credenciais incompletas",
-            })
+            results.append({"conta": account, "status": "ERRO", "full_url": "", "short_url": "", "error": "Credenciais incompletas"})
             continue
 
         privacy = _cofre_get_safe(cofre_get_fn, "YOUTUBE", "PRIVACY_STATUS", conta=account, default="public") or "public"
@@ -258,57 +277,38 @@ def publicar_video_em_multicanais(
             else:
                 access_token = get_access_token(client_id, client_secret, refresh_token)
                 full_id = upload_video(
-                    access_token=access_token,
-                    video_path=pacote["completo"],
-                    title=full_meta["title"],
-                    description=full_meta["description"],
-                    tags=full_tags,
-                    category_id=category_id,
-                    privacy_status=privacy,
+                    access_token=access_token, video_path=pacote["completo"],
+                    title=full_meta["title"], description=full_meta["description"], tags=full_tags,
+                    category_id=category_id, privacy_status=privacy,
                 )
                 full_url = build_watch_url(full_id)
                 _log(f"[{account}] Vídeo completo publicado → {full_url}")
-
                 short_id = upload_video(
-                    access_token=access_token,
-                    video_path=pacote["short"],
-                    title=short_meta["title"],
-                    description=short_meta["description"],
-                    tags=short_tags,
-                    category_id=category_id,
-                    privacy_status=privacy,
+                    access_token=access_token, video_path=pacote["short"],
+                    title=short_meta["title"], description=short_meta["description"], tags=short_tags,
+                    category_id=category_id, privacy_status=privacy,
                 )
-
             full_url = full_url or build_watch_url(full_id)
             short_url = build_watch_url(short_id)
-            _log(f"[{account}] Pacote V17 OK | completo={full_url} | Short={short_url}")
+            _log(f"[{account}] Pacote V18 OK | completo={full_url} | Short={short_url}")
             ok_any = True
             results.append({
-                "conta": account,
-                "status": "OK",
-                "full_id": full_id,
-                "full_url": full_url,
-                "short_id": short_id,
-                "short_url": short_url,
-                "error": "",
+                "conta": account, "status": "OK", "full_id": full_id, "full_url": full_url,
+                "short_id": short_id, "short_url": short_url, "error": "",
             })
         except Exception as error:
             _log(f"[{account}] ERRO no pacote:", error)
             results.append({
-                "conta": account,
-                "status": "ERRO",
-                "full_url": full_url,
-                "short_url": short_url,
-                "error": str(error),
+                "conta": account, "status": "ERRO", "full_url": full_url,
+                "short_url": short_url, "error": str(error),
             })
-
         time.sleep(sleep_between_channels)
 
     published = [result for result in results if result.get("status") == "OK"]
     if published:
         first = published[0]
         mark_value = (
-            f"Publicado YOUTUBE V17 em {_ts_br(tz_name)} | "
+            f"Publicado YOUTUBE V18 em {_ts_br(tz_name)} | "
             f"Completo: {first.get('full_url', '')} | Short: {first.get('short_url', '')} | "
             "Pendente: selecionar o completo como vídeo relacionado no Short"
         )
@@ -317,7 +317,7 @@ def publicar_video_em_multicanais(
             f"{result.get('conta', '')}: {result.get('error', '')}"
             for result in results if result.get("status") == "ERRO"
         ]
-        mark_value = f"Falha YOUTUBE V17 em {_ts_br(tz_name)} | " + " | ".join(errors[:2])
+        mark_value = f"Falha YOUTUBE V18 em {_ts_br(tz_name)} | " + " | ".join(errors[:2])
 
     return {
         "ok_any": ok_any,
