@@ -9,6 +9,7 @@ on:
       - loteca_preview_v18.py
       - loteca_video_v18.py
       - loteca_columns_v18.py
+      - loteca_release_v18.py
       - lottery_result_v18.py
       - voice_narration_v18.py
       - gerador_pacote_v18.py
@@ -43,13 +44,14 @@ jobs:
 
       - name: Validar roteiro final da Loteca
         run: |
-          python -m py_compile loteca_preview_v18.py loteca_video_v18.py loteca_columns_v18.py lottery_result_v18.py voice_narration_v18.py gerador_pacote_v18.py
+          python -m py_compile loteca_preview_v18.py loteca_video_v18.py loteca_columns_v18.py loteca_release_v18.py lottery_result_v18.py voice_narration_v18.py gerador_pacote_v18.py
           python - <<'PY'
           from loteca_columns_v18 import (
               FINAL_SHORT_DURATION,
               game_speech,
               result_label,
           )
+          from loteca_release_v18 import FINAL_FULL_DURATION, FINAL_FULL_GAME_SLOT
           from lottery_result_v18 import LotecaGame
 
           mandante = LotecaGame(1, "Mandante", "Visitante", 2, 1)
@@ -65,7 +67,9 @@ jobs:
           assert "Vitória" not in game_speech(mandante)
           assert "Resultado na" not in game_speech(mandante)
           assert FINAL_SHORT_DURATION == 104.0
-          print("Loteca final validada: Coluna 1, Empate, Coluna 2 e locução natural.")
+          assert FINAL_FULL_DURATION == 298.0
+          assert FINAL_FULL_GAME_SLOT == 15.0
+          print("Loteca final validada: resultado alinhado, sugestões e locução natural.")
           PY
 
       - name: Gerar Short, vídeo completo e pôster
@@ -76,7 +80,7 @@ jobs:
           python loteca_preview_v18.py --output-dir preview_loteca_v18
           ls -lh preview_loteca_v18
           test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'short_loteca_*_104s_voz_v18.mp4' -print -quit)"
-          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'video_completo_loteca_*_270s_dialogo_v18.mp4' -print -quit)"
+          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'video_completo_loteca_*_298s_dialogo_v18.mp4' -print -quit)"
           test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'poster_loteca_*_v18.png' -print -quit)"
 
       - name: Disponibilizar vídeo final da Loteca
