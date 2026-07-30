@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 import traceback
+import unicodedata
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -19,6 +20,8 @@ from video_queue import (
     _validate_video_data,
     carregar_config,
 )
+
+Candidate = Tuple[int, Sequence[str], Dict[str, Any], datetime | None]
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -49,22 +52,52 @@ def _parse_date(value: Any) -> datetime | None:
     return None
 
 
-def _candidate_rows(values: List[List[str]], headers: List[str], published_index: int) -> List[Tuple[int, Sequence[str], Dict[str, Any], datetime | None]]:
+def _lottery_key(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii").lower()
+    return "-".join(part for part in "".join(ch if ch.isalnum() else " " for ch in ascii_text).split())
+
+
+def _recent_published_counts(
+    values: List[List[str]],
+    headers: List[str],
+    published_index: int,
+) -> Dict[str, int]:
+    balance_days = _env_int("VIDEO_MODALITY_BALANCE_DAYS", 30, 1, 3650)
+    cutoff = datetime.now() - timedelta(days=balance_days)
+    counts: Dict[str, int] = {}
+    for row in values[1:]:
+        published = row[published_index] if published_index < len(row) else ""
+        if _empty(published):
+            continue
+        try:
+            data = _row_to_video_data(row, headers)
+        except Exception:
+            continue
+        result_date = _parse_date(data.get("data"))
+        if result_date is not None and result_date < cutoff:
+            continue
+        key = _lottery_key(data.get("loteria"))
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _candidate_rows(values: List[List[str]], headers: List[str], published_index: int) -> List[Candidate]:
     auto_enqueue = _env_bool("AUTO_ENQUEUE_VIDEOS", True)
     backlog_days = _env_int("VIDEO_BACKLOG_DAYS", 7, 1, 3650)
     allow_old_queued = _env_bool("ALLOW_OLD_QUEUED_VIDEOS", False)
     cutoff = datetime.now() - timedelta(days=backlog_days)
     queue_index = _find_col(headers, ["Enfileirado_Videos", "Enfileirado Videos", "Fila_Video"])
+    published_counts = _recent_published_counts(values, headers, published_index)
 
-    candidates: List[Tuple[int, Sequence[str], Dict[str, Any], datetime | None]] = []
+    candidates: List[Candidate] = []
     for sheet_row, row in enumerate(values[1:], start=2):
         published = row[published_index] if published_index < len(row) else ""
         if not _empty(published):
             continue
 
-        queued = False
-        if queue_index is not None and queue_index < len(row):
-            queued = _truthy_queue(row[queue_index])
+        queued = queue_index is not None and queue_index < len(row) and _truthy_queue(row[queue_index])
         if not queued and not auto_enqueue:
             continue
 
@@ -81,12 +114,38 @@ def _candidate_rows(values: List[List[str]], headers: List[str], published_index
                 f"janela automática={backlog_days} dias."
             )
             continue
-
         candidates.append((sheet_row, row, data, result_date))
 
-    # Sempre publica primeiro o concurso mais recente. Datas desconhecidas ficam no fim.
-    candidates.sort(key=lambda item: (item[3] or datetime.min, item[0]), reverse=True)
+    def priority(item: Candidate):
+        sheet_row, _row, data, result_date = item
+        key = _lottery_key(data.get("loteria"))
+        count = published_counts.get(key, 0)
+        date_rank = result_date.timestamp() if result_date is not None else float("-inf")
+        return count, -date_rank, -sheet_row
+
+    # Primeiro a modalidade menos publicada; dentro dela, o concurso recente mais novo.
+    candidates.sort(key=priority)
     return candidates
+
+
+def _select_diverse(candidates: List[Candidate], maximum: int) -> List[Candidate]:
+    selected: List[Candidate] = []
+    used_modalities = set()
+    for candidate in candidates:
+        key = _lottery_key(candidate[2].get("loteria"))
+        if key in used_modalities:
+            continue
+        selected.append(candidate)
+        used_modalities.add(key)
+        if len(selected) >= maximum:
+            return selected
+    for candidate in candidates:
+        if candidate in selected:
+            continue
+        selected.append(candidate)
+        if len(selected) >= maximum:
+            break
+    return selected
 
 
 def processar_fila_automatica() -> int:
@@ -113,10 +172,14 @@ def processar_fila_automatica() -> int:
         _log("Nenhum resultado recente pendente para o YouTube.")
         return 0
 
-    _log(f"Pendentes recentes encontrados: {len(candidates)}; processando até {config.max_videos}.")
+    selected = _select_diverse(candidates, config.max_videos)
+    _log(
+        f"Pendentes recentes encontrados: {len(candidates)}; processando {len(selected)} "
+        "com equilíbrio entre modalidades."
+    )
     successes = 0
 
-    for sheet_row, _row, data, _result_date in candidates[: config.max_videos]:
+    for sheet_row, _row, data, _result_date in selected:
         try:
             _log(f"Linha {sheet_row}: {data['loteria']} concurso {data.get('concurso') or '-'}")
             result = publicar_video_em_multicanais(
@@ -127,7 +190,6 @@ def processar_fila_automatica() -> int:
                 sleep_between_channels=max(0.5, min(config.pausa, 15.0)),
                 tz_name=config.timezone,
             )
-
             if result.get("ok_any"):
                 if config.dry_run:
                     _log(f"Linha {sheet_row}: DRY RUN concluído; planilha não alterada.")
@@ -144,7 +206,6 @@ def processar_fila_automatica() -> int:
         except Exception as error:
             _log(f"Linha {sheet_row}: ERRO: {error}")
             traceback.print_exc()
-
         time.sleep(config.pausa)
 
     _log(f"Fila automática concluída | publicações confirmadas: {successes}")
