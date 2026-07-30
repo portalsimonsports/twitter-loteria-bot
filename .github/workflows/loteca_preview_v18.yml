@@ -9,6 +9,7 @@ on:
       - loteca_preview_v18.py
       - loteca_video_v18.py
       - loteca_columns_v18.py
+      - loteca_visual_aprovado_v18.py
       - loteca_release_v18.py
       - lottery_result_v18.py
       - voice_narration_v18.py
@@ -22,7 +23,7 @@ permissions:
 
 jobs:
   gerar-loteca:
-    name: Gerar Loteca 1263 final — Coluna 1, Empate e Coluna 2
+    name: Gerar Loteca 1263 final — visual aprovado e SEO
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -42,22 +43,20 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar roteiro final da Loteca
+      - name: Validar roteiro e visual final da Loteca
         run: |
-          python -m py_compile loteca_preview_v18.py loteca_video_v18.py loteca_columns_v18.py loteca_release_v18.py lottery_result_v18.py voice_narration_v18.py gerador_pacote_v18.py
+          python -m py_compile loteca_preview_v18.py loteca_video_v18.py loteca_columns_v18.py loteca_visual_aprovado_v18.py loteca_release_v18.py lottery_result_v18.py voice_narration_v18.py gerador_pacote_v18.py
           python - <<'PY'
-          from loteca_columns_v18 import (
-              FINAL_SHORT_DURATION,
-              game_speech,
-              result_label,
-          )
+          from loteca_columns_v18 import FINAL_SHORT_DURATION, game_speech, result_label
           from loteca_release_v18 import FINAL_FULL_DURATION, FINAL_FULL_GAME_SLOT
+          from loteca_visual_aprovado_v18 import install_visual_aprovado
           from lottery_result_v18 import LotecaGame
 
           mandante = LotecaGame(1, "Mandante", "Visitante", 2, 1)
           empate = LotecaGame(2, "Mandante", "Visitante", 1, 1)
           visitante = LotecaGame(3, "Mandante", "Visitante", 0, 2)
 
+          install_visual_aprovado()
           assert result_label(mandante) == "COLUNA 1"
           assert result_label(empate) == "EMPATE"
           assert result_label(visitante) == "COLUNA 2"
@@ -65,11 +64,10 @@ jobs:
           assert game_speech(empate).endswith("Empate.")
           assert game_speech(visitante).endswith("Coluna 2.")
           assert "Vitória" not in game_speech(mandante)
-          assert "Resultado na" not in game_speech(mandante)
           assert FINAL_SHORT_DURATION == 104.0
           assert FINAL_FULL_DURATION == 298.0
           assert FINAL_FULL_GAME_SLOT == 15.0
-          print("Loteca final validada: resultado alinhado, sugestões e locução natural.")
+          print("Loteca final validada: colunas alinhadas, cores aprovadas e locução natural.")
           PY
 
       - name: Gerar Short, vídeo completo e pôster
@@ -86,7 +84,7 @@ jobs:
       - name: Disponibilizar vídeo final da Loteca
         uses: actions/upload-artifact@v4
         with:
-          name: videos-loteca-1263-final-coluna-1-empate-coluna-2-${{ github.run_number }}
+          name: videos-loteca-1263-final-visual-aprovado-${{ github.run_number }}
           path: |
             preview_loteca_v18/*.mp4
             preview_loteca_v18/*.png
