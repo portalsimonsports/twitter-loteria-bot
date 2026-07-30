@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 import gerador_pacote_v17 as v17
 import voice_narration_v18 as voice
-from loteca_columns_v18 import gerar_pacote_loteca
+from loteca_release_v18 import gerar_pacote_loteca
 from lottery_result_v18 import parse_lottery_result
 from video_specials_v18 import install_visual_support
 
