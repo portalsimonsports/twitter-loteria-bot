@@ -1,0 +1,4 @@
+PUBLICAR_LOTECA_1263=true
+AUTORIZADO_EM=2026-07-30T14:41:00-03:00
+ESCOPO=video_completo,short,poster,seo
+MODO=publicacao_real
