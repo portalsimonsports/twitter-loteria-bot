@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 import loteca_columns_v18 as final
 import loteca_video_v18 as base
+from loteca_visual_aprovado_v18 import install_visual_aprovado
 from lottery_result_v18 import LotecaGame
 from voice_narration_v18 import SpeechSegment
 
@@ -55,13 +56,14 @@ def gerar_pacote_loteca(data: Dict[str, Any]) -> Dict[str, str]:
     original_slot = base.FULL_GAME_SLOT
     original_builder = final._full_segments
 
+    install_visual_aprovado()
     base.FULL_DURATION = FINAL_FULL_DURATION
     base.FULL_GAME_SLOT = FINAL_FULL_GAME_SLOT
     final._full_segments = _full_segments_natural
     try:
         package = final.gerar_pacote_loteca(data)
         package["modo_apresentacao"] = (
-            "Loteca final com Coluna 1, Empate e Coluna 2; locução natural e sugestões"
+            "Loteca final com alinhamento aprovado, destaques por resultado, locução natural e sugestões"
         )
         return package
     finally:
