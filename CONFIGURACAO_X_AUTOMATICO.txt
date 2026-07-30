@@ -1,0 +1,94 @@
+PORTAL SIMONSPORTS — CONFIGURAÇÃO DA AUTOMAÇÃO SEGURA DO X
+Atualização: 30/07/2026
+
+ARQUIVOS
+- run_publish.py: orquestra as redes e encaminha o X ao módulo especializado.
+- x_publisher.py: publica exclusivamente no X com proteção contra duplicidade, rajadas e erros críticos.
+- bot.py: permanece intacto para preservar os fluxos estáveis das demais redes.
+
+CONFIGURAÇÕES RECOMENDADAS EM GITHUB ACTIONS VARIABLES
+TARGET_NETWORKS=X,FACEBOOK,TELEGRAM,DISCORD,PINTEREST
+X_MAX_PUBLICACOES_RODADA=3
+X_PAUSA_ENTRE_POSTS=60
+X_MAX_PUBLICACOES_24H=20
+X_INCLUDE_LINK=true
+X_INCLUDE_HASHTAG=true
+X_ACCOUNT_STRATEGY=PRIMARY_ONLY
+X_CIRCUIT_HOURS=24
+X_CLAIM_TTL_MINUTES=60
+X_LEDGER_TAB=X_Publicacoes
+X_STATE_TAB=X_Estado
+X_SOURCE_LABEL=Fonte: Loterias CAIXA
+X_DISCLOSURE_TEXT=Atualização automática informativa.
+
+ESTRATÉGIA DE CONTAS
+PRIMARY_ONLY
+- Usa somente a primeira conta válida.
+- É o padrão recomendado.
+- Impede que o mesmo resultado seja repetido automaticamente em várias contas.
+
+ROUND_ROBIN
+- Distribui cada concurso para somente uma das contas configuradas.
+- Nunca publica o mesmo evento em todas as contas.
+- Use apenas quando as contas tiverem finalidades editoriais legítimas e não duplicativas.
+
+CONFIGURAÇÕES ANTIGAS DESCONTINUADAS PARA O X
+X_POST_IN_ALL_ACCOUNTS
+- O novo módulo ignora esta configuração.
+- Repetir o mesmo resultado em todas as contas aumenta o risco de classificação como conteúdo coordenado ou duplicado.
+
+X_SKIP_DUP_CHECK
+- O novo módulo ignora esta configuração.
+- A verificação de duplicidade é obrigatória e não pode ser desativada.
+
+CONTROLE AUTOMÁTICO CRIADO NA PLANILHA
+Aba X_Publicacoes
+- Registra uma chave SHA-256 única por loteria, concurso, data, resultado e URL.
+- Guarda status, Tweet ID, conta, hash do texto, hash da imagem, horário e erro.
+- Impede nova publicação mesmo que a célula de status da linha seja apagada por engano.
+
+Aba X_Estado
+- Guarda o estado do circuito de proteção.
+- Em erro 401 ou 403, suspende automaticamente novas tentativas pelo período configurado.
+- Em erro 429, respeita o horário de liberação informado pela API.
+- Em erro 5xx, aguarda automaticamente 30 minutos.
+
+TEXTOS
+- São escolhidos de forma determinística entre seis estruturas informativas.
+- A escolha depende da chave do concurso, portanto uma repetição do mesmo evento gera exatamente o mesmo texto e é bloqueada.
+- As variações não tentam esconder a automação.
+- Cada publicação informa modalidade, concurso, resultado, data, fonte e que se trata de atualização automática.
+
+IMAGENS
+- A identidade visual atual permanece.
+- A imagem é gerada pelo app/imaging.py já existente.
+- Se o arquivo produzido for byte a byte idêntico a uma imagem já publicada, o sistema publica somente o texto para impedir repetição exata de mídia.
+- Se houver falha local na geração da imagem, o resultado ainda pode ser publicado automaticamente em texto.
+
+LIMITES PADRÃO
+- Máximo de 3 resultados por execução.
+- Intervalo mínimo de 60 segundos entre posts do X.
+- Máximo de 20 posts em uma janela de 24 horas.
+- Estes valores podem ser reduzidos nas Variables, mas não devem ser aumentados sem nova revisão.
+
+TRANSPARÊNCIA DA CONTA
+Além da frase inserida automaticamente nos posts, a bio da conta deve informar que:
+- publica resultados automaticamente;
+- é operada pelo Portal SimonSports;
+- é um perfil informativo independente;
+- os dados devem ser confirmados nos canais oficiais.
+
+SECRETS
+As credenciais do X continuam no Cofre da planilha:
+TWITTER_API_KEY_1
+TWITTER_API_SECRET_1
+TWITTER_ACCESS_TOKEN_1
+TWITTER_ACCESS_SECRET_1
+
+A conta 2 é opcional:
+TWITTER_API_KEY_2
+TWITTER_API_SECRET_2
+TWITTER_ACCESS_TOKEN_2
+TWITTER_ACCESS_SECRET_2
+
+Não coloque chaves ou tokens em arquivos do repositório.
