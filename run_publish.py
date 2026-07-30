@@ -28,6 +28,15 @@ def _target_networks() -> List[str]:
     return values
 
 
+def _apply_x_env_overrides() -> None:
+    """Faz a variável do GitHub prevalecer sem alterar o Cofre existente."""
+    raw = (os.getenv("POST_X_WITH_IMAGE", "") or "").strip().lower()
+    if not raw:
+        return
+    enabled = raw in {"1", "true", "sim", "yes", "on"}
+    bot._x_post_with_image = lambda: enabled
+
+
 def main() -> None:
     bot._log("Start seguro", f"Origem={bot.BOT_ORIGEM} | DRY_RUN={bot.DRY_RUN}")
     keepalive_thread = bot.iniciar_keepalive() if bot.ENABLE_KEEPALIVE else None
@@ -35,6 +44,7 @@ def main() -> None:
 
     try:
         bot._cofre_load()
+        _apply_x_env_overrides()
         networks = _target_networks()
         bot._print_config_summary(networks)
         ws = bot._open_ws_principal()
