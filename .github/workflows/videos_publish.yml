@@ -29,12 +29,18 @@ on:
       - gerador_pacote_v15.py
       - gerador_pacote_v16.py
       - gerador_pacote_v17.py
+      - gerador_pacote_v18.py
       - voice_dialogue_v11.py
       - voice_narration_v13.py
       - voice_narration_v14.py
       - voice_narration_v15.py
       - voice_narration_v16.py
       - voice_narration_v17.py
+      - voice_narration_v18.py
+      - lottery_result_v18.py
+      - video_specials_v18.py
+      - loteca_video_v18.py
+      - loteca_preview_v18.py
       - audio_identity_v8.py
       - audio_identity_v9.py
       - video_visual_v3.py
@@ -56,7 +62,7 @@ permissions:
 
 jobs:
   preview:
-    name: Gerar prévia V17 final — diálogo, engajamento e SEO
+    name: Gerar prévias V18 — especiais e Loteca
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'preview') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -80,87 +86,75 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar módulos
+      - name: Validar módulos V18
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py gerador_pacote_v16.py gerador_pacote_v17.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py voice_narration_v16.py voice_narration_v17.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py post_video.py
+          python -m py_compile \
+            gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py \
+            gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py \
+            gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py \
+            gerador_pacote_v16.py gerador_pacote_v17.py gerador_pacote_v18.py voice_dialogue_v11.py \
+            voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py \
+            voice_narration_v16.py voice_narration_v17.py voice_narration_v18.py \
+            lottery_result_v18.py video_specials_v18.py loteca_video_v18.py loteca_preview_v18.py \
+            audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py \
+            video_visual_v6.py video_preview.py post_video.py
 
-      - name: Validar diálogo, engajamento, sincronização e metadados
+      - name: Validar resultados especiais, diálogo e metadados
         run: |
           python - <<'PY'
+          from loteca_preview_v18 import SAMPLE
+          from lottery_result_v18 import parse_lottery_result
           from post_video import RESULTS_INDEX_URL, _metadata, _unique_tags
-          from voice_narration_v17 import (
-              build_segments,
-              select_presenter_pair,
-              select_single_voice,
-          )
+          from voice_narration_v18 import build_segments, select_presenter_pair
+
+          milionaria = parse_lottery_result("Mais Milionaria", "5,15,33,34,39,44 + 1,2")
+          assert milionaria.display_numbers == ["05", "15", "33", "34", "39", "44"]
+          assert milionaria.trevos == ("01", "02")
+
+          timemania = parse_lottery_result("Timemania", "7,23,34,37,52,56,65 - CAXIAS /RS")
+          assert timemania.display_numbers == ["07", "23", "34", "37", "52", "56", "65"]
+          assert timemania.team == "CAXIAS /RS"
+
+          dia = parse_lottery_result("Dia de Sorte", "1,6,12,14,23,26,27 - Julho")
+          assert dia.display_numbers == ["01", "06", "12", "14", "23", "26", "27"]
+          assert dia.lucky_month == "Julho"
+
+          loteca = parse_lottery_result("Loteca", SAMPLE["numeros"])
+          assert len(loteca.loteca_games) == 14
+          assert loteca.loteca_games[0].home_score == 4
+          assert loteca.loteca_games[0].away_score == 6
 
           data = {
-              "loteria": "Mega-Sena",
-              "concurso": "3021",
-              "data": "20/06/2026",
-              "numeros": ["16", "19", "22", "24", "46", "58"],
+              "loteria": "Mais Milionaria",
+              "concurso": "372",
+              "data": "30/07/2026",
+              "numeros": "5,15,33,34,39,44 + 1,2",
               "url": "https://www.portalsimonsports.com/resultado-teste.html",
           }
           reveals = [55.0, 64.0, 73.0, 82.0, 91.0, 100.0]
           primary, secondary = select_presenter_pair(data)
-
-          dialogue = build_segments(
-              data,
-              165.0,
-              reveals,
-              compact=False,
-              primary_voice=primary,
-              secondary_voice=secondary,
+          segments = build_segments(
+              data, 165.0, reveals, compact=False,
+              primary_voice=primary, secondary_voice=secondary,
           )
-          spoken = [segment for segment in dialogue if segment.role == "number"]
-          engagement = [segment for segment in dialogue if segment.role == "engagement"]
-          closing_text = " ".join(segment.text for segment in dialogue if segment.role == "closing")
-
-          assert len(spoken) == len(reveals), "Quantidade de dezenas narradas incorreta"
-          assert all(segment.start > reveal for segment, reveal in zip(spoken, reveals)), (
-              "A fala precisa começar depois que a dezena já apareceu"
-          )
-          assert [segment.text.strip(". ") for segment in spoken] == data["numeros"], (
-              "A narração deve dizer somente as dezenas"
-          )
-          assert len({segment.voice for segment in dialogue}) == 2, (
-              "O vídeo completo precisa conter dois apresentadores"
-          )
-          assert len({segment.voice for segment in spoken}) == 1, (
-              "As dezenas de uma loteria comum devem ser lidas por uma única voz"
-          )
-          assert len(engagement) == 1, "A interação intermediária deveria existir quando há espaço"
-          assert "portalsimonsports.com" in closing_text.lower(), (
-              "O encerramento precisa convidar para consultar outros resultados no Portal"
-          )
-
-          single = select_single_voice(data)
-          fallback = build_segments(
-              data,
-              165.0,
-              reveals,
-              compact=False,
-              primary_voice=single,
-              secondary_voice=None,
-          )
-          assert len({segment.voice for segment in fallback}) == 1, (
-              "O fallback individual deve usar somente uma voz"
-          )
-          assert not [segment for segment in fallback if segment.role == "engagement"], (
-              "O fallback individual não deve simular diálogo consigo mesmo"
-          )
+          spoken = [segment for segment in segments if segment.role == "number"]
+          special = [segment for segment in segments if segment.role == "special_result"]
+          assert [segment.text.strip(". ") for segment in spoken] == ["5", "15", "33", "34", "39", "44"]
+          assert len(special) == 1 and "Trevos da Sorte" in special[0].text
+          assert len({segment.voice for segment in spoken}) == 1
 
           full_meta = _metadata(data, "completo")
-          short_meta = _metadata(data, "short")
-          assert "Mega-Sena" in full_meta["title"] and "3021" in full_meta["title"]
+          assert "Trevos da Sorte: 01 e 02" in full_meta["description"]
           assert RESULTS_INDEX_URL in full_meta["description"]
-          assert RESULTS_INDEX_URL in short_meta["description"]
-          assert any("resultado Mega-Sena" == tag for tag in full_meta["tags"])
           assert sum(len(tag) for tag in _unique_tags(full_meta["tags"])) <= 480
-          print("V17 final validada: diálogo, engajamento, Portal, SEO e fallback individual.")
+
+          loteca_meta = _metadata(SAMPLE, "completo")
+          assert "14 Jogos" in loteca_meta["title"]
+          assert "Jogo 01:" in loteca_meta["description"]
+          print("V18 validada: trevos, time, mês, Loteca, diálogo e metadados.")
           PY
 
-      - name: Gerar pacote de prévia narrado
+      - name: Gerar pacote padrão V18
         env:
           VIDEO_WIDTH: "1080"
           VIDEO_HEIGHT: "1920"
@@ -169,16 +163,37 @@ jobs:
           rm -rf preview_output
           python video_preview.py --source data/to_publish.json --output-dir preview_output --duration 60
           ls -lh preview_output
-          test -n "$(find preview_output -maxdepth 1 -name 'short_*_voz_v17.mp4' -print -quit)"
-          test -n "$(find preview_output -maxdepth 1 -name 'video_completo_*_dialogo_v17.mp4' -print -quit)"
+          test -n "$(find preview_output -maxdepth 1 -name 'short_*_v18.mp4' -print -quit)"
+          test -n "$(find preview_output -maxdepth 1 -name 'video_completo_*_v18.mp4' -print -quit)"
 
-      - name: Disponibilizar pacote para aprovação
+      - name: Disponibilizar pacote padrão V18
         uses: actions/upload-artifact@v4
         with:
-          name: previa-youtube-v17-final-engajamento-${{ github.run_number }}
+          name: previa-youtube-v18-resultados-especiais-${{ github.run_number }}
           path: |
             preview_output/*.mp4
             preview_output/*.png
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Gerar referência especial da Loteca 1263
+        env:
+          VIDEO_FPS: "30"
+        run: |
+          rm -rf preview_loteca_v18
+          python loteca_preview_v18.py --output-dir preview_loteca_v18
+          ls -lh preview_loteca_v18
+          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'short_loteca_*_90s_voz_v18.mp4' -print -quit)"
+          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'video_completo_loteca_*_270s_dialogo_v18.mp4' -print -quit)"
+          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'poster_loteca_*_v18.png' -print -quit)"
+
+      - name: Disponibilizar referência da Loteca
+        uses: actions/upload-artifact@v4
+        with:
+          name: previa-loteca-v18-14-jogos-${{ github.run_number }}
+          path: |
+            preview_loteca_v18/*.mp4
+            preview_loteca_v18/*.png
           if-no-files-found: error
           retention-days: 14
 
@@ -216,13 +231,21 @@ jobs:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py gerador_pacote_v16.py gerador_pacote_v17.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py voice_narration_v16.py voice_narration_v17.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
+          python -m py_compile \
+            gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py \
+            gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py \
+            gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py \
+            gerador_pacote_v16.py gerador_pacote_v17.py gerador_pacote_v18.py voice_dialogue_v11.py \
+            voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py \
+            voice_narration_v16.py voice_narration_v17.py voice_narration_v18.py \
+            lottery_result_v18.py video_specials_v18.py loteca_video_v18.py \
+            audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py \
+            video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
           import os
           import sys
-          from post_video import RESULTS_INDEX_URL, _metadata
-          from voice_narration_v17 import build_segments, select_presenter_pair
+          from lottery_result_v18 import parse_lottery_result
 
           google_json = (os.getenv("GOOGLE_SERVICE_JSON") or "").strip()
           cofre_id = (os.getenv("COFRE_SHEET_ID") or "").strip()
@@ -240,30 +263,10 @@ jobs:
               print("GOOGLE_SERVICE_JSON inválido:", exc)
               sys.exit(1)
 
-          data = {
-              "loteria": "Mega-Sena",
-              "concurso": "3021",
-              "numeros": ["16", "19", "22", "24", "46", "58"],
-              "url": "https://www.portalsimonsports.com/resultado-teste.html",
-          }
-          reveals = [55.0, 64.0, 73.0, 82.0, 91.0, 100.0]
-          primary, secondary = select_presenter_pair(data)
-          segments = build_segments(
-              data,
-              165.0,
-              reveals,
-              compact=False,
-              primary_voice=primary,
-              secondary_voice=secondary,
-          )
-          spoken = [segment for segment in segments if segment.role == "number"]
-          assert all(segment.start > reveal for segment, reveal in zip(spoken, reveals))
-          assert [segment.text.strip(". ") for segment in spoken] == data["numeros"]
-          assert len({segment.voice for segment in segments}) == 2
-          assert len({segment.voice for segment in spoken}) == 1
-          assert [segment for segment in segments if segment.role == "engagement"]
-          assert RESULTS_INDEX_URL in _metadata(data, "completo")["description"]
-          print("Código, credenciais, engajamento e metadados V17 validados.")
+          assert parse_lottery_result("Mais Milionaria", "5,15,33,34,39,44 + 1,2").trevos == ("01", "02")
+          assert parse_lottery_result("Timemania", "7,23,34,37,52,56,65 - CAXIAS /RS").team
+          assert parse_lottery_result("Dia de Sorte", "1,6,12,14,23,26,27 - Julho").lucky_month == "Julho"
+          print("Código, credenciais e parser V18 validados.")
           PY
 
       - name: Executar fila automática e publicar pacote
@@ -293,7 +296,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: videos-youtube-v17-${{ github.run_number }}
-          path: output/*.mp4
+          name: videos-youtube-v18-${{ github.run_number }}
+          path: |
+            output/*.mp4
+            output/*.png
           if-no-files-found: ignore
           retention-days: 7
