@@ -4,7 +4,7 @@ from dataclasses import replace
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import voice_narration_v17 as v17
-from lottery_result_v18 import parse_lottery_result, special_speech
+from lottery_result_v18 import parse_lottery_result, special_speech, team_name_without_code
 
 
 VOICE_FRANCISCA = v17.VOICE_FRANCISCA
@@ -34,8 +34,19 @@ def extract_numbers(data: Dict[str, Any]) -> List[str]:
 def _special_start(reveals: Sequence[float], compact: bool) -> float:
     last = reveals[-1] if reveals else (20.0 if compact else 108.0)
     if compact:
-        return max(last + 0.75, 22.05)
+        return max(last + 0.55, 21.85)
     return max(last + 2.20, 114.90)
+
+
+def _compact_special_speech(parts) -> str:
+    if parts.trevos:
+        values = " e ".join(str(int(value)) for value in parts.trevos)
+        return f"Trevos da Sorte: {values}."
+    if parts.team:
+        return f"Time do Coração: {team_name_without_code(parts.team).title()}."
+    if parts.lucky_month:
+        return f"Mês da Sorte: {parts.lucky_month.title()}."
+    return ""
 
 
 def build_segments(
@@ -63,7 +74,7 @@ def build_segments(
         secondary_voice=secondary_voice,
     )
 
-    text = special_speech(parts)
+    text = _compact_special_speech(parts) if compact else special_speech(parts)
     if not text:
         return segments
 
@@ -77,7 +88,7 @@ def build_segments(
         "special_result",
     )
 
-    minimum_closing_start = start + (2.05 if compact else 6.20)
+    minimum_closing_start = start + (2.35 if compact else 6.20)
     adjusted: List[SpeechSegment] = []
     for segment in segments:
         if segment.role == "closing" and segment.start < minimum_closing_start:
