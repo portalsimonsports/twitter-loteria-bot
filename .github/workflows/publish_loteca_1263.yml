@@ -1,0 +1,95 @@
+name: Publicar Loteca 1263 — Final
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - release/publish_loteca_1263.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: youtube-loteca-1263-publicacao-final
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    name: Publicar Loteca 1263 no YouTube
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar FFmpeg, fontes e dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation2
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Validar publicação final
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+        run: |
+          python -m py_compile \
+            publish_loteca_1263.py post_video.py video_queue.py youtube_auth.py youtube_upload.py \
+            gerador_pacote_v10.py gerador_pacote_v18.py loteca_release_v18.py \
+            loteca_columns_v18.py loteca_visual_aprovado_v18.py loteca_video_v18.py \
+            loteca_preview_v18.py lottery_result_v18.py voice_narration_v18.py
+          python - <<'PY'
+          import os
+          from loteca_preview_v18 import SAMPLE
+          from loteca_release_v18 import _normalize_loteca_speech
+          from lottery_result_v18 import parse_lottery_result
+          from post_video import _metadata
+
+          assert os.getenv("GOOGLE_SERVICE_JSON", "").strip(), "GOOGLE_SERVICE_JSON ausente"
+          assert os.getenv("COFRE_SHEET_ID", "").strip(), "COFRE_SHEET_ID ausente"
+          games = parse_lottery_result("Loteca", SAMPLE["numeros"]).loteca_games
+          assert len(games) == 14
+          assert "França" in _normalize_loteca_speech("Jogo 1. Franca, 4.")
+          assert "Simon Sports" in _normalize_loteca_speech("Portal SimonSports")
+          metadata = _metadata({**SAMPLE, "previa": False}, "completo")
+          assert "14 Jogos" in metadata["title"]
+          assert any("Loteca" in tag for tag in metadata["tags"])
+          print("Loteca 1263 validada para publicação real.")
+          PY
+
+      - name: Gerar e publicar vídeo completo e Short
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL || 'Publicado_Youtube' }}
+          PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '2.0' }}
+          DRY_RUN_VIDEOS: "false"
+          VIDEO_FPS: "30"
+          TZ: America/Sao_Paulo
+        run: |
+          rm -rf output
+          mkdir -p output
+          python publish_loteca_1263.py
+
+      - name: Guardar arquivos publicados para auditoria
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publicacao-loteca-1263-final-${{ github.run_number }}
+          path: |
+            output/*.mp4
+            output/*.png
+          if-no-files-found: ignore
+          retention-days: 14
