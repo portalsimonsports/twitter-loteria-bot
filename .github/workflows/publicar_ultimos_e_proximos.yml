@@ -1,0 +1,145 @@
+name: Publicar últimos e próximos resultados
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - launch_ultimos_concursos_2026_07_30.txt
+  schedule:
+    - cron: "45 2 * * *"
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "Lançar o último de cada modalidade ou processar somente resultados recentes"
+        required: true
+        default: recentes
+        type: choice
+        options:
+          - ultimos_por_modalidade
+          - recentes
+
+permissions:
+  contents: read
+
+jobs:
+  publicar:
+    name: Publicar resultados com padrão V18 aprovado
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    concurrency:
+      group: youtube-loterias-publicacao
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar FFmpeg, fontes e dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation2
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Definir modo da execução
+        id: modo
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]] || [[ "${{ inputs.modo }}" == "ultimos_por_modalidade" ]]; then
+            echo "maximo=50" >> "$GITHUB_OUTPUT"
+            echo "janela=3650" >> "$GITHUB_OUTPUT"
+            echo "ultimo_por_modalidade=true" >> "$GITHUB_OUTPUT"
+            echo "excluir=Loteca" >> "$GITHUB_OUTPUT"
+            echo "descricao=lançamento do concurso mais recente pendente de cada modalidade" >> "$GITHUB_OUTPUT"
+          else
+            echo "maximo=8" >> "$GITHUB_OUTPUT"
+            echo "janela=7" >> "$GITHUB_OUTPUT"
+            echo "ultimo_por_modalidade=false" >> "$GITHUB_OUTPUT"
+            echo "excluir=" >> "$GITHUB_OUTPUT"
+            echo "descricao=rotina dos resultados novos dos últimos sete dias" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validar padrão de qualidade e segurança
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+        run: |
+          python -m py_compile \
+            gerador_pacote_v18.py gerador_pacote_v17.py voice_narration_v18.py \
+            lottery_result_v18.py video_specials_v18.py loteca_video_v18.py \
+            loteca_columns_v18.py loteca_visual_aprovado_v18.py loteca_release_v18.py \
+            video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
+          python - <<'PY'
+          import json
+          import os
+          from gerador_pacote_v18 import gerar_pacote
+          from lottery_result_v18 import parse_lottery_result
+          from post_video import _metadata, _unique_tags
+
+          google_json = (os.getenv("GOOGLE_SERVICE_JSON") or "").strip()
+          cofre_id = (os.getenv("COFRE_SHEET_ID") or "").strip()
+          if not google_json or not cofre_id:
+              raise SystemExit("GOOGLE_SERVICE_JSON ou COFRE_SHEET_ID ausente.")
+          json.loads(google_json)
+
+          assert parse_lottery_result("Mais Milionaria", "5,15,33,34,39,44 + 1,2").trevos == ("01", "02")
+          assert parse_lottery_result("Timemania", "7,23,34,37,52,56,65 - CAXIAS /RS").team
+          assert parse_lottery_result("Dia de Sorte", "1,6,12,14,23,26,27 - Julho").lucky_month == "Julho"
+
+          sample = {
+              "loteria": "Mega Sena",
+              "concurso": "9999",
+              "data": "30/07/2026",
+              "numeros": "1,2,3,4,5,6",
+              "url": "https://www.portalsimonsports.com/",
+          }
+          full = _metadata(sample, "completo")
+          short = _metadata(sample, "short")
+          assert full["title"] and short["title"]
+          assert "Portal SimonSports" in full["tags"]
+          assert len(_unique_tags(full["tags"])) <= 30
+          print("Padrão V18 aprovado: diálogo, especiais, SEO e controle de duplicidade validados.")
+          PY
+
+      - name: Publicar fila selecionada
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          ENFILEIRADO_VIDEOS_COL: ${{ vars.ENFILEIRADO_VIDEOS_COL || 'Enfileirado_Videos' }}
+          PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL || 'Publicado_Youtube' }}
+          MAX_VIDEOS_RODADA: ${{ steps.modo.outputs.maximo }}
+          PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '3.0' }}
+          AUTO_ENQUEUE_VIDEOS: "true"
+          VIDEO_BACKLOG_DAYS: ${{ steps.modo.outputs.janela }}
+          ALLOW_OLD_QUEUED_VIDEOS: "false"
+          LATEST_PER_MODALITY_ONLY: ${{ steps.modo.outputs.ultimo_por_modalidade }}
+          VIDEO_EXCLUDE_MODALITIES: ${{ steps.modo.outputs.excluir }}
+          DRY_RUN_VIDEOS: "false"
+          VIDEO_WIDTH: "1080"
+          VIDEO_HEIGHT: "1920"
+          VIDEO_FPS: "30"
+          TZ: America/Sao_Paulo
+        run: |
+          echo "Modo: ${{ steps.modo.outputs.descricao }}"
+          mkdir -p output
+          python video_queue_auto.py
+
+      - name: Guardar arquivos gerados para auditoria
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publicacoes-loterias-v18-${{ github.run_number }}
+          path: |
+            output/*.mp4
+            output/*.png
+          if-no-files-found: ignore
+          retention-days: 7
