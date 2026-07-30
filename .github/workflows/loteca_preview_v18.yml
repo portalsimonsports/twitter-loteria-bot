@@ -1,0 +1,66 @@
+name: Prévia Rápida Loteca V18
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - loteca_preview_v18.py
+      - loteca_video_v18.py
+      - lottery_result_v18.py
+      - voice_narration_v18.py
+      - gerador_pacote_v18.py
+      - audio_identity_v9.py
+      - requirements.txt
+      - .github/workflows/loteca_preview_v18.yml
+
+permissions:
+  contents: read
+
+jobs:
+  gerar-loteca:
+    name: Gerar vídeos da Loteca 1263
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar FFmpeg, fontes e dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation2
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Validar gerador da Loteca
+        run: |
+          python -m py_compile loteca_preview_v18.py loteca_video_v18.py lottery_result_v18.py voice_narration_v18.py gerador_pacote_v18.py
+
+      - name: Gerar Short, vídeo completo e pôster
+        env:
+          VIDEO_FPS: "30"
+        run: |
+          rm -rf preview_loteca_v18
+          python loteca_preview_v18.py --output-dir preview_loteca_v18
+          ls -lh preview_loteca_v18
+          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'short_loteca_*_90s_voz_v18.mp4' -print -quit)"
+          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'video_completo_loteca_*_270s_dialogo_v18.mp4' -print -quit)"
+          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'poster_loteca_*_v18.png' -print -quit)"
+
+      - name: Disponibilizar vídeos da Loteca
+        uses: actions/upload-artifact@v4
+        with:
+          name: videos-loteca-v18-concurso-1263-${{ github.run_number }}
+          path: |
+            preview_loteca_v18/*.mp4
+            preview_loteca_v18/*.png
+          if-no-files-found: error
+          retention-days: 14
