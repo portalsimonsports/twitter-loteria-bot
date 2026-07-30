@@ -15,22 +15,28 @@ reveal_times_short = v15.reveal_times_short
 select_voice = v15.select_voice
 voice_label = v15.voice_label
 
+# Referências imutáveis às implementações originais da V15. Elas impedem que o
+# encaixe temporário abaixo faça build_segments chamar a si própria em recursão.
+_BASE_BUILD_SEGMENTS = v15.build_segments
+_BASE_SYNTHESIZE_NARRATION_MIX = v15.synthesize_narration_mix
+
 
 def _visual_settle_offset(reveals: List[float], compact: bool) -> float:
-    """Calcula o atraso necessário para a fala coincidir com a dezena já visível.
+    """Atrasa a fala até a dezena já ter aparecido visualmente.
 
-    O vídeo-base inicia cada animação no instante de ``reveal``, mas a bola só se
-    acomoda no quadro alguns instantes depois. A locução passa a começar nesse
-    momento de acomodação, evitando que o áudio fique uma dezena à frente da tela.
+    O instante ``reveal`` marca o começo da animação da bola. A voz não deve
+    anunciar o número antes disso; ela começa quando a bola já está claramente
+    visível, eliminando o efeito em que a fala ocorre e a dezena só aparece depois.
     """
-    if len(reveals) >= 2:
-        smallest_gap = min(b - a for a, b in zip(reveals, reveals[1:]) if b > a)
+    positive_gaps = [b - a for a, b in zip(reveals, reveals[1:]) if b > a]
+    if positive_gaps:
+        smallest_gap = min(positive_gaps)
     else:
         smallest_gap = 1.0 if compact else 3.2
 
     if compact:
-        return min(0.58, max(0.34, smallest_gap * 0.58))
-    return min(2.25, max(1.05, smallest_gap * 0.58))
+        return min(0.62, max(0.38, smallest_gap * 0.62))
+    return min(2.35, max(1.15, smallest_gap * 0.62))
 
 
 def build_segments(
@@ -41,7 +47,7 @@ def build_segments(
     voice: str | None = None,
 ):
     reveal_list = list(reveals)
-    segments = v15.build_segments(
+    segments = _BASE_BUILD_SEGMENTS(
         data,
         duration,
         reveal_list,
@@ -69,11 +75,11 @@ def synthesize_narration_mix(
     compact: bool = False,
     voice: str | None = None,
 ):
-    """Usa o encaixe seguro da V15 com a linha do tempo visual corrigida."""
+    """Mantém o encaixe seguro da V15 com a fala depois da entrada visual."""
     original_builder = v15.build_segments
     v15.build_segments = build_segments
     try:
-        return v15.synthesize_narration_mix(
+        return _BASE_SYNTHESIZE_NARRATION_MIX(
             data,
             duration,
             list(reveals),
