@@ -5,6 +5,7 @@ import time
 import traceback
 import unicodedata
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
 from post_video import publicar_video_em_multicanais
@@ -61,6 +62,17 @@ def _lottery_key(value: Any) -> str:
     normalized = unicodedata.normalize("NFKD", str(value or ""))
     ascii_text = normalized.encode("ascii", "ignore").decode("ascii").lower()
     return "-".join(part for part in "".join(ch if ch.isalnum() else " " for ch in ascii_text).split())
+
+
+def _legacy_scheduled_workflow_should_skip() -> bool:
+    workflow = (os.getenv("GITHUB_WORKFLOW", "") or "").strip()
+    event_name = (os.getenv("GITHUB_EVENT_NAME", "") or "").strip().lower()
+    migration_marker = Path("launch_ultimos_concursos_2026_07_30.txt")
+    return (
+        workflow == "Publicação de Vídeos (YouTube)"
+        and event_name == "schedule"
+        and migration_marker.is_file()
+    )
 
 
 def _recent_published_counts(
@@ -169,6 +181,13 @@ def _select_diverse(
 
 
 def processar_fila_automatica() -> int:
+    if _legacy_scheduled_workflow_should_skip():
+        _log(
+            "Agendamento antigo ignorado: a rotina permanente 'Publicar últimos e próximos resultados' "
+            "assumiu as publicações automáticas."
+        )
+        return 0
+
     config = carregar_config()
     latest_per_modality_only = _env_bool("LATEST_PER_MODALITY_ONLY", False)
     _log(
