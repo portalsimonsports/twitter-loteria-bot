@@ -2,7 +2,8 @@
 """
 Orquestrador das publicações.
 
-O X usa o publicador especializado x_publisher.py.
+O X usa x_multi_account.py para publicar cada evento nas contas configuradas,
+com texto, composição visual e controle de duplicidade próprios por conta.
 As demais redes continuam usando as funções estáveis de bot.py.
 """
 
@@ -13,7 +14,7 @@ import time
 from typing import List
 
 import bot
-from x_publisher import publicar_x_automatico
+from x_multi_account import publicar_x_automatico
 
 
 def _target_networks() -> List[str]:

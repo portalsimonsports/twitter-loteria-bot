@@ -1,0 +1,82 @@
+PORTAL SIMONSPORTS — X MULTICONTAS COM CONTEÚDO VISUAL DISTINTO
+Atualização: 30/07/2026
+
+OBJETIVO
+O mesmo resultado informativo deve ser publicado automaticamente em todas as contas X configuradas, mas cada conta recebe texto e composição visual próprios.
+
+ARQUIVOS
+- x_multi_account.py: publicador multicontas ativo.
+- x_publisher.py: infraestrutura de segurança, planilha, limites e tratamento de erros.
+- run_publish.py: encaminha o X para o publicador multicontas.
+
+COMPORTAMENTO PADRÃO
+- X_PUBLISH_ALL_ACCOUNTS_DISTINCT=true
+- Publica em todas as contas X válidas encontradas no Cofre.
+- A antiga variável X_ACCOUNT_STRATEGY=PRIMARY_ONLY não impede o modo multicontas enquanto X_PUBLISH_ALL_ACCOUNTS_DISTINCT estiver true.
+- Para suspensão emergencial do multicontas, definir X_PUBLISH_ALL_ACCOUNTS_DISTINCT=false.
+
+PERFIS VISUAIS
+Conta 1 / ACC1
+- Card clássico.
+- Imagem principal ampliada.
+- Moldura própria.
+- Selo RESULTADO CONFIRMADO.
+- Texto direto com modalidade, concurso, resultado e data.
+
+Conta 2 / ACC2
+- Painel editorial.
+- Cabeçalho PAINEL DO CONCURSO.
+- Imagem redimensionada dentro de um quadro central.
+- Faixa lateral, rodapé e cor de destaque próprios.
+- Texto em formato de resumo visual, com ordem e chamadas diferentes da conta 1.
+
+Contas adicionais
+- Recebem o perfil BOLETIM DE RESULTADOS e variações determinísticas.
+- Os perfis se alternam quando houver mais de três contas.
+
+CONTROLE DE DUPLICIDADE
+- A chave deixa de ser apenas do concurso.
+- Cada registro usa EVENTO + CONTA.
+- Um concurso publicado na ACC1 ainda fica pendente para a ACC2.
+- O status final da linha só é gravado quando todas as contas configuradas estiverem concluídas.
+- A aba X_Publicacoes armazena um Tweet ID, hash de texto e hash de mídia para cada conta.
+
+ESCALONAMENTO
+- X_ACCOUNT_STAGGER_SECONDS=900 por padrão.
+- A conta 1 publica primeiro.
+- A conta 2 fica automaticamente pendente e publica após pelo menos 15 minutos, em execução posterior do GitHub Actions.
+- Não é necessário aprovar ou acionar manualmente.
+- O status temporário na planilha fica como PENDENTE_X_CONTAS.
+
+IMAGENS
+- POST_X_WITH_IMAGE deve permanecer true.
+- X_REQUIRE_DISTINCT_MEDIA=true por padrão.
+- Se duas contas gerarem arquivos com o mesmo hash, a publicação é interrompida em vez de enviar a mesma imagem.
+- Se a composição visual falhar, a linha recebe ERRO_X_IMAGEM e não publica uma versão sem imagem.
+
+TEXTOS
+- Os textos são escolhidos deterministicamente por EVENTO + CONTA.
+- Conta 1 usa famílias de resultado confirmado.
+- Conta 2 usa famílias de painel ou resumo visual.
+- Contas adicionais usam boletim ou registro de sorteio.
+- Todas mantêm a fonte e a indicação de atualização automática.
+
+VARIÁVEIS RECOMENDADAS
+POST_X_WITH_IMAGE=true
+X_PUBLISH_ALL_ACCOUNTS_DISTINCT=true
+X_ACCOUNT_STAGGER_SECONDS=900
+X_REQUIRE_DISTINCT_MEDIA=true
+X_MAX_PUBLICACOES_RODADA=3
+X_PAUSA_ENTRE_POSTS=60
+X_MAX_PUBLICACOES_24H=20
+X_INCLUDE_LINK=true
+X_INCLUDE_HASHTAG=true
+X_CIRCUIT_HOURS=24
+X_CLAIM_TTL_MINUTES=60
+X_LEDGER_TAB=X_Publicacoes
+X_STATE_TAB=X_Estado
+X_SOURCE_LABEL=Fonte: Loterias CAIXA
+X_DISCLOSURE_TEXT=Atualização automática informativa.
+
+OBSERVAÇÃO DE CONFORMIDADE
+A alteração visual não deve ser usada como disfarce de automação. As contas devem permanecer identificadas como automatizadas e ter finalidades editoriais claras. O código mantém a indicação de atualização automática em cada publicação.
