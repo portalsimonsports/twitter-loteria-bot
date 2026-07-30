@@ -71,16 +71,24 @@ jobs:
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
           python -m py_compile \
-            gerador_pacote_v18.py gerador_pacote_v17.py voice_narration_v18.py \
+            gerador_pacote_v18.py gerador_pacote_v17.py voice_narration_v17.py voice_narration_v18.py \
             lottery_result_v18.py video_specials_v18.py loteca_video_v18.py \
             loteca_columns_v18.py loteca_visual_aprovado_v18.py loteca_release_v18.py \
             video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
           import os
-          from gerador_pacote_v18 import gerar_pacote
           from lottery_result_v18 import parse_lottery_result
           from post_video import _metadata, _unique_tags
+          from voice_narration_v17 import (
+              VOICE_ANTONIO,
+              VOICE_FRANCISCA,
+              VOICE_THALITA_MULTILINGUAL,
+              VOICE_THALITA_NEURAL,
+              _visual_offset,
+              pair_label,
+              voice_label,
+          )
 
           google_json = (os.getenv("GOOGLE_SERVICE_JSON") or "").strip()
           cofre_id = (os.getenv("COFRE_SHEET_ID") or "").strip()
@@ -91,6 +99,21 @@ jobs:
           assert parse_lottery_result("Mais Milionaria", "5,15,33,34,39,44 + 1,2").trevos == ("01", "02")
           assert parse_lottery_result("Timemania", "7,23,34,37,52,56,65 - CAXIAS /RS").team
           assert parse_lottery_result("Dia de Sorte", "1,6,12,14,23,26,27 - Julho").lucky_month == "Julho"
+
+          # Nunca expor o modelo técnico da voz no vídeo.
+          assert voice_label(VOICE_ANTONIO) == "Antônio"
+          assert voice_label(VOICE_FRANCISCA) == "Francisca"
+          assert voice_label(VOICE_THALITA_MULTILINGUAL) == "Thalita"
+          assert voice_label(VOICE_THALITA_NEURAL) == "Thalita"
+          assert pair_label((VOICE_ANTONIO, VOICE_THALITA_NEURAL)) == "Antônio e Thalita"
+          assert "Neural" not in pair_label((VOICE_ANTONIO, VOICE_THALITA_NEURAL))
+          assert "Multilingual" not in pair_label((VOICE_FRANCISCA, VOICE_THALITA_MULTILINGUAL))
+
+          # A voz só começa depois de a bola terminar a animação e entrar no quadro.
+          full_reveals = [46.0, 50.55, 55.10, 59.65]
+          short_reveals = [5.64, 6.72, 7.80, 8.88]
+          assert _visual_offset(full_reveals, False) >= 2.80
+          assert _visual_offset(short_reveals, True) >= 0.68
 
           sample = {
               "loteria": "Mega Sena",
@@ -104,7 +127,7 @@ jobs:
           assert full["title"] and short["title"]
           assert "Portal SimonSports" in full["tags"]
           assert len(_unique_tags(full["tags"])) <= 30
-          print("Padrão V18 aprovado: diálogo, especiais, SEO e controle de duplicidade validados.")
+          print("Padrão V18 aprovado: nomes públicos, sincronização, especiais, SEO e duplicidade validados.")
           PY
 
       - name: Publicar fila selecionada
