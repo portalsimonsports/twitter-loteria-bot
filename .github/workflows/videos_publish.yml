@@ -54,7 +54,7 @@ permissions:
 
 jobs:
   preview:
-    name: Gerar prévia V16 — voz sincronizada com a dezena
+    name: Gerar prévia V16 — dezena visível antes da fala
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'preview') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -82,6 +82,30 @@ jobs:
         run: |
           python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py gerador_pacote_v16.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py voice_narration_v16.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
 
+      - name: Validar sincronização e roteiro das dezenas
+        run: |
+          python - <<'PY'
+          from voice_narration_v16 import build_segments
+
+          data = {
+              "loteria": "Mega-Sena",
+              "concurso": "3021",
+              "data": "20/06/2026",
+              "numeros": ["16", "19", "22", "24", "46", "58"],
+          }
+          reveals = [55.0, 64.0, 73.0, 82.0, 91.0, 100.0]
+          segments = build_segments(data, 165.0, reveals, compact=False)
+          spoken = [segment for segment in segments if segment.role == "number"]
+          assert len(spoken) == len(reveals), "Quantidade de dezenas narradas incorreta"
+          assert all(segment.start > reveal for segment, reveal in zip(spoken, reveals)), (
+              "A fala precisa começar somente depois da entrada visual da dezena"
+          )
+          assert [segment.text.strip(". ") for segment in spoken] == data["numeros"], (
+              "A narração deve dizer somente as dezenas, sem ordinal"
+          )
+          print("V16 validada: sem recursão, sem ordinal e com dezena visível antes da fala.")
+          PY
+
       - name: Gerar pacote de prévia narrado
         env:
           VIDEO_WIDTH: "1080"
@@ -97,7 +121,7 @@ jobs:
       - name: Disponibilizar pacote para aprovação
         uses: actions/upload-artifact@v4
         with:
-          name: previa-youtube-v16-voz-sincronizada-${{ github.run_number }}
+          name: previa-youtube-v16-dezena-visivel-antes-da-fala-${{ github.run_number }}
           path: |
             preview_output/*.mp4
             preview_output/*.png
@@ -143,6 +167,7 @@ jobs:
           import json
           import os
           import sys
+          from voice_narration_v16 import build_segments
 
           google_json = (os.getenv("GOOGLE_SERVICE_JSON") or "").strip()
           cofre_id = (os.getenv("COFRE_SHEET_ID") or "").strip()
@@ -159,7 +184,21 @@ jobs:
           except Exception as exc:
               print("GOOGLE_SERVICE_JSON inválido:", exc)
               sys.exit(1)
-          print("Código e configurações obrigatórias validados.")
+
+          data = {
+              "loteria": "Mega-Sena",
+              "concurso": "3021",
+              "numeros": ["16", "19", "22", "24", "46", "58"],
+          }
+          reveals = [55.0, 64.0, 73.0, 82.0, 91.0, 100.0]
+          spoken = [
+              segment
+              for segment in build_segments(data, 165.0, reveals, compact=False)
+              if segment.role == "number"
+          ]
+          assert all(segment.start > reveal for segment, reveal in zip(spoken, reveals))
+          assert [segment.text.strip(". ") for segment in spoken] == data["numeros"]
+          print("Código, credenciais e sincronização V16 validados.")
           PY
 
       - name: Executar fila automática e publicar pacote
