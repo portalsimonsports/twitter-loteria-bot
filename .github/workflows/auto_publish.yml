@@ -7,7 +7,9 @@ on:
 
 concurrency:
   group: publish-loterias
-  cancel-in-progress: true
+  # Uma execução nova aguarda a anterior. Não cancelar depois de publicar evita
+  # repetir um post que foi enviado antes de a planilha receber o Tweet ID.
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -91,7 +93,7 @@ jobs:
           ls -la output || true
 
       # =========================
-      # PYTHON (para cleanup + bot)
+      # PYTHON
       # =========================
       - name: Configurar Python
         uses: actions/setup-python@v5
@@ -111,10 +113,14 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
+      - name: Validar sintaxe dos publicadores
+        run: |
+          python -m py_compile bot.py run_publish.py x_publisher.py
+
       # =========================
       # CLEANUP OUTPUT
       # =========================
-      - name: Limpar/normalizar imagens em output (remover duplicados, ajustar nomes)
+      - name: Limpar/normalizar imagens em output
         if: steps.fila.outputs.itens != '0'
         run: |
           python cleanup_output.py
@@ -138,76 +144,76 @@ jobs:
           git push origin HEAD:$GITHUB_REF_NAME
 
       # =========================
-      # PUBLICAÇÃO (Python bot.py)
+      # VALIDAÇÃO DO COFRE
       # =========================
-      - name: Verificar secrets mínimos (Google + X conta 1)
+      - name: Verificar secrets mínimos (Google + Cofre)
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
-          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
-          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
-          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
-          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
           python - <<'PY'
-          import os, sys, json
-          need = ["GOOGLE_SERVICE_JSON","TWITTER_API_KEY_1","TWITTER_API_SECRET_1","TWITTER_ACCESS_TOKEN_1","TWITTER_ACCESS_SECRET_1"]
-          miss = [k for k in need if not os.getenv(k)]
-          if miss:
-            print("FALTAM SECRETS:", miss); sys.exit(1)
-          try: json.loads(os.environ["GOOGLE_SERVICE_JSON"])
-          except Exception as e: print("GOOGLE_SERVICE_JSON inválido:", e); sys.exit(1)
-          print("Secrets mínimos OK")
+          import json
+          import os
+          import sys
+
+          need = ["GOOGLE_SERVICE_JSON", "COFRE_SHEET_ID"]
+          missing = [key for key in need if not os.getenv(key)]
+          if missing:
+              print("FALTAM CONFIGURAÇÕES:", missing)
+              sys.exit(1)
+
+          try:
+              json.loads(os.environ["GOOGLE_SERVICE_JSON"])
+          except Exception as exc:
+              print("GOOGLE_SERVICE_JSON inválido:", exc)
+              sys.exit(1)
+
+          print("Google e Cofre configurados.")
           PY
 
-      - name: Executar bot.py (X/Telegram/Discord/FB/Pinterest conforme vars)
+      # =========================
+      # PUBLICAÇÃO
+      # =========================
+      - name: Executar publicador automático
         env:
           # Google
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
           SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
 
-          # Cofre (via secrets/vars)
+          # Cofre
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
           COFRE_ABA_CRED: ${{ secrets.COFRE_ABA_CRED || vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
           COFRE_ABA_CANAIS: ${{ secrets.COFRE_ABA_CANAIS || vars.COFRE_ABA_CANAIS || 'Redes_Sociais_Canais' }}
 
-          # X (obrigatória conta 1)
-          TWITTER_API_KEY_1: ${{ secrets.TWITTER_API_KEY_1 }}
-          TWITTER_API_SECRET_1: ${{ secrets.TWITTER_API_SECRET_1 }}
-          TWITTER_ACCESS_TOKEN_1: ${{ secrets.TWITTER_ACCESS_TOKEN_1 }}
-          TWITTER_ACCESS_SECRET_1: ${{ secrets.TWITTER_ACCESS_SECRET_1 }}
-
-          # X conta 2 (opcional)
-          TWITTER_API_KEY_2: ${{ secrets.TWITTER_API_KEY_2 }}
-          TWITTER_API_SECRET_2: ${{ secrets.TWITTER_API_SECRET_2 }}
-          TWITTER_ACCESS_TOKEN_2: ${{ secrets.TWITTER_ACCESS_TOKEN_2 }}
-          TWITTER_ACCESS_SECRET_2: ${{ secrets.TWITTER_ACCESS_SECRET_2 }}
-
-          # Outras redes (opcionais)
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_IDS: ${{ secrets.TG_CHAT_IDS }}
-          DISCORD_WEBHOOKS: ${{ secrets.DISCORD_WEBHOOKS }}
-          FB_PAGE_IDS: ${{ secrets.FB_PAGE_IDS }}
-          FB_PAGE_TOKENS: ${{ secrets.FB_PAGE_TOKENS }}
-          PINTEREST_ACCESS_TOKEN: ${{ secrets.PINTEREST_ACCESS_TOKEN }}
-          PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
-
-          # Comportamento
+          # Redes que serão executadas. Vazio = todas as redes suportadas.
           TARGET_NETWORKS: ${{ vars.TARGET_NETWORKS }}
-          BACKLOG_DAYS: ${{ vars.BACKLOG_DAYS || '7' }}
+
+          # Comportamento geral das demais redes
           MAX_PUBLICACOES_RODADA: ${{ vars.MAX_PUBLICACOES_RODADA || '30' }}
           PAUSA_ENTRE_POSTS: ${{ vars.PAUSA_ENTRE_POSTS || '2.5' }}
-          POST_X_WITH_IMAGE: ${{ vars.POST_X_WITH_IMAGE || 'true' }}
-          X_POST_IN_ALL_ACCOUNTS: ${{ vars.X_POST_IN_ALL_ACCOUNTS || 'true' }}
           POST_TG_WITH_IMAGE: ${{ vars.POST_TG_WITH_IMAGE || 'true' }}
           POST_PINTEREST_WITH_IMAGE: ${{ vars.POST_PINTEREST_WITH_IMAGE || 'true' }}
           POST_FB_WITH_IMAGE: ${{ vars.POST_FB_WITH_IMAGE || 'true' }}
 
-          # 401 no X: desliga checagem de duplicados
-          X_SKIP_DUP_CHECK: ${{ vars.X_SKIP_DUP_CHECK || 'true' }}
+          # X — automação específica e obrigatoriamente protegida
+          POST_X_WITH_IMAGE: ${{ vars.POST_X_WITH_IMAGE || 'true' }}
+          X_MAX_PUBLICACOES_RODADA: ${{ vars.X_MAX_PUBLICACOES_RODADA || '3' }}
+          X_PAUSA_ENTRE_POSTS: ${{ vars.X_PAUSA_ENTRE_POSTS || '60' }}
+          X_MAX_PUBLICACOES_24H: ${{ vars.X_MAX_PUBLICACOES_24H || '20' }}
+          X_INCLUDE_LINK: ${{ vars.X_INCLUDE_LINK || 'true' }}
+          X_INCLUDE_HASHTAG: ${{ vars.X_INCLUDE_HASHTAG || 'true' }}
+          X_ACCOUNT_STRATEGY: ${{ vars.X_ACCOUNT_STRATEGY || 'PRIMARY_ONLY' }}
+          X_CIRCUIT_HOURS: ${{ vars.X_CIRCUIT_HOURS || '24' }}
+          X_CLAIM_TTL_MINUTES: ${{ vars.X_CLAIM_TTL_MINUTES || '60' }}
+          X_LEDGER_TAB: ${{ vars.X_LEDGER_TAB || 'X_Publicacoes' }}
+          X_STATE_TAB: ${{ vars.X_STATE_TAB || 'X_Estado' }}
+          X_SOURCE_LABEL: "${{ vars.X_SOURCE_LABEL || 'Fonte: Loterias CAIXA' }}"
+          X_DISCLOSURE_TEXT: "${{ vars.X_DISCLOSURE_TEXT || 'Atualização automática informativa.' }}"
 
+          DRY_RUN: ${{ vars.DRY_RUN || 'false' }}
           ENABLE_KEEPALIVE: "false"
         run: |
-          echo "==== Iniciando bot.py ===="
-          python bot.py
-          echo "==== Fim do bot.py ===="
+          echo "==== Iniciando run_publish.py ===="
+          python run_publish.py
+          echo "==== Fim do run_publish.py ===="
