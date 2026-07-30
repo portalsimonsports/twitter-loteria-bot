@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   gerar-loteca:
-    name: Gerar vídeos da Loteca 1263 — colunas 1 X 2
+    name: Gerar Loteca 1263 final — Coluna 1, Empate e Coluna 2
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -41,19 +41,31 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar gerador e colunas da Loteca
+      - name: Validar roteiro final da Loteca
         run: |
           python -m py_compile loteca_preview_v18.py loteca_video_v18.py loteca_columns_v18.py lottery_result_v18.py voice_narration_v18.py gerador_pacote_v18.py
           python - <<'PY'
-          from loteca_columns_v18 import column_code, game_speech
+          from loteca_columns_v18 import (
+              FINAL_SHORT_DURATION,
+              game_speech,
+              result_label,
+          )
           from lottery_result_v18 import LotecaGame
 
-          assert column_code(LotecaGame(1, "A", "B", 2, 1)) == "1"
-          assert column_code(LotecaGame(2, "A", "B", 1, 1)) == "X"
-          assert column_code(LotecaGame(3, "A", "B", 0, 2)) == "2"
-          assert "Vitória" not in game_speech(LotecaGame(1, "A", "B", 2, 1))
-          assert "Empate" not in game_speech(LotecaGame(2, "A", "B", 1, 1))
-          print("Loteca validada: placar e resultado por colunas 1, X e 2.")
+          mandante = LotecaGame(1, "Mandante", "Visitante", 2, 1)
+          empate = LotecaGame(2, "Mandante", "Visitante", 1, 1)
+          visitante = LotecaGame(3, "Mandante", "Visitante", 0, 2)
+
+          assert result_label(mandante) == "COLUNA 1"
+          assert result_label(empate) == "EMPATE"
+          assert result_label(visitante) == "COLUNA 2"
+          assert game_speech(mandante).endswith("Coluna 1.")
+          assert game_speech(empate).endswith("Empate.")
+          assert game_speech(visitante).endswith("Coluna 2.")
+          assert "Vitória" not in game_speech(mandante)
+          assert "Resultado na" not in game_speech(mandante)
+          assert FINAL_SHORT_DURATION == 104.0
+          print("Loteca final validada: Coluna 1, Empate, Coluna 2 e locução natural.")
           PY
 
       - name: Gerar Short, vídeo completo e pôster
@@ -63,14 +75,14 @@ jobs:
           rm -rf preview_loteca_v18
           python loteca_preview_v18.py --output-dir preview_loteca_v18
           ls -lh preview_loteca_v18
-          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'short_loteca_*_90s_voz_v18.mp4' -print -quit)"
+          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'short_loteca_*_104s_voz_v18.mp4' -print -quit)"
           test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'video_completo_loteca_*_270s_dialogo_v18.mp4' -print -quit)"
           test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'poster_loteca_*_v18.png' -print -quit)"
 
-      - name: Disponibilizar vídeos da Loteca
+      - name: Disponibilizar vídeo final da Loteca
         uses: actions/upload-artifact@v4
         with:
-          name: videos-loteca-v18-colunas-1-x-2-${{ github.run_number }}
+          name: videos-loteca-1263-final-coluna-1-empate-coluna-2-${{ github.run_number }}
           path: |
             preview_loteca_v18/*.mp4
             preview_loteca_v18/*.png
