@@ -56,7 +56,7 @@ permissions:
 
 jobs:
   preview:
-    name: Gerar prévia V17 — dois apresentadores com fallback
+    name: Gerar prévia V17 final — diálogo, engajamento e SEO
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'preview') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -82,11 +82,12 @@ jobs:
 
       - name: Validar módulos
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py gerador_pacote_v16.py gerador_pacote_v17.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py voice_narration_v16.py voice_narration_v17.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py gerador_pacote_v16.py gerador_pacote_v17.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py voice_narration_v16.py voice_narration_v17.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py post_video.py
 
-      - name: Validar diálogo, fallback e sincronização
+      - name: Validar diálogo, engajamento, sincronização e metadados
         run: |
           python - <<'PY'
+          from post_video import RESULTS_INDEX_URL, _metadata, _unique_tags
           from voice_narration_v17 import (
               build_segments,
               select_presenter_pair,
@@ -98,6 +99,7 @@ jobs:
               "concurso": "3021",
               "data": "20/06/2026",
               "numeros": ["16", "19", "22", "24", "46", "58"],
+              "url": "https://www.portalsimonsports.com/resultado-teste.html",
           }
           reveals = [55.0, 64.0, 73.0, 82.0, 91.0, 100.0]
           primary, secondary = select_presenter_pair(data)
@@ -111,6 +113,9 @@ jobs:
               secondary_voice=secondary,
           )
           spoken = [segment for segment in dialogue if segment.role == "number"]
+          engagement = [segment for segment in dialogue if segment.role == "engagement"]
+          closing_text = " ".join(segment.text for segment in dialogue if segment.role == "closing")
+
           assert len(spoken) == len(reveals), "Quantidade de dezenas narradas incorreta"
           assert all(segment.start > reveal for segment, reveal in zip(spoken, reveals)), (
               "A fala precisa começar depois que a dezena já apareceu"
@@ -124,10 +129,10 @@ jobs:
           assert len({segment.voice for segment in spoken}) == 1, (
               "As dezenas de uma loteria comum devem ser lidas por uma única voz"
           )
-          assert all(
-              "sem informações sobrepostas" not in segment.text.lower()
-              for segment in dialogue
-          ), "O roteiro técnico antigo não pode retornar"
+          assert len(engagement) == 1, "A interação intermediária deveria existir quando há espaço"
+          assert "portalsimonsports.com" in closing_text.lower(), (
+              "O encerramento precisa convidar para consultar outros resultados no Portal"
+          )
 
           single = select_single_voice(data)
           fallback = build_segments(
@@ -141,7 +146,18 @@ jobs:
           assert len({segment.voice for segment in fallback}) == 1, (
               "O fallback individual deve usar somente uma voz"
           )
-          print("V17 validada: diálogo natural, dezenas em uma única voz e fallback individual.")
+          assert not [segment for segment in fallback if segment.role == "engagement"], (
+              "O fallback individual não deve simular diálogo consigo mesmo"
+          )
+
+          full_meta = _metadata(data, "completo")
+          short_meta = _metadata(data, "short")
+          assert "Mega-Sena" in full_meta["title"] and "3021" in full_meta["title"]
+          assert RESULTS_INDEX_URL in full_meta["description"]
+          assert RESULTS_INDEX_URL in short_meta["description"]
+          assert any("resultado Mega-Sena" == tag for tag in full_meta["tags"])
+          assert sum(len(tag) for tag in _unique_tags(full_meta["tags"])) <= 480
+          print("V17 final validada: diálogo, engajamento, Portal, SEO e fallback individual.")
           PY
 
       - name: Gerar pacote de prévia narrado
@@ -159,7 +175,7 @@ jobs:
       - name: Disponibilizar pacote para aprovação
         uses: actions/upload-artifact@v4
         with:
-          name: previa-youtube-v17-dois-apresentadores-${{ github.run_number }}
+          name: previa-youtube-v17-final-engajamento-${{ github.run_number }}
           path: |
             preview_output/*.mp4
             preview_output/*.png
@@ -205,6 +221,7 @@ jobs:
           import json
           import os
           import sys
+          from post_video import RESULTS_INDEX_URL, _metadata
           from voice_narration_v17 import build_segments, select_presenter_pair
 
           google_json = (os.getenv("GOOGLE_SERVICE_JSON") or "").strip()
@@ -227,6 +244,7 @@ jobs:
               "loteria": "Mega-Sena",
               "concurso": "3021",
               "numeros": ["16", "19", "22", "24", "46", "58"],
+              "url": "https://www.portalsimonsports.com/resultado-teste.html",
           }
           reveals = [55.0, 64.0, 73.0, 82.0, 91.0, 100.0]
           primary, secondary = select_presenter_pair(data)
@@ -243,7 +261,9 @@ jobs:
           assert [segment.text.strip(". ") for segment in spoken] == data["numeros"]
           assert len({segment.voice for segment in segments}) == 2
           assert len({segment.voice for segment in spoken}) == 1
-          print("Código, credenciais e apresentação V17 validados.")
+          assert [segment for segment in segments if segment.role == "engagement"]
+          assert RESULTS_INDEX_URL in _metadata(data, "completo")["description"]
+          print("Código, credenciais, engajamento e metadados V17 validados.")
           PY
 
       - name: Executar fila automática e publicar pacote
