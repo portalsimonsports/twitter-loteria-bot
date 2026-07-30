@@ -1,16 +1,16 @@
 {
-  "texto": "Portal SimonSports. Chegou a hora de conferir o resultado oficial da Mega-Sena, concurso três mil e vinte e um. Tenha o seu comprovante em mãos. Vamos ao resultado.",
-  "validas": [
+  "texto_novas_vozes": "Portal SimonSports. Chegou a hora de conferir o resultado oficial da Mega-Sena, concurso três mil e vinte e um. Tenha o seu comprovante em mãos. Vamos ao resultado.",
+  "novas_vozes_validas": [
     {
       "label": "Thalita Neural",
       "voice": "pt-BR-ThalitaNeural",
-      "file": "thalita_neural.mp3",
+      "file": "nova_voz_thalita_neural.mp3",
       "bytes": 67968,
-      "sha256": "a93f5cdeadb3dc452c77121da58a6536882b39e16151f0110a9d99664f9c98bd",
+      "sha256": "75435b21b930fb132d9b53ce62393bc1a63ac4c234f4b1b0e5c2bee1235e79cf",
       "status": "ok"
     }
   ],
-  "rejeitadas": [
+  "novas_vozes_rejeitadas": [
     {
       "label": "Macerio Multilingual",
       "voice": "pt-BR-MacerioMultilingualNeural",
@@ -181,6 +181,35 @@
       "sha256": "",
       "status": "erro",
       "erro": "Invalid voice 'pt-BR-Rafael:MAI-Voice-2'."
+    }
+  ],
+  "dialogos": [
+    {
+      "label": "Francisca e Antônio",
+      "speaker_a": "Francisca",
+      "speaker_b": "Antônio",
+      "file": "dialogo_francisca_e_antonio.mp3",
+      "bytes": 941229,
+      "sha256": "e937aaf31f50aeeecec0fd6300c08cac266ccae8d408067d9e5b0a3c30d4c10d",
+      "status": "ok"
+    },
+    {
+      "label": "Thalita e Antônio",
+      "speaker_a": "Thalita Multilingual",
+      "speaker_b": "Antônio",
+      "file": "dialogo_thalita_e_antonio.mp3",
+      "bytes": 933165,
+      "sha256": "a500963a56eca27efbe9d663d1e32db0914f49aa6f9ca02e42e68ff1b76d9cb6",
+      "status": "ok"
+    },
+    {
+      "label": "Francisca e Thalita",
+      "speaker_a": "Francisca",
+      "speaker_b": "Thalita Multilingual",
+      "file": "dialogo_francisca_e_thalita.mp3",
+      "bytes": 877869,
+      "sha256": "2296e2eae200fa2c5328c543af10d63302a5cc5377c5f50adb3b0ce85f3838f7",
+      "status": "ok"
     }
   ],
   "duplicidades": []

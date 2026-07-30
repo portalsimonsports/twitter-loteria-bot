@@ -1,11 +1,16 @@
 AMOSTRAS DE APRESENTADORES — PORTAL SIMONSPORTS
 
-Texto: Portal SimonSports. Chegou a hora de conferir o resultado oficial da Mega-Sena, concurso três mil e vinte e um. Tenha o seu comprovante em mãos. Vamos ao resultado.
+Texto das novas vozes: Portal SimonSports. Chegou a hora de conferir o resultado oficial da Mega-Sena, concurso três mil e vinte e um. Tenha o seu comprovante em mãos. Vamos ao resultado.
 
-Vozes válidas: 1
-01. Thalita Neural | pt-BR-ThalitaNeural | thalita_neural.mp3
+Novas vozes válidas no serviço atual: 1
+01. Thalita Neural | pt-BR-ThalitaNeural | nova_voz_thalita_neural.mp3
 
-Vozes recusadas pelo serviço: 19
+Diálogos válidos: 3
+01. Francisca e Antônio | dialogo_francisca_e_antonio.mp3
+02. Thalita e Antônio | dialogo_thalita_e_antonio.mp3
+03. Francisca e Thalita | dialogo_francisca_e_thalita.mp3
+
+Vozes adicionais recusadas pelo serviço atual: 19
 - Macerio Multilingual | pt-BR-MacerioMultilingualNeural | No audio was received. Please verify that your parameters are correct.
 - Brenda | pt-BR-BrendaNeural | No audio was received. Please verify that your parameters are correct.
 - Donato | pt-BR-DonatoNeural | No audio was received. Please verify that your parameters are correct.
@@ -26,4 +31,4 @@ Vozes recusadas pelo serviço: 19
 - Pedro | pt-BR-Pedro:MAI-Voice-2 | Invalid voice 'pt-BR-Pedro:MAI-Voice-2'.
 - Rafael | pt-BR-Rafael:MAI-Voice-2 | Invalid voice 'pt-BR-Rafael:MAI-Voice-2'.
 
-Nenhum áudio duplicado entre as vozes válidas.
+Nenhum áudio duplicado entre as novas vozes válidas.
