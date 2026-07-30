@@ -28,11 +28,13 @@ on:
       - gerador_pacote_v14.py
       - gerador_pacote_v15.py
       - gerador_pacote_v16.py
+      - gerador_pacote_v17.py
       - voice_dialogue_v11.py
       - voice_narration_v13.py
       - voice_narration_v14.py
       - voice_narration_v15.py
       - voice_narration_v16.py
+      - voice_narration_v17.py
       - audio_identity_v8.py
       - audio_identity_v9.py
       - video_visual_v3.py
@@ -54,7 +56,7 @@ permissions:
 
 jobs:
   preview:
-    name: Gerar prévia V16 — dezena visível antes da fala
+    name: Gerar prévia V17 — dois apresentadores com fallback
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'preview') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -80,12 +82,16 @@ jobs:
 
       - name: Validar módulos
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py gerador_pacote_v16.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py voice_narration_v16.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py gerador_pacote_v16.py gerador_pacote_v17.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py voice_narration_v16.py voice_narration_v17.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
 
-      - name: Validar sincronização e roteiro das dezenas
+      - name: Validar diálogo, fallback e sincronização
         run: |
           python - <<'PY'
-          from voice_narration_v16 import build_segments
+          from voice_narration_v17 import (
+              build_segments,
+              select_presenter_pair,
+              select_single_voice,
+          )
 
           data = {
               "loteria": "Mega-Sena",
@@ -94,16 +100,48 @@ jobs:
               "numeros": ["16", "19", "22", "24", "46", "58"],
           }
           reveals = [55.0, 64.0, 73.0, 82.0, 91.0, 100.0]
-          segments = build_segments(data, 165.0, reveals, compact=False)
-          spoken = [segment for segment in segments if segment.role == "number"]
+          primary, secondary = select_presenter_pair(data)
+
+          dialogue = build_segments(
+              data,
+              165.0,
+              reveals,
+              compact=False,
+              primary_voice=primary,
+              secondary_voice=secondary,
+          )
+          spoken = [segment for segment in dialogue if segment.role == "number"]
           assert len(spoken) == len(reveals), "Quantidade de dezenas narradas incorreta"
           assert all(segment.start > reveal for segment, reveal in zip(spoken, reveals)), (
-              "A fala precisa começar somente depois da entrada visual da dezena"
+              "A fala precisa começar depois que a dezena já apareceu"
           )
           assert [segment.text.strip(". ") for segment in spoken] == data["numeros"], (
-              "A narração deve dizer somente as dezenas, sem ordinal"
+              "A narração deve dizer somente as dezenas"
           )
-          print("V16 validada: sem recursão, sem ordinal e com dezena visível antes da fala.")
+          assert len({segment.voice for segment in dialogue}) == 2, (
+              "O vídeo completo precisa conter dois apresentadores"
+          )
+          assert len({segment.voice for segment in spoken}) == 1, (
+              "As dezenas de uma loteria comum devem ser lidas por uma única voz"
+          )
+          assert all(
+              "sem informações sobrepostas" not in segment.text.lower()
+              for segment in dialogue
+          ), "O roteiro técnico antigo não pode retornar"
+
+          single = select_single_voice(data)
+          fallback = build_segments(
+              data,
+              165.0,
+              reveals,
+              compact=False,
+              primary_voice=single,
+              secondary_voice=None,
+          )
+          assert len({segment.voice for segment in fallback}) == 1, (
+              "O fallback individual deve usar somente uma voz"
+          )
+          print("V17 validada: diálogo natural, dezenas em uma única voz e fallback individual.")
           PY
 
       - name: Gerar pacote de prévia narrado
@@ -115,13 +153,13 @@ jobs:
           rm -rf preview_output
           python video_preview.py --source data/to_publish.json --output-dir preview_output --duration 60
           ls -lh preview_output
-          test -n "$(find preview_output -maxdepth 1 -name 'short_*_voz_v16.mp4' -print -quit)"
-          test -n "$(find preview_output -maxdepth 1 -name 'video_completo_*_voz_v16.mp4' -print -quit)"
+          test -n "$(find preview_output -maxdepth 1 -name 'short_*_voz_v17.mp4' -print -quit)"
+          test -n "$(find preview_output -maxdepth 1 -name 'video_completo_*_dialogo_v17.mp4' -print -quit)"
 
       - name: Disponibilizar pacote para aprovação
         uses: actions/upload-artifact@v4
         with:
-          name: previa-youtube-v16-dezena-visivel-antes-da-fala-${{ github.run_number }}
+          name: previa-youtube-v17-dois-apresentadores-${{ github.run_number }}
           path: |
             preview_output/*.mp4
             preview_output/*.png
@@ -162,12 +200,12 @@ jobs:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py gerador_pacote_v16.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py voice_narration_v16.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py gerador_pacote_v16.py gerador_pacote_v17.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py voice_narration_v16.py voice_narration_v17.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
           import os
           import sys
-          from voice_narration_v16 import build_segments
+          from voice_narration_v17 import build_segments, select_presenter_pair
 
           google_json = (os.getenv("GOOGLE_SERVICE_JSON") or "").strip()
           cofre_id = (os.getenv("COFRE_SHEET_ID") or "").strip()
@@ -191,14 +229,21 @@ jobs:
               "numeros": ["16", "19", "22", "24", "46", "58"],
           }
           reveals = [55.0, 64.0, 73.0, 82.0, 91.0, 100.0]
-          spoken = [
-              segment
-              for segment in build_segments(data, 165.0, reveals, compact=False)
-              if segment.role == "number"
-          ]
+          primary, secondary = select_presenter_pair(data)
+          segments = build_segments(
+              data,
+              165.0,
+              reveals,
+              compact=False,
+              primary_voice=primary,
+              secondary_voice=secondary,
+          )
+          spoken = [segment for segment in segments if segment.role == "number"]
           assert all(segment.start > reveal for segment, reveal in zip(spoken, reveals))
           assert [segment.text.strip(". ") for segment in spoken] == data["numeros"]
-          print("Código, credenciais e sincronização V16 validados.")
+          assert len({segment.voice for segment in segments}) == 2
+          assert len({segment.voice for segment in spoken}) == 1
+          print("Código, credenciais e apresentação V17 validados.")
           PY
 
       - name: Executar fila automática e publicar pacote
@@ -228,7 +273,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: videos-youtube-v16-${{ github.run_number }}
+          name: videos-youtube-v17-${{ github.run_number }}
           path: output/*.mp4
           if-no-files-found: ignore
           retention-days: 7
