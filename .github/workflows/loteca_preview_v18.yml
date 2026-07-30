@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   gerar-loteca:
-    name: Gerar Loteca 1263 final — visual aprovado e SEO
+    name: Gerar Loteca 1263 final — pronúncia e abertura aprovadas
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -43,18 +43,28 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar roteiro e visual final da Loteca
+      - name: Validar roteiro, pronúncia e visual final da Loteca
         run: |
           python -m py_compile loteca_preview_v18.py loteca_video_v18.py loteca_columns_v18.py loteca_visual_aprovado_v18.py loteca_release_v18.py lottery_result_v18.py voice_narration_v18.py gerador_pacote_v18.py
           python - <<'PY'
           from loteca_columns_v18 import FINAL_SHORT_DURATION, game_speech, result_label
-          from loteca_release_v18 import FINAL_FULL_DURATION, FINAL_FULL_GAME_SLOT
+          from loteca_release_v18 import (
+              FINAL_FULL_DURATION,
+              FINAL_FULL_GAME_SLOT,
+              _full_segments_natural,
+              _normalize_loteca_speech,
+              _short_segments_natural,
+          )
           from loteca_visual_aprovado_v18 import install_visual_aprovado
           from lottery_result_v18 import LotecaGame
 
           mandante = LotecaGame(1, "Mandante", "Visitante", 2, 1)
           empate = LotecaGame(2, "Mandante", "Visitante", 1, 1)
           visitante = LotecaGame(3, "Mandante", "Visitante", 0, 2)
+          franca = LotecaGame(1, "FRANCA", "INGLATERRA", 4, 6)
+          games = [franca] + [LotecaGame(i, f"Mandante {i}", f"Visitante {i}", 1, 0) for i in range(2, 15)]
+          data = {"concurso": "1263", "data": "23/07/2026"}
+          pair = ("pt-BR-AntonioNeural", "pt-BR-ThalitaNeural")
 
           install_visual_aprovado()
           assert result_label(mandante) == "COLUNA 1"
@@ -64,10 +74,24 @@ jobs:
           assert game_speech(empate).endswith("Empate.")
           assert game_speech(visitante).endswith("Coluna 2.")
           assert "Vitória" not in game_speech(mandante)
+
+          normalized = _normalize_loteca_speech("Jogo 1. Franca. Portal SimonSports.")
+          assert "Jôgo 1" in normalized
+          assert "França" in normalized
+          assert "Portal Simon Sports" in normalized
+
+          full_segments = _full_segments_natural(data, games, pair)
+          short_segments = _short_segments_natural(data, games, pair[0])
+          assert "Portal Simon Sports, simplesmente o melhor" in full_segments[0].text
+          assert full_segments[0].rate == "-10%"
+          assert any("Jôgo 1" in segment.text and "França" in segment.text for segment in full_segments)
+          assert any("Jôgo 1" in segment.text and "França" in segment.text for segment in short_segments)
+          assert full_segments[-1].text == "Portal Simon Sports, simplesmente o melhor."
+
           assert FINAL_SHORT_DURATION == 104.0
           assert FINAL_FULL_DURATION == 298.0
           assert FINAL_FULL_GAME_SLOT == 15.0
-          print("Loteca final validada: colunas alinhadas, cores aprovadas e locução natural.")
+          print("Loteca final validada: visual aprovado, jogo e França pronunciados corretamente, abertura desacelerada e marca enfatizada.")
           PY
 
       - name: Gerar Short, vídeo completo e pôster
@@ -84,7 +108,7 @@ jobs:
       - name: Disponibilizar vídeo final da Loteca
         uses: actions/upload-artifact@v4
         with:
-          name: videos-loteca-1263-final-visual-aprovado-${{ github.run_number }}
+          name: videos-loteca-1263-final-pronuncia-aprovada-${{ github.run_number }}
           path: |
             preview_loteca_v18/*.mp4
             preview_loteca_v18/*.png
