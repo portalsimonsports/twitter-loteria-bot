@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from gerador_pacote_v10 import gerar_pacote
-from gerador_video_v9 import criar_poster
+from video_specials_v18 import criar_poster, install_visual_support
 
 
 def _date_key(value: Any) -> datetime:
@@ -67,7 +67,7 @@ def _load_latest(path: Path) -> Dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Gera o pacote V10 para aprovação: Short vertical e vídeo completo horizontal.")
+    parser = argparse.ArgumentParser(description="Gera o pacote V18 para aprovação: Short e vídeo completo.")
     parser.add_argument("--source", default="data/to_publish.json")
     parser.add_argument("--output-dir", default="preview_output")
     parser.add_argument("--duration", type=float, default=60.0, help="Mantido apenas por compatibilidade.")
@@ -75,12 +75,12 @@ def main() -> None:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
     data = _load_latest(Path(args.source))
     data.update({"previa": True, "output_dir": str(output_dir)})
 
-    poster = criar_poster(data, output_dir / "previa_youtube_loterias.png")
+    install_visual_support()
     pacote = gerar_pacote(data)
+    poster = pacote.get("poster") or criar_poster(data, output_dir / "previa_youtube_loterias.png")
     print(f"[PREVIEW] Poster: {poster}")
     print(f"[PREVIEW] Short: {pacote['short']}")
     print(f"[PREVIEW] Vídeo completo: {pacote['completo']}")
