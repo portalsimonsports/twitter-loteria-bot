@@ -26,9 +26,11 @@ on:
       - gerador_pacote_v12.py
       - gerador_pacote_v13.py
       - gerador_pacote_v14.py
+      - gerador_pacote_v15.py
       - voice_dialogue_v11.py
       - voice_narration_v13.py
       - voice_narration_v14.py
+      - voice_narration_v15.py
       - audio_identity_v8.py
       - audio_identity_v9.py
       - video_visual_v3.py
@@ -50,7 +52,7 @@ permissions:
 
 jobs:
   preview:
-    name: Gerar prévia V14 — locução natural sem sobreposição
+    name: Gerar prévia V15 — áudio encaixado sem sobreposição
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'preview') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -76,7 +78,7 @@ jobs:
 
       - name: Validar módulos
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_preview.py
 
       - name: Gerar pacote de prévia narrado
         env:
@@ -87,13 +89,13 @@ jobs:
           rm -rf preview_output
           python video_preview.py --source data/to_publish.json --output-dir preview_output --duration 60
           ls -lh preview_output
-          test -n "$(find preview_output -maxdepth 1 -name 'short_*_voz_v14.mp4' -print -quit)"
-          test -n "$(find preview_output -maxdepth 1 -name 'video_completo_*_voz_v14.mp4' -print -quit)"
+          test -n "$(find preview_output -maxdepth 1 -name 'short_*_voz_v15.mp4' -print -quit)"
+          test -n "$(find preview_output -maxdepth 1 -name 'video_completo_*_voz_v15.mp4' -print -quit)"
 
       - name: Disponibilizar pacote para aprovação
         uses: actions/upload-artifact@v4
         with:
-          name: previa-youtube-v14-locucao-natural-sem-sobreposicao-${{ github.run_number }}
+          name: previa-youtube-v15-audio-sem-sobreposicao-${{ github.run_number }}
           path: |
             preview_output/*.mp4
             preview_output/*.png
@@ -134,7 +136,7 @@ jobs:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
-          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
+          python -m py_compile gerador_video.py gerador_video_v5.py gerador_video_v6.py gerador_video_v7.py gerador_video_v8.py gerador_video_v9.py gerador_pacote_v10.py gerador_pacote_v11.py gerador_pacote_v12.py gerador_pacote_v13.py gerador_pacote_v14.py gerador_pacote_v15.py voice_dialogue_v11.py voice_narration_v13.py voice_narration_v14.py voice_narration_v15.py audio_identity_v8.py audio_identity_v9.py video_visual_v3.py video_visual_v5.py video_visual_v6.py video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
           import os
@@ -185,7 +187,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: videos-youtube-v14-${{ github.run_number }}
+          name: videos-youtube-v15-${{ github.run_number }}
           path: output/*.mp4
           if-no-files-found: ignore
           retention-days: 7
