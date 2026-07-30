@@ -12,7 +12,6 @@ VOICE_THALITA_MULTILINGUAL = v15.VOICE_THALITA
 VOICE_ANTONIO = v15.VOICE_ANTONIO
 VOICE_THALITA_NEURAL = "pt-BR-ThalitaNeural"
 
-# A Thalita Neural foi validada no mesmo serviço usado pelo projeto.
 v15.VOICE_SETTINGS.setdefault(
     VOICE_THALITA_NEURAL,
     {"rate": "-1%", "pitch": "+0Hz", "volume": "+0%"},
@@ -32,7 +31,6 @@ ALL_VOICES: Tuple[str, ...] = (
     VOICE_THALITA_NEURAL,
 )
 
-# Evita colocar as duas Thalitas juntas no mesmo diálogo, preservando contraste.
 PAIR_CYCLE: Tuple[Tuple[str, str], ...] = (
     (VOICE_FRANCISCA, VOICE_ANTONIO),
     (VOICE_THALITA_MULTILINGUAL, VOICE_ANTONIO),
@@ -64,12 +62,10 @@ def _seed(data: Dict[str, Any]) -> int:
 
 
 def select_single_voice(data: Dict[str, Any]) -> str:
-    """Alterna automaticamente a voz individual entre todas as opções aprovadas."""
     return ALL_VOICES[_seed(data) % len(ALL_VOICES)]
 
 
 def select_presenter_pair(data: Dict[str, Any]) -> Tuple[str, str]:
-    """Alterna automaticamente a dupla de apresentadores entre os concursos."""
     return PAIR_CYCLE[_seed(data) % len(PAIR_CYCLE)]
 
 
@@ -98,12 +94,7 @@ def _visual_offset(reveals: List[float], compact: bool) -> float:
     return min(2.35, max(1.15, smallest_gap * 0.62))
 
 
-def _opening_segments(
-    data: Dict[str, Any],
-    primary: str,
-    secondary: str | None,
-    compact: bool,
-) -> List[SpeechSegment]:
+def _opening_segments(data: Dict[str, Any], primary: str, secondary: str | None, compact: bool) -> List[SpeechSegment]:
     lottery = str(data.get("loteria") or data.get("produto") or "loteria").strip()
     contest = str(data.get("concurso") or "").strip()
     date_text = str(data.get("data") or data.get("data_sorteio") or "").strip()
@@ -111,70 +102,19 @@ def _opening_segments(
     date_part = f", sorteado em {date_text}" if date_text else ""
 
     if compact:
-        return [
-            SpeechSegment(
-                0.20,
-                primary,
-                f"Portal SimonSports. Resultado da {lottery}{contest_text}.",
-                1.03,
-                "+8%",
-                "opening",
-            )
-        ]
+        return [SpeechSegment(0.20, primary, f"Portal SimonSports. Resultado da {lottery}{contest_text}.", 1.03, "+8%", "opening")]
 
     second = secondary or primary
     return [
-        SpeechSegment(
-            0.35,
-            primary,
-            "Olá! Seja muito bem-vindo ao Portal SimonSports. Está começando mais uma edição do nosso boletim de resultados das Loterias da Caixa.",
-            1.0,
-            None,
-            "opening",
-        ),
-        SpeechSegment(
-            9.60,
-            second,
-            f"E nesta edição, nós vamos conferir juntos o resultado oficial da {lottery}{contest_text}{date_part}.",
-            1.0,
-            None,
-            "opening",
-        ),
-        SpeechSegment(
-            18.80,
-            primary,
-            "Chegou a hora de descobrir se a sorte esteve ao seu lado. Tenha o seu comprovante em mãos e acompanhe cada dezena.",
-            1.0,
-            None,
-            "opening",
-        ),
-        SpeechSegment(
-            28.10,
-            second,
-            "Enquanto você se prepara, deixe o seu like, inscreva-se no canal e ative as notificações para acompanhar os próximos resultados.",
-            1.0,
-            None,
-            "opening",
-        ),
-        SpeechSegment(
-            39.00,
-            primary,
-            "Tudo pronto? Então vamos ao resultado.",
-            1.02,
-            "+2%",
-            "opening",
-        ),
+        SpeechSegment(0.35, primary, "Olá! Seja muito bem-vindo ao Portal SimonSports. Está começando mais uma edição do nosso boletim de resultados das Loterias da Caixa.", 1.0, None, "opening"),
+        SpeechSegment(9.60, second, f"E nesta edição, nós vamos conferir juntos o resultado oficial da {lottery}{contest_text}{date_part}.", 1.0, None, "opening"),
+        SpeechSegment(18.80, primary, "Chegou a hora de descobrir se a sorte esteve ao seu lado. Tenha o seu comprovante em mãos e acompanhe cada dezena.", 1.0, None, "opening"),
+        SpeechSegment(28.10, second, "Enquanto você se prepara, deixe o seu like, inscreva-se no canal e ative as notificações para acompanhar os próximos resultados.", 1.0, None, "opening"),
+        SpeechSegment(39.00, primary, "Tudo pronto? Então vamos ao resultado.", 1.02, "+2%", "opening"),
     ]
 
 
-def _number_segments(
-    data: Dict[str, Any],
-    numbers: List[str],
-    reveals: List[float],
-    primary: str,
-    secondary: str | None,
-    compact: bool,
-) -> List[SpeechSegment]:
+def _number_segments(data: Dict[str, Any], numbers: List[str], reveals: List[float], primary: str, secondary: str | None, compact: bool) -> List[SpeechSegment]:
     if not numbers or not reveals:
         return []
 
@@ -192,131 +132,60 @@ def _number_segments(
     if "dupla-sena" in key and len(numbers) >= 12 and len(number_starts) >= 12:
         first_voice = primary
         second_voice = second
-        segments.append(
-            SpeechSegment(
-                max(0.0, number_starts[0] - lead),
-                first_voice,
-                "Confira agora as dezenas do primeiro sorteio.",
-                1.0,
-                intro_rate,
-                "numbers_intro",
-            )
-        )
+        segments.append(SpeechSegment(max(0.0, number_starts[0] - lead), first_voice, "Confira agora as dezenas do primeiro sorteio.", 1.0, intro_rate, "numbers_intro"))
         for number, start in zip(numbers[:6], number_starts[:6]):
-            segments.append(
-                SpeechSegment(start, first_voice, f"{_spoken_number(number)}.", number_gain, number_rate, "number")
-            )
+            segments.append(SpeechSegment(start, first_voice, f"{_spoken_number(number)}.", number_gain, number_rate, "number"))
 
-        segments.append(
-            SpeechSegment(
-                max(number_starts[5] + 0.55, number_starts[6] - lead),
-                second_voice,
-                "E agora, as dezenas do segundo sorteio.",
-                1.0,
-                intro_rate,
-                "numbers_intro",
-            )
-        )
+        if secondary and not compact:
+            interaction_start = number_starts[5] + 1.00
+            segments.append(SpeechSegment(interaction_start, second_voice, "E até aqui, como está a sua conferência? Alguma dezena já apareceu no seu jogo?", 1.0, "+7%", "engagement"))
+            second_intro_start = max(interaction_start + 4.20, number_starts[6] - lead)
+        else:
+            second_intro_start = max(number_starts[5] + 0.55, number_starts[6] - lead)
+
+        segments.append(SpeechSegment(second_intro_start, second_voice, "E agora, confira as dezenas do segundo sorteio.", 1.0, intro_rate, "numbers_intro"))
         for number, start in zip(numbers[6:], number_starts[6:]):
-            segments.append(
-                SpeechSegment(start, second_voice, f"{_spoken_number(number)}.", number_gain, number_rate, "number")
-            )
+            segments.append(SpeechSegment(start, second_voice, f"{_spoken_number(number)}.", number_gain, number_rate, "number"))
         return segments
 
     numbers_voice = second if secondary else primary
-    segments.append(
-        SpeechSegment(
-            max(0.0, number_starts[0] - lead),
-            numbers_voice,
-            "Confira agora as dezenas sorteadas.",
-            1.0,
-            intro_rate,
-            "numbers_intro",
-        )
-    )
-    for number, start in zip(numbers, number_starts):
-        segments.append(
-            SpeechSegment(start, numbers_voice, f"{_spoken_number(number)}.", number_gain, number_rate, "number")
-        )
+    segments.append(SpeechSegment(max(0.0, number_starts[0] - lead), numbers_voice, "Confira agora as dezenas sorteadas.", 1.0, intro_rate, "numbers_intro"))
+
+    interaction_after = -1
+    interaction_start = 0.0
+    if secondary and not compact and 6 <= len(number_starts) <= 10:
+        candidate = (len(number_starts) - 1) // 2
+        if candidate + 1 < len(number_starts):
+            gap = number_starts[candidate + 1] - number_starts[candidate]
+            if gap >= 5.80:
+                interaction_after = candidate
+                interaction_start = number_starts[candidate] + 0.90
+
+    for index, (number, start) in enumerate(zip(numbers, number_starts)):
+        segments.append(SpeechSegment(start, numbers_voice, f"{_spoken_number(number)}.", number_gain, number_rate, "number"))
+        if index == interaction_after:
+            segments.append(SpeechSegment(interaction_start, primary, "E aí, como está a sua conferência até aqui? Alguma dezena já apareceu no seu jogo?", 1.0, "+8%", "engagement"))
     return segments
 
 
-def _closing_segments(
-    data: Dict[str, Any],
-    duration: float,
-    last_number_start: float,
-    primary: str,
-    secondary: str | None,
-    compact: bool,
-) -> List[SpeechSegment]:
+def _closing_segments(data: Dict[str, Any], duration: float, last_number_start: float, primary: str, secondary: str | None, compact: bool) -> List[SpeechSegment]:
     lottery = str(data.get("loteria") or data.get("produto") or "loteria").strip()
     if compact:
-        return [
-            SpeechSegment(
-                24.05,
-                primary,
-                "Deixe o seu like, comente e inscreva-se no SimonSports.",
-                1.03,
-                "+15%",
-                "closing",
-            )
-        ]
+        return [SpeechSegment(24.05, primary, "Deixe o seu like, comente e inscreva-se no SimonSports.", 1.03, "+15%", "closing")]
 
     second = secondary or primary
     start = max(last_number_start + 4.0, duration - 42.0)
     return [
-        SpeechSegment(
-            start,
-            primary,
-            f"Resultado conferido. Essas foram as dezenas sorteadas da {lottery}.",
-            1.0,
-            None,
-            "closing",
-        ),
-        SpeechSegment(
-            start + 7.50,
-            second,
-            "E aí, alguma dezena apareceu no seu jogo? Conte nos comentários como foi a sua conferência.",
-            1.0,
-            None,
-            "closing",
-        ),
-        SpeechSegment(
-            start + 16.20,
-            primary,
-            "Compartilhe este vídeo com familiares e amigos que também acompanham as loterias. O seu like ajuda o canal a alcançar mais pessoas.",
-            1.0,
-            None,
-            "closing",
-        ),
-        SpeechSegment(
-            start + 27.40,
-            second,
-            "Inscreva-se, ative as notificações e acompanhe as próximas edições aqui no Portal SimonSports.",
-            1.0,
-            None,
-            "closing",
-        ),
-        SpeechSegment(
-            start + 35.30,
-            primary,
-            "SimonSports, simplesmente o melhor. Obrigado pela audiência e até o próximo resultado!",
-            1.0,
-            None,
-            "closing",
-        ),
+        SpeechSegment(start, primary, f"Resultado conferido. Essas foram as dezenas sorteadas da {lottery}.", 1.0, None, "closing"),
+        SpeechSegment(start + 6.20, second, "E aí, alguma dezena apareceu no seu jogo? Conte nos comentários como foi a sua conferência.", 1.0, None, "closing"),
+        SpeechSegment(start + 13.20, primary, f"Para consultar outros resultados da {lottery}, acesse portalsimonsports.com e abra a seção Loterias Caixa.", 1.0, "+2%", "closing"),
+        SpeechSegment(start + 22.80, second, "Compartilhe este vídeo com familiares e amigos que também acompanham as loterias. O seu like ajuda o canal a alcançar mais pessoas.", 1.0, None, "closing"),
+        SpeechSegment(start + 32.00, primary, "Inscreva-se, ative as notificações e acompanhe as próximas edições aqui no Portal SimonSports.", 1.0, None, "closing"),
+        SpeechSegment(start + 38.20, second, "SimonSports, simplesmente o melhor. Obrigado pela audiência e até o próximo resultado!", 1.0, "+3%", "closing"),
     ]
 
 
-def build_segments(
-    data: Dict[str, Any],
-    duration: float,
-    reveals: Iterable[float],
-    *,
-    compact: bool,
-    primary_voice: str,
-    secondary_voice: str | None = None,
-) -> List[SpeechSegment]:
+def build_segments(data: Dict[str, Any], duration: float, reveals: Iterable[float], *, compact: bool, primary_voice: str, secondary_voice: str | None = None) -> List[SpeechSegment]:
     reveal_list = list(reveals)
     numbers = extract_numbers(data)
     offset = _visual_offset(reveal_list, compact)
@@ -329,88 +198,28 @@ def build_segments(
     return sorted(segments, key=lambda item: item.start)
 
 
-def _synthesize_with_builder(
-    data: Dict[str, Any],
-    duration: float,
-    reveals: Iterable[float],
-    music_path,
-    output_path,
-    *,
-    compact: bool,
-    primary_voice: str,
-    secondary_voice: str | None,
-):
+def _synthesize_with_builder(data: Dict[str, Any], duration: float, reveals: Iterable[float], music_path, output_path, *, compact: bool, primary_voice: str, secondary_voice: str | None):
     reveal_list = list(reveals)
     original_builder = v15.build_segments
 
     def custom_builder(_data, _duration, _reveals, compact=False, voice=None):
-        return build_segments(
-            _data,
-            _duration,
-            list(_reveals),
-            compact=compact,
-            primary_voice=primary_voice,
-            secondary_voice=secondary_voice,
-        )
+        return build_segments(_data, _duration, list(_reveals), compact=compact, primary_voice=primary_voice, secondary_voice=secondary_voice)
 
     v15.build_segments = custom_builder
     try:
-        return _BASE_SYNTHESIZE(
-            data,
-            duration,
-            reveal_list,
-            music_path,
-            output_path,
-            compact=compact,
-            voice=primary_voice,
-        )
+        return _BASE_SYNTHESIZE(data, duration, reveal_list, music_path, output_path, compact=compact, voice=primary_voice)
     finally:
         v15.build_segments = original_builder
 
 
-def synthesize_single_mix(
-    data: Dict[str, Any],
-    duration: float,
-    reveals: Iterable[float],
-    music_path,
-    output_path,
-    *,
-    compact: bool,
-    voice: str | None = None,
-):
+def synthesize_single_mix(data: Dict[str, Any], duration: float, reveals: Iterable[float], music_path, output_path, *, compact: bool, voice: str | None = None):
     selected = voice or select_single_voice(data)
-    return _synthesize_with_builder(
-        data,
-        duration,
-        reveals,
-        music_path,
-        output_path,
-        compact=compact,
-        primary_voice=selected,
-        secondary_voice=None,
-    )
+    return _synthesize_with_builder(data, duration, reveals, music_path, output_path, compact=compact, primary_voice=selected, secondary_voice=None)
 
 
-def synthesize_dialogue_mix(
-    data: Dict[str, Any],
-    duration: float,
-    reveals: Iterable[float],
-    music_path,
-    output_path,
-    *,
-    pair: Tuple[str, str] | None = None,
-):
+def synthesize_dialogue_mix(data: Dict[str, Any], duration: float, reveals: Iterable[float], music_path, output_path, *, pair: Tuple[str, str] | None = None):
     primary, secondary = pair or select_presenter_pair(data)
-    return _synthesize_with_builder(
-        data,
-        duration,
-        reveals,
-        music_path,
-        output_path,
-        compact=False,
-        primary_voice=primary,
-        secondary_voice=secondary,
-    )
+    return _synthesize_with_builder(data, duration, reveals, music_path, output_path, compact=False, primary_voice=primary, secondary_voice=secondary)
 
 
 __all__ = [
