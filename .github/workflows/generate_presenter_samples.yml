@@ -30,8 +30,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Instalar gerador de voz
+      - name: Instalar FFmpeg e gerador de voz
         run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
           pip install --no-cache-dir edge-tts
 
