@@ -107,11 +107,26 @@ def _spoken_number(value: str) -> str:
 
 
 def _visual_offset(reveals: List[float], compact: bool) -> float:
+    """Aguarda a animação terminar antes de pronunciar a dezena.
+
+    O vídeo-base anima cada bola por 1,10 a 1,65 segundo na linha do
+    tempo original. O resultado é depois expandido para 78 segundos no
+    vídeo completo ou comprimido para 18,6 segundos no Short. O cálculo
+    abaixo reproduz exatamente essa transformação, eliminando o atraso
+    percebido entre a fala e a inclusão da dezena no quadro.
+    """
+    ratio = (18.6 / 47.0) if compact else (78.0 / 47.0)
     positive_gaps = [b - a for a, b in zip(reveals, reveals[1:]) if b > a]
-    smallest_gap = min(positive_gaps) if positive_gaps else (1.0 if compact else 3.2)
-    if compact:
-        return min(0.62, max(0.38, smallest_gap * 0.62))
-    return min(2.35, max(1.15, smallest_gap * 0.62))
+
+    if positive_gaps:
+        smallest_output_gap = min(positive_gaps)
+        smallest_source_gap = smallest_output_gap / ratio
+        source_animation = max(1.10, min(1.65, smallest_source_gap * 0.72))
+    else:
+        source_animation = 1.65
+
+    safety = 0.08 if compact else 0.16
+    return source_animation * ratio + safety
 
 
 def _opening_segments(data: Dict[str, Any], primary: str, secondary: str | None, compact: bool) -> List[SpeechSegment]:
@@ -248,6 +263,7 @@ __all__ = [
     "VOICE_FRANCISCA",
     "VOICE_THALITA_MULTILINGUAL",
     "VOICE_THALITA_NEURAL",
+    "_visual_offset",
     "build_segments",
     "extract_numbers",
     "pair_label",
