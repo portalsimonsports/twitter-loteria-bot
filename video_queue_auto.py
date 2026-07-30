@@ -37,6 +37,11 @@ def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 3650) -> 
     return max(minimum, min(maximum, value))
 
 
+def _env_list(name: str) -> set[str]:
+    raw = (os.getenv(name, "") or "").replace(";", ",")
+    return {_lottery_key(item) for item in raw.split(",") if _lottery_key(item)}
+
+
 def _parse_date(value: Any) -> datetime | None:
     text = str(value or "").strip()
     for fmt in (
@@ -87,6 +92,7 @@ def _candidate_rows(values: List[List[str]], headers: List[str], published_index
     auto_enqueue = _env_bool("AUTO_ENQUEUE_VIDEOS", True)
     backlog_days = _env_int("VIDEO_BACKLOG_DAYS", 7, 1, 3650)
     allow_old_queued = _env_bool("ALLOW_OLD_QUEUED_VIDEOS", False)
+    excluded_modalities = _env_list("VIDEO_EXCLUDE_MODALITIES")
     cutoff = datetime.now() - timedelta(days=backlog_days)
     queue_index = _find_col(headers, ["Enfileirado_Videos", "Enfileirado Videos", "Fila_Video"])
     published_counts = _recent_published_counts(values, headers, published_index)
@@ -105,6 +111,11 @@ def _candidate_rows(values: List[List[str]], headers: List[str], published_index
             data = _row_to_video_data(row, headers)
             _validate_video_data(data)
         except Exception:
+            continue
+
+        modality_key = _lottery_key(data.get("loteria"))
+        if modality_key in excluded_modalities:
+            _log(f"Linha {sheet_row} ignorada: modalidade excluída nesta execução ({data.get('loteria')}).")
             continue
 
         result_date = _parse_date(data.get("data"))
@@ -128,7 +139,12 @@ def _candidate_rows(values: List[List[str]], headers: List[str], published_index
     return candidates
 
 
-def _select_diverse(candidates: List[Candidate], maximum: int) -> List[Candidate]:
+def _select_diverse(
+    candidates: List[Candidate],
+    maximum: int,
+    *,
+    latest_per_modality_only: bool = False,
+) -> List[Candidate]:
     selected: List[Candidate] = []
     used_modalities = set()
     for candidate in candidates:
@@ -139,6 +155,10 @@ def _select_diverse(candidates: List[Candidate], maximum: int) -> List[Candidate
         used_modalities.add(key)
         if len(selected) >= maximum:
             return selected
+
+    if latest_per_modality_only:
+        return selected
+
     for candidate in candidates:
         if candidate in selected:
             continue
@@ -150,10 +170,12 @@ def _select_diverse(candidates: List[Candidate], maximum: int) -> List[Candidate
 
 def processar_fila_automatica() -> int:
     config = carregar_config()
+    latest_per_modality_only = _env_bool("LATEST_PER_MODALITY_ONLY", False)
     _log(
         "Fila automática iniciada",
         f"aba={config.sheet_tab}",
         f"máximo={config.max_videos}",
+        f"último_por_modalidade={latest_per_modality_only}",
         f"dry_run={config.dry_run}",
     )
 
@@ -169,12 +191,16 @@ def processar_fila_automatica() -> int:
     published_index = _ensure_column(worksheet, headers, config.publicado_col)
     candidates = _candidate_rows(values, headers, published_index)
     if not candidates:
-        _log("Nenhum resultado recente pendente para o YouTube.")
+        _log("Nenhum resultado pendente elegível para o YouTube.")
         return 0
 
-    selected = _select_diverse(candidates, config.max_videos)
+    selected = _select_diverse(
+        candidates,
+        config.max_videos,
+        latest_per_modality_only=latest_per_modality_only,
+    )
     _log(
-        f"Pendentes recentes encontrados: {len(candidates)}; processando {len(selected)} "
+        f"Pendentes elegíveis encontrados: {len(candidates)}; processando {len(selected)} "
         "com equilíbrio entre modalidades."
     )
     successes = 0
