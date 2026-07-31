@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   gerar-loteca:
-    name: Gerar Loteca 1263 final — pronúncia e abertura aprovadas
+    name: Gerar Loteca 1263 — intervalo reduzido para aprovação
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -43,7 +43,7 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar roteiro, pronúncia e visual final da Loteca
+      - name: Validar roteiro, pronúncia, ritmo e visual da Loteca
         run: |
           python -m py_compile loteca_preview_v18.py loteca_video_v18.py loteca_columns_v18.py loteca_visual_aprovado_v18.py loteca_release_v18.py lottery_result_v18.py voice_narration_v18.py gerador_pacote_v18.py
           python - <<'PY'
@@ -52,6 +52,7 @@ jobs:
               FINAL_FULL_DURATION,
               FINAL_FULL_GAME_SLOT,
               _full_segments_natural,
+              _game_start,
               _normalize_loteca_speech,
               _short_segments_natural,
           )
@@ -88,10 +89,16 @@ jobs:
           assert any("Jôgo 1" in segment.text and "França" in segment.text for segment in short_segments)
           assert full_segments[-1].text == "Portal Simon Sports, simplesmente o melhor."
 
+          game_segments = [segment for segment in full_segments if segment.role == "loteca_game"]
+          assert len(game_segments) == 14
+          starts = [segment.start for segment in game_segments]
+          assert all(abs((b - a) - 9.0) < 0.01 for a, b in zip(starts, starts[1:]))
+          assert abs(_game_start(1) - _game_start(0) - 9.0) < 0.01
+
           assert FINAL_SHORT_DURATION == 104.0
-          assert FINAL_FULL_DURATION == 298.0
-          assert FINAL_FULL_GAME_SLOT == 15.0
-          print("Loteca final validada: visual aprovado, jogo e França pronunciados corretamente, abertura desacelerada e marca enfatizada.")
+          assert FINAL_FULL_DURATION == 214.0
+          assert FINAL_FULL_GAME_SLOT == 9.0
+          print("Loteca validada: nove segundos por jogo, cerca de três segundos de respiro, visual e pronúncia preservados.")
           PY
 
       - name: Gerar Short, vídeo completo e pôster
@@ -102,13 +109,13 @@ jobs:
           python loteca_preview_v18.py --output-dir preview_loteca_v18
           ls -lh preview_loteca_v18
           test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'short_loteca_*_104s_voz_v18.mp4' -print -quit)"
-          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'video_completo_loteca_*_298s_dialogo_v18.mp4' -print -quit)"
+          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'video_completo_loteca_*_214s_dialogo_v18.mp4' -print -quit)"
           test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'poster_loteca_*_v18.png' -print -quit)"
 
-      - name: Disponibilizar vídeo final da Loteca
+      - name: Disponibilizar vídeo da Loteca com intervalo reduzido
         uses: actions/upload-artifact@v4
         with:
-          name: videos-loteca-1263-final-pronuncia-aprovada-${{ github.run_number }}
+          name: videos-loteca-1263-intervalo-3-segundos-${{ github.run_number }}
           path: |
             preview_loteca_v18/*.mp4
             preview_loteca_v18/*.png
