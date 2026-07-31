@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   gerar-loteca:
-    name: Gerar Loteca 1263 — intervalo reduzido para aprovação
+    name: Gerar Loteca 1263 — ritmo variável e voz constante
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -50,9 +50,14 @@ jobs:
           from loteca_columns_v18 import FINAL_SHORT_DURATION, game_speech, result_label
           from loteca_release_v18 import (
               FINAL_FULL_DURATION,
-              FINAL_FULL_GAME_SLOT,
+              FINAL_FULL_INTERACTION_SLOT,
+              FINAL_FULL_STANDARD_SLOT,
+              FULL_SPEECH_RATE,
+              INTERACTION_AFTER_GAMES,
               _full_segments_natural,
+              _game_durations,
               _game_start,
+              _game_starts,
               _normalize_loteca_speech,
               _short_segments_natural,
           )
@@ -84,21 +89,38 @@ jobs:
           full_segments = _full_segments_natural(data, games, pair)
           short_segments = _short_segments_natural(data, games, pair[0])
           assert "Portal Simon Sports, simplesmente o melhor" in full_segments[0].text
-          assert full_segments[0].rate == "-10%"
           assert any("Jôgo 1" in segment.text and "França" in segment.text for segment in full_segments)
           assert any("Jôgo 1" in segment.text and "França" in segment.text for segment in short_segments)
           assert full_segments[-1].text == "Portal Simon Sports, simplesmente o melhor."
 
-          game_segments = [segment for segment in full_segments if segment.role == "loteca_game"]
-          assert len(game_segments) == 14
-          starts = [segment.start for segment in game_segments]
-          assert all(abs((b - a) - 9.0) < 0.01 for a, b in zip(starts, starts[1:]))
-          assert abs(_game_start(1) - _game_start(0) - 9.0) < 0.01
+          # Toda a locução do vídeo completo deve manter uma única velocidade.
+          relevant_roles = {"opening", "loteca_game", "engagement", "summary", "closing"}
+          assert all(
+              segment.rate == FULL_SPEECH_RATE
+              for segment in full_segments
+              if segment.role in relevant_roles
+          )
+
+          durations = _game_durations(14)
+          starts = _game_starts(14)
+          assert len(durations) == 14
+          assert len(starts) == 14
+          for game_number, duration in enumerate(durations, start=1):
+              expected = (
+                  FINAL_FULL_INTERACTION_SLOT
+                  if game_number in INTERACTION_AFTER_GAMES
+                  else FINAL_FULL_STANDARD_SLOT
+              )
+              assert abs(duration - expected) < 0.01
+          for index, (a, b) in enumerate(zip(starts, starts[1:]), start=1):
+              assert abs((b - a) - durations[index - 1]) < 0.01
+          assert abs(_game_start(4) - _game_start(3) - FINAL_FULL_INTERACTION_SLOT) < 0.01
 
           assert FINAL_SHORT_DURATION == 104.0
-          assert FINAL_FULL_DURATION == 214.0
-          assert FINAL_FULL_GAME_SLOT == 9.0
-          print("Loteca validada: nove segundos por jogo, cerca de três segundos de respiro, visual e pronúncia preservados.")
+          assert FINAL_FULL_DURATION == 226.0
+          assert FINAL_FULL_STANDARD_SLOT == 9.0
+          assert FINAL_FULL_INTERACTION_SLOT == 13.0
+          print("Loteca validada: voz constante, 3 segundos nos blocos simples e 7 segundos nos blocos com interação.")
           PY
 
       - name: Gerar Short, vídeo completo e pôster
@@ -109,13 +131,13 @@ jobs:
           python loteca_preview_v18.py --output-dir preview_loteca_v18
           ls -lh preview_loteca_v18
           test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'short_loteca_*_104s_voz_v18.mp4' -print -quit)"
-          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'video_completo_loteca_*_214s_dialogo_v18.mp4' -print -quit)"
+          test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'video_completo_loteca_*_226s_dialogo_v18.mp4' -print -quit)"
           test -n "$(find preview_loteca_v18 -maxdepth 1 -name 'poster_loteca_*_v18.png' -print -quit)"
 
-      - name: Disponibilizar vídeo da Loteca com intervalo reduzido
+      - name: Disponibilizar vídeo da Loteca com ritmo variável
         uses: actions/upload-artifact@v4
         with:
-          name: videos-loteca-1263-intervalo-3-segundos-${{ github.run_number }}
+          name: videos-loteca-1263-ritmo-variavel-voz-constante-${{ github.run_number }}
           path: |
             preview_loteca_v18/*.mp4
             preview_loteca_v18/*.png
