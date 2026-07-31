@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 import traceback
 import unicodedata
@@ -64,6 +65,19 @@ def _lottery_key(value: Any) -> str:
     return "-".join(part for part in "".join(ch if ch.isalnum() else " " for ch in ascii_text).split())
 
 
+def _contest_key(value: Any) -> str:
+    text = str(value or "").strip()
+    digits = re.sub(r"\D+", "", text)
+    return digits or _lottery_key(text)
+
+
+def _target_filters() -> Tuple[str, str]:
+    return (
+        _lottery_key(os.getenv("VIDEO_TARGET_MODALITY", "")),
+        _contest_key(os.getenv("VIDEO_TARGET_CONTEST", "")),
+    )
+
+
 def _legacy_scheduled_workflow_should_skip() -> bool:
     workflow = (os.getenv("GITHUB_WORKFLOW", "") or "").strip()
     event_name = (os.getenv("GITHUB_EVENT_NAME", "") or "").strip().lower()
@@ -105,6 +119,7 @@ def _candidate_rows(values: List[List[str]], headers: List[str], published_index
     backlog_days = _env_int("VIDEO_BACKLOG_DAYS", 7, 1, 3650)
     allow_old_queued = _env_bool("ALLOW_OLD_QUEUED_VIDEOS", False)
     excluded_modalities = _env_list("VIDEO_EXCLUDE_MODALITIES")
+    target_modality, target_contest = _target_filters()
     cutoff = datetime.now() - timedelta(days=backlog_days)
     queue_index = _find_col(headers, ["Enfileirado_Videos", "Enfileirado Videos", "Fila_Video"])
     published_counts = _recent_published_counts(values, headers, published_index)
@@ -126,6 +141,13 @@ def _candidate_rows(values: List[List[str]], headers: List[str], published_index
             continue
 
         modality_key = _lottery_key(data.get("loteria"))
+        contest_key = _contest_key(data.get("concurso"))
+
+        if target_modality and modality_key != target_modality:
+            continue
+        if target_contest and contest_key != target_contest:
+            continue
+
         if modality_key in excluded_modalities:
             _log(f"Linha {sheet_row} ignorada: modalidade excluída nesta execução ({data.get('loteria')}).")
             continue
@@ -146,7 +168,6 @@ def _candidate_rows(values: List[List[str]], headers: List[str], published_index
         date_rank = result_date.timestamp() if result_date is not None else float("-inf")
         return count, -date_rank, -sheet_row
 
-    # Primeiro a modalidade menos publicada; dentro dela, o concurso recente mais novo.
     candidates.sort(key=priority)
     return candidates
 
@@ -190,11 +211,15 @@ def processar_fila_automatica() -> int:
 
     config = carregar_config()
     latest_per_modality_only = _env_bool("LATEST_PER_MODALITY_ONLY", False)
+    target_modality, target_contest = _target_filters()
+    targeted = bool(target_modality or target_contest)
     _log(
         "Fila automática iniciada",
         f"aba={config.sheet_tab}",
         f"máximo={config.max_videos}",
         f"último_por_modalidade={latest_per_modality_only}",
+        f"alvo_modalidade={target_modality or '-'}",
+        f"alvo_concurso={target_contest or '-'}",
         f"dry_run={config.dry_run}",
     )
 
@@ -210,17 +235,27 @@ def processar_fila_automatica() -> int:
     published_index = _ensure_column(worksheet, headers, config.publicado_col)
     candidates = _candidate_rows(values, headers, published_index)
     if not candidates:
-        _log("Nenhum resultado pendente elegível para o YouTube.")
+        if targeted:
+            _log(
+                "O resultado informado pelo disparo imediato ainda não foi localizado como pendente na base; "
+                "a verificação de segurança tentará novamente."
+            )
+        else:
+            _log("Nenhum resultado pendente elegível para o YouTube.")
         return 0
 
-    selected = _select_diverse(
-        candidates,
-        config.max_videos,
-        latest_per_modality_only=latest_per_modality_only,
-    )
+    if targeted:
+        selected = candidates[:1]
+    else:
+        selected = _select_diverse(
+            candidates,
+            config.max_videos,
+            latest_per_modality_only=latest_per_modality_only,
+        )
+
     _log(
         f"Pendentes elegíveis encontrados: {len(candidates)}; processando {len(selected)} "
-        "com equilíbrio entre modalidades."
+        + ("resultado informado pelo evento." if targeted else "com equilíbrio entre modalidades.")
     )
     successes = 0
 
