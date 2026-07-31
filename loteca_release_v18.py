@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
 import loteca_columns_v18 as final
@@ -11,11 +12,16 @@ from lottery_result_v18 import LotecaGame
 from voice_narration_v18 import SpeechSegment
 
 
-# Cada resultado fica nove segundos na tela. Como a leitura de cada jogo ocupa
-# aproximadamente cinco a seis segundos, restam perto de três segundos antes
-# da entrada do próximo resultado, sem acelerar excessivamente os locutores.
-FINAL_FULL_GAME_SLOT = 9.0
-FINAL_FULL_DURATION = 214.0
+# Ritmo aprovado para o vídeo completo:
+# - resultado simples: bloco de 9 s (fala natural + cerca de 3 s de respiro);
+# - resultado seguido de interação: bloco de 13 s, preservando a chamada sem
+#   acelerar o apresentador nem invadir o próximo jogo.
+FINAL_FULL_STANDARD_SLOT = 9.0
+FINAL_FULL_INTERACTION_SLOT = 13.0
+FINAL_FULL_GAME_SLOT = FINAL_FULL_STANDARD_SLOT  # compatibilidade
+INTERACTION_AFTER_GAMES = (4, 8, 12)
+FINAL_FULL_DURATION = 226.0
+FULL_SPEECH_RATE = "-5%"
 _BASE_FINAL_SHORT_SEGMENTS = final._short_segments
 
 
@@ -31,8 +37,30 @@ def _normalize_loteca_speech(text: str) -> str:
     return value
 
 
+def _game_durations(count: int = 14) -> List[float]:
+    return [
+        FINAL_FULL_INTERACTION_SLOT if game_number in INTERACTION_AFTER_GAMES
+        else FINAL_FULL_STANDARD_SLOT
+        for game_number in range(1, count + 1)
+    ]
+
+
+def _game_starts(count: int = 14) -> List[float]:
+    starts: List[float] = []
+    current = base.FULL_GAME_START
+    for duration in _game_durations(count):
+        starts.append(current)
+        current += duration
+    return starts
+
+
 def _game_start(index: int) -> float:
-    return base.FULL_GAME_START + index * FINAL_FULL_GAME_SLOT
+    starts = _game_starts(max(14, index + 1))
+    return starts[index]
+
+
+def _games_end(count: int = 14) -> float:
+    return base.FULL_GAME_START + sum(_game_durations(count))
 
 
 def _full_segments_natural(
@@ -42,53 +70,55 @@ def _full_segments_natural(
     contest = str(data.get("concurso") or "").strip()
     date = str(data.get("data") or "").strip()
 
+    # Toda a abertura usa a mesma velocidade. Os textos foram encurtados para
+    # caberem naturalmente antes do primeiro jogo, sem atempo automático.
     segments: List[SpeechSegment] = [
         SpeechSegment(
             0.35,
             primary,
             "Olá! Seja muito bem-vindo ao Portal Simon Sports, simplesmente o melhor.",
             1.0,
-            "-10%",
+            FULL_SPEECH_RATE,
             "opening",
         ),
         SpeechSegment(
-            7.00,
+            7.40,
             secondary,
             _normalize_loteca_speech(
-                "Hoje vamos acompanhar o resultado completo da Loteca"
+                "Hoje vamos conferir o resultado da Loteca"
                 + (f", concurso {contest}" if contest else "")
-                + (f", com resultados divulgados em {date}." if date else ".")
+                + (f", divulgado em {date}." if date else ".")
             ),
             1.0,
-            "-9%",
+            FULL_SPEECH_RATE,
             "opening",
         ),
         SpeechSegment(
-            14.20,
+            15.00,
             primary,
-            "Na Loteca, coluna um representa o mandante, empate representa resultado igual e coluna dois representa o visitante.",
+            "Na Loteca, coluna um é mandante, empate é resultado igual e coluna dois é visitante.",
             1.0,
-            "-9%",
+            FULL_SPEECH_RATE,
             "opening",
         ),
         SpeechSegment(
-            25.10,
+            23.00,
             secondary,
-            _normalize_loteca_speech("Separe o seu comprovante. Vamos aos resultados dos jôgos."),
+            _normalize_loteca_speech("Separe o comprovante. Vamos aos resultados dos jogos."),
             1.0,
-            "-8%",
+            FULL_SPEECH_RATE,
             "opening",
         ),
     ]
 
-    short_interactions = {
-        4: "Que conteúdo você gostaria de ver aqui? Conte nos comentários.",
-        8: "Sua sugestão ajuda o canal. Escreva nos comentários.",
-        12: "Estamos na reta final. Deixe sua sugestão para o canal.",
+    interactions = {
+        4: "Primeira parte concluída. Gostou? Deixe seu like e conte nos comentários.",
+        8: "Chegamos à metade. Compartilhe o vídeo e deixe sua sugestão para o canal.",
+        12: "Estamos na reta final. Inscreva-se e acompanhe os próximos resultados.",
     }
 
-    for index, game in enumerate(games):
-        start = _game_start(index)
+    starts = _game_starts(len(games))
+    for index, (game, start) in enumerate(zip(games, starts)):
         voice = primary if index % 2 == 0 else secondary
         segments.append(
             SpeechSegment(
@@ -96,66 +126,67 @@ def _full_segments_natural(
                 voice,
                 _normalize_loteca_speech(final.game_speech(game)),
                 1.01,
-                "-3%",
+                FULL_SPEECH_RATE,
                 "loteca_game",
             )
         )
 
-        interaction = short_interactions.get(index + 1)
+        interaction = interactions.get(index + 1)
         if interaction:
             other = secondary if voice == primary else primary
             segments.append(
                 SpeechSegment(
-                    start + 5.75,
+                    start + 7.00,
                     other,
                     _normalize_loteca_speech(interaction),
                     1.0,
-                    "+2%",
+                    FULL_SPEECH_RATE,
                     "engagement",
                 )
             )
 
-    games_end = base.FULL_GAME_START + len(games) * FINAL_FULL_GAME_SLOT
+    games_end = _games_end(len(games))
+    closing_start = games_end + 24.0
     segments.extend(
         [
             SpeechSegment(
                 games_end + 0.40,
                 primary,
-                "Os quatorze resultados já foram apresentados. Na tela, você confere agora o resumo completo do concurso.",
+                "Os quatorze resultados já foram apresentados. Confira agora o primeiro resumo do concurso.",
                 1.0,
-                "-3%",
+                FULL_SPEECH_RATE,
                 "summary",
             ),
             SpeechSegment(
-                games_end + 13.00,
+                games_end + 12.40,
                 secondary,
-                "Para consultar este e outros resultados da Loteca, acesse portalsimonsports.com e abra a seção Loterias Caixa.",
+                "No segundo resumo, revise os demais jogos com calma. Se gostou, deixe o seu like.",
                 1.0,
-                "-3%",
-                "closing",
+                FULL_SPEECH_RATE,
+                "summary",
             ),
             SpeechSegment(
-                games_end + 25.00,
+                closing_start + 0.50,
                 primary,
-                "Se este conteúdo foi útil, deixe o seu like, compartilhe e inscreva-se no canal.",
+                "Para consultar outros resultados da Loteca, acesse portalsimonsports.com e abra Loterias Caixa.",
                 1.0,
-                "-3%",
+                FULL_SPEECH_RATE,
                 "closing",
             ),
             SpeechSegment(
-                games_end + 34.50,
+                closing_start + 11.00,
                 secondary,
-                "E conte nos comentários que tipo de sugestão você gostaria de ver nas próximas publicações.",
+                "Compartilhe, inscreva-se e conte nos comentários quais conteúdos você quer ver no canal.",
                 1.0,
-                "-3%",
+                FULL_SPEECH_RATE,
                 "closing",
             ),
             SpeechSegment(
-                games_end + 48.00,
+                closing_start + 24.00,
                 primary,
                 "Portal Simon Sports, simplesmente o melhor.",
                 1.0,
-                "-4%",
+                FULL_SPEECH_RATE,
                 "closing",
             ),
         ]
@@ -200,21 +231,51 @@ def gerar_pacote_loteca(data: Dict[str, Any]) -> Dict[str, str]:
     original_slot = base.FULL_GAME_SLOT
     original_full_builder = final._full_segments
     original_short_builder = final._short_segments
+    original_concat_writer = base._write_concat_video
+    original_soundtrack_writer = base.write_soundtrack
+
+    def write_concat_dynamic(images, audio, output, duration, temp):
+        adjusted = list(images)
+        output_name = Path(output).name
+        if output_name.startswith("video_completo_loteca_"):
+            durations = _game_durations(14)
+            expected_minimum = 1 + len(durations) + 3
+            if len(adjusted) < expected_minimum:
+                raise RuntimeError(
+                    f"Linha do tempo da Loteca incompleta: {len(adjusted)} cenas."
+                )
+            for index, scene_duration in enumerate(durations, start=1):
+                image, _old_duration = adjusted[index]
+                adjusted[index] = (image, scene_duration)
+        return original_concat_writer(adjusted, audio, output, duration, temp)
+
+    def write_soundtrack_dynamic(path, duration, lottery_name, contest, result_time, cta_time):
+        if abs(float(duration) - FINAL_FULL_DURATION) < 0.01:
+            games_end = _games_end(14)
+            result_time = games_end
+            cta_time = games_end + 24.0
+        return original_soundtrack_writer(
+            path, duration, lottery_name, contest, result_time, cta_time
+        )
 
     install_visual_aprovado()
     base.FULL_DURATION = FINAL_FULL_DURATION
-    base.FULL_GAME_SLOT = FINAL_FULL_GAME_SLOT
+    base.FULL_GAME_SLOT = FINAL_FULL_STANDARD_SLOT
+    base._write_concat_video = write_concat_dynamic
+    base.write_soundtrack = write_soundtrack_dynamic
     final._full_segments = _full_segments_natural
     final._short_segments = _short_segments_natural
     try:
         package = final.gerar_pacote_loteca(data)
         package["modo_apresentacao"] = (
-            "Loteca final com visual aprovado, intervalo reduzido, pronúncia revisada e sugestões"
+            "Loteca final com ritmo variável, voz constante, visual e pronúncia aprovados"
         )
         return package
     finally:
         base.FULL_DURATION = original_duration
         base.FULL_GAME_SLOT = original_slot
+        base._write_concat_video = original_concat_writer
+        base.write_soundtrack = original_soundtrack_writer
         final._full_segments = original_full_builder
         final._short_segments = original_short_builder
 
@@ -222,8 +283,15 @@ def gerar_pacote_loteca(data: Dict[str, Any]) -> Dict[str, str]:
 __all__ = [
     "FINAL_FULL_DURATION",
     "FINAL_FULL_GAME_SLOT",
+    "FINAL_FULL_INTERACTION_SLOT",
+    "FINAL_FULL_STANDARD_SLOT",
+    "FULL_SPEECH_RATE",
+    "INTERACTION_AFTER_GAMES",
     "_full_segments_natural",
+    "_game_durations",
     "_game_start",
+    "_game_starts",
+    "_games_end",
     "_normalize_loteca_speech",
     "_short_segments_natural",
     "gerar_pacote_loteca",
