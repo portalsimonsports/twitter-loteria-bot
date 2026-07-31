@@ -1,0 +1,234 @@
+// PORTAL SIMONSPORTS — DISPARO IMEDIATO DE VÍDEOS NO YOUTUBE
+//
+// OBJETIVO
+// Assim que o resultado estiver completamente gravado na aba ImportadosBlogger2,
+// este módulo avisa o GitHub Actions para gerar e publicar exatamente aquela
+// modalidade e aquele concurso, sem aguardar horário fixo.
+//
+// CONFIGURAÇÃO ÚNICA
+// Em Apps Script > Configurações do projeto > Propriedades do script, cadastre:
+// GITHUB_TOKEN_DISPATCH = token do GitHub com permissão Contents: Read and write
+// no repositório portalsimonsports/twitter-loteria-bot.
+//
+// USO DIRETO NO CÓDIGO QUE GRAVA O RESULTADO
+// Depois de concluir todas as escritas da linha, execute:
+// SpreadsheetApp.flush();
+// DISPARAR_PUBLICACAO_YOUTUBE_IMEDIATA(loteria, concurso);
+
+const YOUTUBE_GITHUB_OWNER_ = 'portalsimonsports';
+const YOUTUBE_GITHUB_REPO_ = 'twitter-loteria-bot';
+const YOUTUBE_GITHUB_EVENTO_ = 'resultado_loteria_disponivel';
+const YOUTUBE_PLANILHA_ID_ = '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI';
+const YOUTUBE_ABA_RESULTADOS_ = 'ImportadosBlogger2';
+const YOUTUBE_REDISPARO_MINUTOS_ = 15;
+
+/**
+ * Dispara imediatamente a publicação do concurso informado.
+ * Chamar somente depois que loteria, concurso, data, números e URL estiverem gravados.
+ */
+function DISPARAR_PUBLICACAO_YOUTUBE_IMEDIATA(loteria, concurso) {
+  const nomeLoteria = String(loteria || '').trim();
+  const numeroConcurso = String(concurso || '').trim();
+
+  if (!nomeLoteria) {
+    throw new Error('Loteria não informada para o disparo imediato do YouTube.');
+  }
+  if (!numeroConcurso) {
+    throw new Error('Concurso não informado para o disparo imediato do YouTube.');
+  }
+
+  SpreadsheetApp.flush();
+
+  const token = PropertiesService.getScriptProperties()
+    .getProperty('GITHUB_TOKEN_DISPATCH');
+
+  if (!token) {
+    throw new Error(
+      'Propriedade GITHUB_TOKEN_DISPATCH não configurada nas Propriedades do script.'
+    );
+  }
+
+  const endpoint =
+    'https://api.github.com/repos/' +
+    encodeURIComponent(YOUTUBE_GITHUB_OWNER_) + '/' +
+    encodeURIComponent(YOUTUBE_GITHUB_REPO_) +
+    '/dispatches';
+
+  const payload = {
+    event_type: YOUTUBE_GITHUB_EVENTO_,
+    client_payload: {
+      loteria: nomeLoteria,
+      concurso: numeroConcurso,
+      origem: 'Google Apps Script',
+      planilha_id: YOUTUBE_PLANILHA_ID_,
+      aba: YOUTUBE_ABA_RESULTADOS_,
+      enviado_em: new Date().toISOString()
+    }
+  };
+
+  const resposta = UrlFetchApp.fetch(endpoint, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    headers: {
+      Authorization: 'Bearer ' + token,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'Portal-SimonSports-Apps-Script'
+    },
+    muteHttpExceptions: true
+  });
+
+  const codigo = resposta.getResponseCode();
+  if (codigo !== 204) {
+    throw new Error(
+      'GitHub recusou o disparo imediato. HTTP ' + codigo + ': ' +
+      resposta.getContentText().slice(0, 1000)
+    );
+  }
+
+  console.log(
+    '[YOUTUBE IMEDIATO] Disparado: ' + nomeLoteria +
+    ' — concurso ' + numeroConcurso
+  );
+
+  return true;
+}
+
+/**
+ * Reserva adicional: procura resultados completos ainda não publicados e dispara.
+ * O gatilho roda a cada minuto, mas o caminho principal continua sendo a chamada
+ * direta de DISPARAR_PUBLICACAO_YOUTUBE_IMEDIATA após a gravação do resultado.
+ */
+function VERIFICAR_RESULTADOS_PENDENTES_YOUTUBE() {
+  const planilha = SpreadsheetApp.openById(YOUTUBE_PLANILHA_ID_);
+  const aba = planilha.getSheetByName(YOUTUBE_ABA_RESULTADOS_);
+  if (!aba) {
+    throw new Error('Aba não encontrada: ' + YOUTUBE_ABA_RESULTADOS_);
+  }
+
+  const ultimaLinha = aba.getLastRow();
+  const ultimaColuna = aba.getLastColumn();
+  if (ultimaLinha < 2 || ultimaColuna < 1) {
+    return 0;
+  }
+
+  const valores = aba.getRange(1, 1, ultimaLinha, ultimaColuna).getDisplayValues();
+  const cabecalhos = valores[0].map(function(valor) {
+    return NORMALIZAR_CABECALHO_YOUTUBE_(valor);
+  });
+
+  const colunaLoteria = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['loteria', 'produto']);
+  const colunaConcurso = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['concurso']);
+  const colunaData = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['data', 'data sorteio']);
+  const colunaNumeros = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['numeros', 'números', 'descricao', 'descrição']);
+  const colunaUrl = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['url', 'link']);
+  const colunaPublicado = LOCALIZAR_COLUNA_YOUTUBE_(
+    cabecalhos,
+    ['publicado youtube', 'publicado_youtube']
+  );
+
+  if (
+    colunaLoteria < 0 || colunaConcurso < 0 || colunaData < 0 ||
+    colunaNumeros < 0 || colunaUrl < 0
+  ) {
+    throw new Error(
+      'A aba não contém todas as colunas obrigatórias para o disparo do YouTube.'
+    );
+  }
+
+  const propriedades = PropertiesService.getScriptProperties();
+  const agora = Date.now();
+  const limiteInferior = Math.max(1, valores.length - 200);
+  let disparos = 0;
+
+  for (let indice = valores.length - 1; indice >= limiteInferior; indice--) {
+    const linha = valores[indice];
+    const loteria = String(linha[colunaLoteria] || '').trim();
+    const concurso = String(linha[colunaConcurso] || '').trim();
+    const data = String(linha[colunaData] || '').trim();
+    const numeros = String(linha[colunaNumeros] || '').trim();
+    const url = String(linha[colunaUrl] || '').trim();
+    const publicado = colunaPublicado >= 0
+      ? String(linha[colunaPublicado] || '').trim()
+      : '';
+
+    if (!loteria || !concurso || !data || !numeros || !url || publicado) {
+      continue;
+    }
+
+    const assinatura = CRIAR_ASSINATURA_YOUTUBE_(loteria + '|' + concurso);
+    const chave = 'YOUTUBE_DISPATCH_' + assinatura;
+    const ultimoDisparo = Number(propriedades.getProperty(chave) || 0);
+    const intervalo = YOUTUBE_REDISPARO_MINUTOS_ * 60 * 1000;
+
+    if (ultimoDisparo && agora - ultimoDisparo < intervalo) {
+      continue;
+    }
+
+    DISPARAR_PUBLICACAO_YOUTUBE_IMEDIATA(loteria, concurso);
+    propriedades.setProperty(chave, String(agora));
+    disparos++;
+  }
+
+  console.log('[YOUTUBE IMEDIATO] Pendências disparadas: ' + disparos);
+  return disparos;
+}
+
+/** Instala a verificação de reserva a cada minuto. */
+function INSTALAR_GATILHO_YOUTUBE_IMEDIATO() {
+  REMOVER_GATILHOS_YOUTUBE_IMEDIATO_();
+  ScriptApp.newTrigger('VERIFICAR_RESULTADOS_PENDENTES_YOUTUBE')
+    .timeBased()
+    .everyMinutes(1)
+    .create();
+
+  console.log('[YOUTUBE IMEDIATO] Gatilho de reserva instalado a cada minuto.');
+}
+
+/** Remove somente os gatilhos criados por este módulo. */
+function REMOVER_GATILHOS_YOUTUBE_IMEDIATO_() {
+  ScriptApp.getProjectTriggers().forEach(function(gatilho) {
+    if (
+      gatilho.getHandlerFunction() ===
+      'VERIFICAR_RESULTADOS_PENDENTES_YOUTUBE'
+    ) {
+      ScriptApp.deleteTrigger(gatilho);
+    }
+  });
+}
+
+function LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, alternativas) {
+  const alvos = alternativas.map(function(valor) {
+    return NORMALIZAR_CABECALHO_YOUTUBE_(valor);
+  });
+
+  for (let indice = 0; indice < cabecalhos.length; indice++) {
+    if (alvos.indexOf(cabecalhos[indice]) >= 0) {
+      return indice;
+    }
+  }
+  return -1;
+}
+
+function NORMALIZAR_CABECALHO_YOUTUBE_(valor) {
+  return String(valor || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function CRIAR_ASSINATURA_YOUTUBE_(valor) {
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(valor || ''),
+    Utilities.Charset.UTF_8
+  );
+
+  return Utilities.base64EncodeWebSafe(bytes)
+    .replace(/=+$/g, '')
+    .slice(0, 32);
+}
