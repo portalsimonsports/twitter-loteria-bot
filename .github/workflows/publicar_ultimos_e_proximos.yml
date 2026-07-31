@@ -1,13 +1,17 @@
-name: Publicar últimos e próximos resultados
+name: Publicação imediata dos resultados
 
 on:
+  repository_dispatch:
+    types:
+      - resultado_loteria_disponivel
   push:
     branches:
       - main
     paths:
       - launch_ultimos_concursos_2026_07_30.txt
   schedule:
-    - cron: "45 2 * * *"
+    # Segurança: verifica pendências a cada cinco minutos caso o aviso imediato falhe.
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       modo:
@@ -24,7 +28,7 @@ permissions:
 
 jobs:
   publicar:
-    name: Publicar resultados com padrão V18 aprovado
+    name: Publicar resultado assim que disponível
     runs-on: ubuntu-latest
     timeout-minutes: 360
     concurrency:
@@ -50,19 +54,34 @@ jobs:
       - name: Definir modo da execução
         id: modo
         shell: bash
+        env:
+          EVENT_LOTERIA: ${{ github.event.client_payload.loteria || '' }}
+          EVENT_CONCURSO: ${{ github.event.client_payload.concurso || '' }}
         run: |
           if [[ "${{ github.event_name }}" == "push" ]] || [[ "${{ inputs.modo }}" == "ultimos_por_modalidade" ]]; then
             echo "maximo=50" >> "$GITHUB_OUTPUT"
             echo "janela=3650" >> "$GITHUB_OUTPUT"
             echo "ultimo_por_modalidade=true" >> "$GITHUB_OUTPUT"
             echo "excluir=Loteca" >> "$GITHUB_OUTPUT"
+            echo "alvo_loteria=" >> "$GITHUB_OUTPUT"
+            echo "alvo_concurso=" >> "$GITHUB_OUTPUT"
             echo "descricao=lançamento do concurso mais recente pendente de cada modalidade" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            echo "maximo=1" >> "$GITHUB_OUTPUT"
+            echo "janela=30" >> "$GITHUB_OUTPUT"
+            echo "ultimo_por_modalidade=false" >> "$GITHUB_OUTPUT"
+            echo "excluir=" >> "$GITHUB_OUTPUT"
+            printf 'alvo_loteria=%s\n' "$EVENT_LOTERIA" >> "$GITHUB_OUTPUT"
+            printf 'alvo_concurso=%s\n' "$EVENT_CONCURSO" >> "$GITHUB_OUTPUT"
+            echo "descricao=publicação imediata do resultado informado pela base" >> "$GITHUB_OUTPUT"
           else
             echo "maximo=8" >> "$GITHUB_OUTPUT"
             echo "janela=7" >> "$GITHUB_OUTPUT"
             echo "ultimo_por_modalidade=false" >> "$GITHUB_OUTPUT"
             echo "excluir=" >> "$GITHUB_OUTPUT"
-            echo "descricao=rotina dos resultados novos dos últimos sete dias" >> "$GITHUB_OUTPUT"
+            echo "alvo_loteria=" >> "$GITHUB_OUTPUT"
+            echo "alvo_concurso=" >> "$GITHUB_OUTPUT"
+            echo "descricao=verificação de segurança dos resultados recentes" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Validar padrão de qualidade e segurança
@@ -80,6 +99,7 @@ jobs:
           import os
           from lottery_result_v18 import parse_lottery_result
           from post_video import _metadata, _unique_tags
+          from video_queue_auto import _contest_key, _lottery_key
           from voice_narration_v17 import (
               VOICE_ANTONIO,
               VOICE_FRANCISCA,
@@ -99,8 +119,9 @@ jobs:
           assert parse_lottery_result("Mais Milionaria", "5,15,33,34,39,44 + 1,2").trevos == ("01", "02")
           assert parse_lottery_result("Timemania", "7,23,34,37,52,56,65 - CAXIAS /RS").team
           assert parse_lottery_result("Dia de Sorte", "1,6,12,14,23,26,27 - Julho").lucky_month == "Julho"
+          assert _lottery_key("+Milionária") == "milionaria"
+          assert _contest_key("Concurso 372") == "372"
 
-          # Nunca expor o modelo técnico da voz no vídeo.
           assert voice_label(VOICE_ANTONIO) == "Antônio"
           assert voice_label(VOICE_FRANCISCA) == "Francisca"
           assert voice_label(VOICE_THALITA_MULTILINGUAL) == "Thalita"
@@ -109,7 +130,6 @@ jobs:
           assert "Neural" not in pair_label((VOICE_ANTONIO, VOICE_THALITA_NEURAL))
           assert "Multilingual" not in pair_label((VOICE_FRANCISCA, VOICE_THALITA_MULTILINGUAL))
 
-          # A voz só começa depois de a bola terminar a animação e entrar no quadro.
           full_reveals = [46.0, 50.55, 55.10, 59.65]
           short_reveals = [5.64, 6.72, 7.80, 8.88]
           assert _visual_offset(full_reveals, False) >= 2.80
@@ -127,7 +147,7 @@ jobs:
           assert full["title"] and short["title"]
           assert "Portal SimonSports" in full["tags"]
           assert len(_unique_tags(full["tags"])) <= 30
-          print("Padrão V18 aprovado: nomes públicos, sincronização, especiais, SEO e duplicidade validados.")
+          print("Publicação imediata validada: alvo exato, nomes públicos, sincronização, SEO e duplicidade.")
           PY
 
       - name: Publicar fila selecionada
@@ -146,6 +166,8 @@ jobs:
           ALLOW_OLD_QUEUED_VIDEOS: "false"
           LATEST_PER_MODALITY_ONLY: ${{ steps.modo.outputs.ultimo_por_modalidade }}
           VIDEO_EXCLUDE_MODALITIES: ${{ steps.modo.outputs.excluir }}
+          VIDEO_TARGET_MODALITY: ${{ steps.modo.outputs.alvo_loteria }}
+          VIDEO_TARGET_CONTEST: ${{ steps.modo.outputs.alvo_concurso }}
           DRY_RUN_VIDEOS: "false"
           VIDEO_WIDTH: "1080"
           VIDEO_HEIGHT: "1920"
@@ -153,6 +175,7 @@ jobs:
           TZ: America/Sao_Paulo
         run: |
           echo "Modo: ${{ steps.modo.outputs.descricao }}"
+          echo "Alvo: ${{ steps.modo.outputs.alvo_loteria }} / ${{ steps.modo.outputs.alvo_concurso }}"
           mkdir -p output
           python video_queue_auto.py
 
