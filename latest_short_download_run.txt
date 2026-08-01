@@ -1,0 +1,4 @@
+run_id=30676554455
+run_number=1
+artifact_name=short-loteca-1263-simonsports-1
+file=Short_Loteca_1263_SimonSports.mp4
