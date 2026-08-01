@@ -1,0 +1,65 @@
+name: Exportar Short para download V2
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - export_short_request_v2.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exportar:
+    name: Gerar Short SimonSports para download
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar FFmpeg, fontes e dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation2
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Gerar Short da Loteca 1263
+        env:
+          VIDEO_FPS: "30"
+        run: |
+          set -euo pipefail
+          rm -rf export_short
+          mkdir -p export_short
+          python loteca_preview_v18.py --output-dir export_short
+
+          echo "Arquivos produzidos:"
+          find export_short -maxdepth 1 -type f -printf '%f\n' | sort
+
+          SHORT_FILE="$(find export_short -maxdepth 1 -type f -name 'short_loteca_*.mp4' -print -quit)"
+          if [[ -z "$SHORT_FILE" ]]; then
+            echo "ERRO: nenhum Short da Loteca foi gerado."
+            exit 1
+          fi
+
+          cp "$SHORT_FILE" export_short/Short_Loteca_1263_SimonSports.mp4
+          test -s export_short/Short_Loteca_1263_SimonSports.mp4
+          ls -lh export_short/Short_Loteca_1263_SimonSports.mp4
+
+      - name: Disponibilizar MP4 para download
+        uses: actions/upload-artifact@v4
+        with:
+          name: Short-Loteca-1263-SimonSports-${{ github.run_number }}
+          path: export_short/Short_Loteca_1263_SimonSports.mp4
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
