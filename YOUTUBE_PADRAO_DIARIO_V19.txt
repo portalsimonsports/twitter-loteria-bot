@@ -1,0 +1,113 @@
+PORTAL SIMONSPORTS — PADRÃO DIÁRIO DE PUBLICAÇÃO NO YOUTUBE
+VERSÃO: V19
+VIGÊNCIA: 01/08/2026
+
+1. REGRA PRINCIPAL
+
+A publicação automática de resultados das Loterias Caixa deve gerar, por data de sorteio:
+
+- 1 vídeo completo reunindo todas as loterias sorteadas no dia;
+- no máximo 1 Short diário;
+- máximo absoluto de 2 publicações por dia.
+
+Não é permitida publicação automática separada por modalidade.
+
+2. VÍDEO COMPLETO DIÁRIO
+
+Título de referência:
+
+Resultados das Loterias de Hoje — Mega-Sena, Quina, Lotofácil e Mais | DD/MM/AAAA
+
+Estrutura:
+
+- abertura entre 5 e 8 segundos;
+- apresentação das loterias sorteadas no dia;
+- nome da loteria, concurso e data;
+- dezenas oficiais;
+- resultados especiais, quando existentes;
+- premiação e ganhadores, quando disponíveis;
+- encerramento solicitando curtida, comentário e inscrição.
+
+3. SHORT DIÁRIO
+
+Título de referência:
+
+Resultados das Loterias de Hoje em 1 Minuto | DD/MM/AAAA
+
+Regras:
+
+- duração obrigatória entre 30 e 60 segundos;
+- começar diretamente pelos resultados;
+- utilizar textos grandes e legíveis;
+- mostrar rapidamente as modalidades do dia;
+- informar que o conteúdo completo está disponível no canal SimonSports.
+
+Com apenas uma loteria no dia, o Short não é obrigatório. Ele somente deve ser gerado quando:
+
+- for sorteio especial;
+- houver indicação Destaque_Short;
+- a variável YOUTUBE_FORCE_SHORT_SINGLE_LOTTERY estiver explicitamente habilitada.
+
+4. CONDIÇÃO PARA PUBLICAÇÃO
+
+O workflow somente pode publicar quando:
+
+- todos os resultados previstos na aba Calendário_Loterias para a data estiverem presentes na aba ImportadosBlogger2;
+- os campos obrigatórios estiverem preenchidos;
+- não existir marca final na coluna Publicado_Youtube_Diario para aquela data.
+
+A coluna Publicado_Youtube não controla o fluxo diário V19 e permanece apenas como histórico do sistema individual legado.
+
+5. CONTROLE DE DUPLICIDADE
+
+A marca final utilizada pelo fluxo diário é:
+
+Publicado YOUTUBE DIÁRIO V19
+
+Em caso de falha após o envio do vídeo completo, deve ser gravada uma marca parcial contendo a URL do vídeo completo. Na repetição, o fluxo deve continuar do ponto pendente sem reenviar o vídeo completo.
+
+6. ARQUIVOS PRINCIPAIS
+
+- daily_queue_v19.py
+  Agrupa os resultados por data, verifica o calendário, controla duplicidade, define se haverá Short e envia os vídeos.
+
+- daily_video_v19.py
+  Gera o vídeo completo, o Short e a miniatura diária.
+
+- daily_video_v19_short_fix.py
+  Garante que o Short permaneça entre 30 e 60 segundos.
+
+- .github/workflows/publicar_ultimos_e_proximos.yml
+  Workflow operacional do padrão diário consolidado.
+
+- .github/workflows/validar_resumo_diario_v19.yml
+  Compila os módulos e gera um exemplo sem publicação para validação.
+
+- GITHUB_DISPARO_YOUTUBE_IMEDIATO.txt
+  Fonte do Apps Script. Apesar do nome histórico do arquivo, o conteúdo envia somente um sinal de verificação diária. A função antiga foi mantida como alias de compatibilidade e não autoriza publicação individual.
+
+7. DISPARO DO APPS SCRIPT
+
+Função recomendada:
+
+DISPARAR_VERIFICACAO_YOUTUBE_DIARIA(dataSorteio, loteria, concurso)
+
+O Apps Script apenas informa que um resultado foi atualizado. O GitHub Actions decide se o conjunto diário está completo.
+
+A verificação de reserva do Apps Script deve usar intervalo de 15 minutos. O workflow do GitHub já executa sua própria verificação periódica a cada 5 minutos.
+
+8. WORKFLOWS LEGADOS
+
+Os workflows de vídeos individuais e da Loteca 1263 devem permanecer apenas como ferramentas manuais de geração de prévias e auditoria, sem qualquer etapa de envio real ao YouTube.
+
+Os scripts antigos podem permanecer no repositório para referência e contingência técnica, mas não devem ser chamados automaticamente por schedule, push ou repository_dispatch.
+
+9. METADADOS
+
+O vídeo completo deve priorizar no título as primeiras modalidades previstas no calendário da data. Quando houver muitas modalidades, utilizar “e Mais” ou “Todos os Sorteios” para respeitar o limite de caracteres do YouTube.
+
+O Short deve conter #Shorts e encaminhar o público ao vídeo completo do canal SimonSports.
+
+10. OBJETIVO
+
+Concentrar visualizações, retenção, tempo de exibição, comentários e inscrições em conteúdos completos, evitando várias publicações semelhantes no mesmo horário.
