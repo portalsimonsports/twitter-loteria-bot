@@ -52,12 +52,13 @@ jobs:
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
           python -m py_compile \
-            daily_video_v19.py daily_queue_v19.py lottery_result_v18.py \
+            daily_video_v19.py daily_video_v19_short_fix.py daily_queue_v19.py lottery_result_v18.py \
             voice_narration_v18.py voice_narration_v17.py audio_identity_v9.py \
             video_queue.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
           import os
+          import daily_video_v19_short_fix
           from daily_queue_v19 import _expected_by_date, _metadata, _special_short
           from daily_video_v19 import FULL_RATE, SHORT_RATE
 
@@ -121,7 +122,7 @@ jobs:
           TZ: America/Sao_Paulo
         run: |
           mkdir -p output
-          python daily_queue_v19.py
+          python -c "import daily_video_v19_short_fix; import daily_queue_v19; daily_queue_v19.main()"
 
       - name: Guardar vídeos e capa para auditoria
         if: always()
