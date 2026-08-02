@@ -1,60 +1,14 @@
-name: Ferramentas legadas de vídeos individuais
+name: Referência legada de vídeos individuais — sem publicação
 
 on:
   workflow_dispatch:
-    inputs:
-      modo:
-        description: "Gerar prévia individual ou publicar manualmente em contingência"
-        required: true
-        default: preview
-        type: choice
-        options:
-          - preview
-          - publish_manual
-  push:
-    branches:
-      - main
-    paths:
-      - gerador_video.py
-      - gerador_video_v5.py
-      - gerador_video_v6.py
-      - gerador_video_v7.py
-      - gerador_video_v8.py
-      - gerador_video_v9.py
-      - gerador_pacote_v10.py
-      - gerador_pacote_v11.py
-      - gerador_pacote_v12.py
-      - gerador_pacote_v13.py
-      - gerador_pacote_v14.py
-      - gerador_pacote_v15.py
-      - gerador_pacote_v16.py
-      - gerador_pacote_v17.py
-      - gerador_pacote_v18.py
-      - voice_narration_v17.py
-      - voice_narration_v18.py
-      - lottery_result_v18.py
-      - video_specials_v18.py
-      - loteca_video_v18.py
-      - loteca_columns_v18.py
-      - loteca_visual_aprovado_v18.py
-      - loteca_release_v18.py
-      - audio_identity_v9.py
-      - video_preview.py
-      - video_queue.py
-      - video_queue_auto.py
-      - post_video.py
-      - youtube_auth.py
-      - youtube_upload.py
-      - requirements.txt
-      - .github/workflows/videos_publish.yml
 
 permissions:
   contents: read
 
 jobs:
   preview-individual:
-    name: Gerar prévia individual legada
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.modo == 'preview') }}
+    name: Gerar prévia individual apenas para auditoria
     runs-on: ubuntu-latest
     timeout-minutes: 180
 
@@ -74,14 +28,14 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar módulos individuais
+      - name: Validar módulos individuais legados
         run: |
           python -m py_compile \
             gerador_pacote_v18.py voice_narration_v18.py lottery_result_v18.py \
             loteca_video_v18.py loteca_columns_v18.py loteca_visual_aprovado_v18.py \
             loteca_release_v18.py video_preview.py post_video.py youtube_upload.py
 
-      - name: Gerar prévia individual
+      - name: Gerar prévia sem enviar ao YouTube
         env:
           VIDEO_WIDTH: "1080"
           VIDEO_HEIGHT: "1920"
@@ -89,69 +43,14 @@ jobs:
         run: |
           rm -rf preview_output
           python video_preview.py --source data/to_publish.json --output-dir preview_output --duration 60
+          ls -lh preview_output
 
-      - name: Disponibilizar prévia
+      - name: Disponibilizar prévia individual
         uses: actions/upload-artifact@v4
         with:
-          name: previa-individual-legada-${{ github.run_number }}
+          name: previa-individual-legada-sem-publicacao-${{ github.run_number }}
           path: |
             preview_output/*.mp4
             preview_output/*.png
           if-no-files-found: error
-          retention-days: 7
-
-  publicar-individual-manual:
-    name: Publicar individualmente somente por comando manual
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.modo == 'publish_manual' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    concurrency:
-      group: youtube-loterias-publicacao-manual-legada
-      cancel-in-progress: false
-
-    steps:
-      - name: Checkout do repositório
-        uses: actions/checkout@v4
-
-      - name: Configurar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Instalar dependências
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation2
-          python -m pip install --upgrade pip setuptools wheel
-          pip install --no-cache-dir -r requirements.txt
-
-      - name: Publicar fila individual em contingência
-        env:
-          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
-          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
-          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
-          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
-          COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
-          PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL || 'Publicado_Youtube' }}
-          MAX_VIDEOS_RODADA: "1"
-          PAUSA_ENTRE_VIDEOS: "3.0"
-          AUTO_ENQUEUE_VIDEOS: "true"
-          VIDEO_BACKLOG_DAYS: "7"
-          ALLOW_OLD_QUEUED_VIDEOS: "false"
-          DRY_RUN_VIDEOS: "false"
-          VIDEO_FPS: "30"
-          TZ: America/Sao_Paulo
-        run: |
-          mkdir -p output
-          python video_queue_auto.py
-
-      - name: Guardar arquivos de contingência
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: publicacao-individual-manual-${{ github.run_number }}
-          path: |
-            output/*.mp4
-            output/*.png
-          if-no-files-found: ignore
           retention-days: 7
