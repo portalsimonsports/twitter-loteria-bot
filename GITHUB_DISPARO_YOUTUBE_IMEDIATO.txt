@@ -1,40 +1,55 @@
-// PORTAL SIMONSPORTS — DISPARO IMEDIATO DE VÍDEOS NO YOUTUBE
+// PORTAL SIMONSPORTS — SINAL DIÁRIO CONSOLIDADO PARA O YOUTUBE
 //
-// OBJETIVO
-// Assim que o resultado estiver completamente gravado na aba ImportadosBlogger2,
-// este módulo avisa o GitHub Actions para gerar e publicar exatamente aquela
-// modalidade e aquele concurso, sem aguardar horário fixo.
+// PADRÃO V19 — VIGENTE A PARTIR DE 01/08/2026
+// • 1 vídeo completo reunindo todas as loterias sorteadas no dia.
+// • No máximo 1 Short diário.
+// • Máximo de 2 publicações por dia.
+// • Com apenas uma loteria, o Short só é gerado quando houver destaque especial.
+//
+// IMPORTANTE
+// Este Apps Script NÃO manda mais publicar uma modalidade isoladamente.
+// Ele apenas avisa o GitHub Actions de que existe resultado novo. O workflow
+// "Publicação diária consolidada no YouTube" consulta a planilha, confere a aba
+// Calendário_Loterias e só publica quando todas as modalidades previstas para a
+// data estiverem disponíveis.
 //
 // CONFIGURAÇÃO ÚNICA
 // Em Apps Script > Configurações do projeto > Propriedades do script, cadastre:
-// GITHUB_TOKEN_DISPATCH = token do GitHub com permissão Contents: Read and write
-// no repositório portalsimonsports/twitter-loteria-bot.
+// GITHUB_TOKEN_DISPATCH = token do GitHub com acesso ao repositório
+// portalsimonsports/twitter-loteria-bot e permissão para repository_dispatch.
 //
 // USO DIRETO NO CÓDIGO QUE GRAVA O RESULTADO
 // Depois de concluir todas as escritas da linha, execute:
 // SpreadsheetApp.flush();
-// DISPARAR_PUBLICACAO_YOUTUBE_IMEDIATA(loteria, concurso);
+// DISPARAR_VERIFICACAO_YOUTUBE_DIARIA(dataSorteio, loteria, concurso);
+//
+// A função antiga DISPARAR_PUBLICACAO_YOUTUBE_IMEDIATA foi mantida apenas para
+// compatibilidade. Ela agora localiza a data do concurso e chama o fluxo diário.
 
 const YOUTUBE_GITHUB_OWNER_ = 'portalsimonsports';
 const YOUTUBE_GITHUB_REPO_ = 'twitter-loteria-bot';
 const YOUTUBE_GITHUB_EVENTO_ = 'resultado_loteria_disponivel';
 const YOUTUBE_PLANILHA_ID_ = '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI';
 const YOUTUBE_ABA_RESULTADOS_ = 'ImportadosBlogger2';
+const YOUTUBE_COLUNA_PUBLICADO_DIARIO_ = 'Publicado_Youtube_Diario';
+const YOUTUBE_DATA_INICIO_DIARIO_ = '01/08/2026';
 const YOUTUBE_REDISPARO_MINUTOS_ = 15;
+const YOUTUBE_FUSO_HORARIO_ = 'America/Sao_Paulo';
 
 /**
- * Dispara imediatamente a publicação do concurso informado.
- * Chamar somente depois que loteria, concurso, data, números e URL estiverem gravados.
+ * Envia um sinal de verificação do lote diário ao GitHub Actions.
+ * O sinal não autoriza publicação individual e não ignora modalidades faltantes.
  */
-function DISPARAR_PUBLICACAO_YOUTUBE_IMEDIATA(loteria, concurso) {
+function DISPARAR_VERIFICACAO_YOUTUBE_DIARIA(dataSorteio, loteria, concurso) {
+  const dataReferencia = NORMALIZAR_DATA_YOUTUBE_(dataSorteio);
   const nomeLoteria = String(loteria || '').trim();
   const numeroConcurso = String(concurso || '').trim();
 
-  if (!nomeLoteria) {
-    throw new Error('Loteria não informada para o disparo imediato do YouTube.');
-  }
-  if (!numeroConcurso) {
-    throw new Error('Concurso não informado para o disparo imediato do YouTube.');
+  if (!dataReferencia) {
+    throw new Error(
+      'Data do sorteio inválida para a verificação diária do YouTube: ' +
+      String(dataSorteio || '')
+    );
   }
 
   SpreadsheetApp.flush();
@@ -57,8 +72,11 @@ function DISPARAR_PUBLICACAO_YOUTUBE_IMEDIATA(loteria, concurso) {
   const payload = {
     event_type: YOUTUBE_GITHUB_EVENTO_,
     client_payload: {
-      loteria: nomeLoteria,
-      concurso: numeroConcurso,
+      modo: 'diario_consolidado',
+      data: dataReferencia,
+      loteria_origem: nomeLoteria,
+      concurso_origem: numeroConcurso,
+      maximo_publicacoes_dia: 2,
       origem: 'Google Apps Script',
       planilha_id: YOUTUBE_PLANILHA_ID_,
       aba: YOUTUBE_ABA_RESULTADOS_,
@@ -82,23 +100,56 @@ function DISPARAR_PUBLICACAO_YOUTUBE_IMEDIATA(loteria, concurso) {
   const codigo = resposta.getResponseCode();
   if (codigo !== 204) {
     throw new Error(
-      'GitHub recusou o disparo imediato. HTTP ' + codigo + ': ' +
+      'GitHub recusou o sinal diário. HTTP ' + codigo + ': ' +
       resposta.getContentText().slice(0, 1000)
     );
   }
 
   console.log(
-    '[YOUTUBE IMEDIATO] Disparado: ' + nomeLoteria +
-    ' — concurso ' + numeroConcurso
+    '[YOUTUBE DIÁRIO] Verificação solicitada para ' + dataReferencia +
+    (nomeLoteria ? ' após ' + nomeLoteria : '') +
+    (numeroConcurso ? ' — concurso ' + numeroConcurso : '')
   );
 
   return true;
 }
 
 /**
- * Reserva adicional: procura resultados completos ainda não publicados e dispara.
- * O gatilho roda a cada minuto, mas o caminho principal continua sendo a chamada
- * direta de DISPARAR_PUBLICACAO_YOUTUBE_IMEDIATA após a gravação do resultado.
+ * Compatibilidade com códigos que ainda chamam a função antiga.
+ * Não publica mais o concurso isoladamente.
+ */
+function DISPARAR_PUBLICACAO_YOUTUBE_IMEDIATA(loteria, concurso, dataSorteio) {
+  const nomeLoteria = String(loteria || '').trim();
+  const numeroConcurso = String(concurso || '').trim();
+
+  if (!nomeLoteria) {
+    throw new Error('Loteria não informada para o sinal diário do YouTube.');
+  }
+  if (!numeroConcurso) {
+    throw new Error('Concurso não informado para o sinal diário do YouTube.');
+  }
+
+  const dataReferencia =
+    NORMALIZAR_DATA_YOUTUBE_(dataSorteio) ||
+    LOCALIZAR_DATA_RESULTADO_YOUTUBE_(nomeLoteria, numeroConcurso);
+
+  if (!dataReferencia) {
+    throw new Error(
+      'Não foi possível localizar a data de ' + nomeLoteria +
+      ' — concurso ' + numeroConcurso + '.'
+    );
+  }
+
+  return DISPARAR_VERIFICACAO_YOUTUBE_DIARIA(
+    dataReferencia,
+    nomeLoteria,
+    numeroConcurso
+  );
+}
+
+/**
+ * Procura datas com resultados completos e ainda sem marca final diária.
+ * Cada data gera no máximo um repository_dispatch dentro do intervalo definido.
  */
 function VERIFICAR_RESULTADOS_PENDENTES_YOUTUBE() {
   const planilha = SpreadsheetApp.openById(YOUTUBE_PLANILHA_ID_);
@@ -121,81 +172,189 @@ function VERIFICAR_RESULTADOS_PENDENTES_YOUTUBE() {
   const colunaLoteria = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['loteria', 'produto']);
   const colunaConcurso = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['concurso']);
   const colunaData = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['data', 'data sorteio']);
-  const colunaNumeros = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['numeros', 'números', 'descricao', 'descrição']);
+  const colunaNumeros = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, [
+    'numeros', 'números', 'descricao', 'descrição'
+  ]);
   const colunaUrl = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['url', 'link']);
-  const colunaPublicado = LOCALIZAR_COLUNA_YOUTUBE_(
-    cabecalhos,
-    ['publicado youtube', 'publicado_youtube']
-  );
+  const colunaPublicadoDiario = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, [
+    YOUTUBE_COLUNA_PUBLICADO_DIARIO_,
+    'publicado youtube diario',
+    'publicado_youtube_diario'
+  ]);
 
   if (
     colunaLoteria < 0 || colunaConcurso < 0 || colunaData < 0 ||
     colunaNumeros < 0 || colunaUrl < 0
   ) {
     throw new Error(
-      'A aba não contém todas as colunas obrigatórias para o disparo do YouTube.'
+      'A aba não contém todas as colunas obrigatórias para a verificação diária do YouTube.'
     );
   }
 
-  const propriedades = PropertiesService.getScriptProperties();
-  const agora = Date.now();
-  const limiteInferior = Math.max(1, valores.length - 200);
-  let disparos = 0;
+  const inicioNumero = DATA_NUMERO_YOUTUBE_(YOUTUBE_DATA_INICIO_DIARIO_);
+  const hoje = Utilities.formatDate(
+    new Date(),
+    YOUTUBE_FUSO_HORARIO_,
+    'dd/MM/yyyy'
+  );
+  const hojeNumero = DATA_NUMERO_YOUTUBE_(hoje);
+  const limiteInferior = Math.max(1, valores.length - 500);
+  const datasPendentes = {};
 
   for (let indice = valores.length - 1; indice >= limiteInferior; indice--) {
     const linha = valores[indice];
     const loteria = String(linha[colunaLoteria] || '').trim();
     const concurso = String(linha[colunaConcurso] || '').trim();
-    const data = String(linha[colunaData] || '').trim();
+    const data = NORMALIZAR_DATA_YOUTUBE_(linha[colunaData]);
     const numeros = String(linha[colunaNumeros] || '').trim();
     const url = String(linha[colunaUrl] || '').trim();
-    const publicado = colunaPublicado >= 0
-      ? String(linha[colunaPublicado] || '').trim()
+    const marcadorDiario = colunaPublicadoDiario >= 0
+      ? String(linha[colunaPublicadoDiario] || '').trim()
       : '';
 
-    if (!loteria || !concurso || !data || !numeros || !url || publicado) {
+    if (!loteria || !concurso || !data || !numeros || !url) {
       continue;
     }
 
-    const assinatura = CRIAR_ASSINATURA_YOUTUBE_(loteria + '|' + concurso);
-    const chave = 'YOUTUBE_DISPATCH_' + assinatura;
-    const ultimoDisparo = Number(propriedades.getProperty(chave) || 0);
-    const intervalo = YOUTUBE_REDISPARO_MINUTOS_ * 60 * 1000;
-
-    if (ultimoDisparo && agora - ultimoDisparo < intervalo) {
+    const dataNumero = DATA_NUMERO_YOUTUBE_(data);
+    if (!dataNumero || dataNumero < inicioNumero || dataNumero > hojeNumero) {
       continue;
     }
 
-    DISPARAR_PUBLICACAO_YOUTUBE_IMEDIATA(loteria, concurso);
-    propriedades.setProperty(chave, String(agora));
-    disparos++;
+    if (MARCADOR_FINAL_YOUTUBE_DIARIO_(marcadorDiario)) {
+      if (!datasPendentes[data]) {
+        datasPendentes[data] = {
+          finalizado: true,
+          loteria: loteria,
+          concurso: concurso
+        };
+      } else {
+        datasPendentes[data].finalizado = true;
+      }
+      continue;
+    }
+
+    if (!datasPendentes[data]) {
+      datasPendentes[data] = {
+        finalizado: false,
+        loteria: loteria,
+        concurso: concurso
+      };
+    }
   }
 
-  console.log('[YOUTUBE IMEDIATO] Pendências disparadas: ' + disparos);
+  const propriedades = PropertiesService.getScriptProperties();
+  const agora = Date.now();
+  const intervalo = YOUTUBE_REDISPARO_MINUTOS_ * 60 * 1000;
+  let disparos = 0;
+
+  Object.keys(datasPendentes)
+    .sort(function(a, b) {
+      return DATA_NUMERO_YOUTUBE_(a) - DATA_NUMERO_YOUTUBE_(b);
+    })
+    .forEach(function(data) {
+      const grupo = datasPendentes[data];
+      if (!grupo || grupo.finalizado) {
+        return;
+      }
+
+      const assinatura = CRIAR_ASSINATURA_YOUTUBE_('DIARIO|' + data);
+      const chave = 'YOUTUBE_DISPATCH_DIARIO_' + assinatura;
+      const ultimoDisparo = Number(propriedades.getProperty(chave) || 0);
+
+      if (ultimoDisparo && agora - ultimoDisparo < intervalo) {
+        return;
+      }
+
+      DISPARAR_VERIFICACAO_YOUTUBE_DIARIA(
+        data,
+        grupo.loteria,
+        grupo.concurso
+      );
+      propriedades.setProperty(chave, String(agora));
+      disparos++;
+    });
+
+  console.log('[YOUTUBE DIÁRIO] Datas pendentes sinalizadas: ' + disparos);
   return disparos;
 }
 
-/** Instala a verificação de reserva a cada minuto. */
-function INSTALAR_GATILHO_YOUTUBE_IMEDIATO() {
-  REMOVER_GATILHOS_YOUTUBE_IMEDIATO_();
+/**
+ * Instala uma verificação de reserva a cada 15 minutos.
+ * O GitHub Actions já possui verificação própria a cada 5 minutos.
+ */
+function INSTALAR_GATILHO_YOUTUBE_DIARIO() {
+  REMOVER_GATILHOS_YOUTUBE_DIARIO_();
   ScriptApp.newTrigger('VERIFICAR_RESULTADOS_PENDENTES_YOUTUBE')
     .timeBased()
-    .everyMinutes(1)
+    .everyMinutes(15)
     .create();
 
-  console.log('[YOUTUBE IMEDIATO] Gatilho de reserva instalado a cada minuto.');
+  console.log('[YOUTUBE DIÁRIO] Gatilho de reserva instalado a cada 15 minutos.');
 }
 
-/** Remove somente os gatilhos criados por este módulo. */
-function REMOVER_GATILHOS_YOUTUBE_IMEDIATO_() {
+/** Compatibilidade com o nome antigo do instalador. */
+function INSTALAR_GATILHO_YOUTUBE_IMEDIATO() {
+  return INSTALAR_GATILHO_YOUTUBE_DIARIO();
+}
+
+/** Remove os gatilhos antigos e atuais deste módulo. */
+function REMOVER_GATILHOS_YOUTUBE_DIARIO_() {
+  const funcoes = [
+    'VERIFICAR_RESULTADOS_PENDENTES_YOUTUBE'
+  ];
+
   ScriptApp.getProjectTriggers().forEach(function(gatilho) {
-    if (
-      gatilho.getHandlerFunction() ===
-      'VERIFICAR_RESULTADOS_PENDENTES_YOUTUBE'
-    ) {
+    if (funcoes.indexOf(gatilho.getHandlerFunction()) >= 0) {
       ScriptApp.deleteTrigger(gatilho);
     }
   });
+}
+
+/** Compatibilidade interna com o nome antigo. */
+function REMOVER_GATILHOS_YOUTUBE_IMEDIATO_() {
+  return REMOVER_GATILHOS_YOUTUBE_DIARIO_();
+}
+
+function LOCALIZAR_DATA_RESULTADO_YOUTUBE_(loteria, concurso) {
+  const planilha = SpreadsheetApp.openById(YOUTUBE_PLANILHA_ID_);
+  const aba = planilha.getSheetByName(YOUTUBE_ABA_RESULTADOS_);
+  if (!aba || aba.getLastRow() < 2) {
+    return '';
+  }
+
+  const valores = aba.getDataRange().getDisplayValues();
+  const cabecalhos = valores[0].map(function(valor) {
+    return NORMALIZAR_CABECALHO_YOUTUBE_(valor);
+  });
+  const colunaLoteria = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['loteria', 'produto']);
+  const colunaConcurso = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['concurso']);
+  const colunaData = LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, ['data', 'data sorteio']);
+
+  if (colunaLoteria < 0 || colunaConcurso < 0 || colunaData < 0) {
+    return '';
+  }
+
+  const loteriaAlvo = NORMALIZAR_CABECALHO_YOUTUBE_(loteria);
+  const concursoAlvo = String(concurso || '').replace(/\D+/g, '');
+  const limiteInferior = Math.max(1, valores.length - 500);
+
+  for (let indice = valores.length - 1; indice >= limiteInferior; indice--) {
+    const linha = valores[indice];
+    const loteriaLinha = NORMALIZAR_CABECALHO_YOUTUBE_(linha[colunaLoteria]);
+    const concursoLinha = String(linha[colunaConcurso] || '').replace(/\D+/g, '');
+
+    if (loteriaLinha === loteriaAlvo && concursoLinha === concursoAlvo) {
+      return NORMALIZAR_DATA_YOUTUBE_(linha[colunaData]);
+    }
+  }
+
+  return '';
+}
+
+function MARCADOR_FINAL_YOUTUBE_DIARIO_(valor) {
+  const texto = NORMALIZAR_CABECALHO_YOUTUBE_(valor);
+  return texto.indexOf('publicado youtube diario v19') >= 0;
 }
 
 function LOCALIZAR_COLUNA_YOUTUBE_(cabecalhos, alternativas) {
@@ -219,6 +378,40 @@ function NORMALIZAR_CABECALHO_YOUTUBE_(valor) {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+}
+
+function NORMALIZAR_DATA_YOUTUBE_(valor) {
+  if (valor instanceof Date && !isNaN(valor.getTime())) {
+    return Utilities.formatDate(
+      valor,
+      YOUTUBE_FUSO_HORARIO_,
+      'dd/MM/yyyy'
+    );
+  }
+
+  const texto = String(valor || '').trim();
+  let partes = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (partes) {
+    return String(Number(partes[1])).padStart(2, '0') + '/' +
+      String(Number(partes[2])).padStart(2, '0') + '/' + partes[3];
+  }
+
+  partes = texto.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (partes) {
+    return String(Number(partes[3])).padStart(2, '0') + '/' +
+      String(Number(partes[2])).padStart(2, '0') + '/' + partes[1];
+  }
+
+  return '';
+}
+
+function DATA_NUMERO_YOUTUBE_(valor) {
+  const data = NORMALIZAR_DATA_YOUTUBE_(valor);
+  const partes = data.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!partes) {
+    return 0;
+  }
+  return Number(partes[3] + partes[2] + partes[1]);
 }
 
 function CRIAR_ASSINATURA_YOUTUBE_(valor) {
