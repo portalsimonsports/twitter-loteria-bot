@@ -1,0 +1,106 @@
+name: Validar resumo diário V19
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - daily_video_v19.py
+      - daily_queue_v19.py
+      - youtube_upload.py
+      - lottery_result_v18.py
+      - voice_narration_v18.py
+      - voice_narration_v17.py
+      - audio_identity_v9.py
+      - requirements.txt
+      - .github/workflows/validar_resumo_diario_v19.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validar-e-renderizar:
+    name: Compilar e gerar exemplo diário sem publicar
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation2
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Compilar módulos V19
+        run: |
+          python -m py_compile \
+            daily_video_v19.py daily_queue_v19.py youtube_upload.py \
+            lottery_result_v18.py voice_narration_v18.py voice_narration_v17.py \
+            audio_identity_v9.py video_queue.py post_video.py
+
+      - name: Gerar exemplo consolidado
+        run: |
+          rm -rf preview_diario_v19
+          python - <<'PY'
+          from daily_video_v19 import gerar_pacote_diario
+
+          resultados = [
+              {
+                  "loteria": "Mega Sena",
+                  "concurso": "3040",
+                  "data": "01/08/2026",
+                  "numeros": "05,12,23,34,45,56",
+                  "url": "https://www.portalsimonsports.com/",
+              },
+              {
+                  "loteria": "Quina",
+                  "concurso": "7080",
+                  "data": "01/08/2026",
+                  "numeros": "10,21,37,58,79",
+                  "url": "https://www.portalsimonsports.com/",
+              },
+              {
+                  "loteria": "Timemania",
+                  "concurso": "2425",
+                  "data": "01/08/2026",
+                  "numeros": "03,11,27,38,52,67,79 - CAXIAS /RS",
+                  "url": "https://www.portalsimonsports.com/",
+              },
+              {
+                  "loteria": "Dia de Sorte",
+                  "concurso": "1260",
+                  "data": "01/08/2026",
+                  "numeros": "02,08,14,19,23,27,30 - Agosto",
+                  "url": "https://www.portalsimonsports.com/",
+              },
+          ]
+          pacote = gerar_pacote_diario(resultados, output_dir="preview_diario_v19", gerar_short=True)
+          assert pacote["completo"].endswith("_completo_v19.mp4")
+          assert pacote["short"].endswith("_short_v19.mp4")
+          assert float(pacote["duracao_short"]) <= 60.0
+          print(pacote)
+          PY
+          ls -lh preview_diario_v19
+          test -n "$(find preview_diario_v19 -maxdepth 1 -name '*_completo_v19.mp4' -print -quit)"
+          test -n "$(find preview_diario_v19 -maxdepth 1 -name '*_short_v19.mp4' -print -quit)"
+          test -n "$(find preview_diario_v19 -maxdepth 1 -name '*_capa_v19.png' -print -quit)"
+
+      - name: Disponibilizar exemplo para aprovação
+        uses: actions/upload-artifact@v4
+        with:
+          name: exemplo-resumo-diario-v19-${{ github.run_number }}
+          path: |
+            preview_diario_v19/*.mp4
+            preview_diario_v19/*.png
+          if-no-files-found: error
+          retention-days: 14
