@@ -1,38 +1,33 @@
-name: Publicação imediata dos resultados
+name: Publicação diária consolidada no YouTube
 
 on:
   repository_dispatch:
     types:
       - resultado_loteria_disponivel
-  push:
-    branches:
-      - main
-    paths:
-      - launch_ultimos_concursos_2026_07_30.txt
   schedule:
-    # Segurança: verifica pendências a cada cinco minutos caso o aviso imediato falhe.
+    # Reserva: verifica a cada cinco minutos se o conjunto diário ficou completo.
     - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       modo:
-        description: "Lançar o último de cada modalidade ou processar somente resultados recentes"
+        description: "Gerar prévia sem publicar ou executar publicação real"
         required: true
-        default: recentes
+        default: prever
         type: choice
         options:
-          - ultimos_por_modalidade
-          - recentes
+          - prever
+          - publicar
 
 permissions:
   contents: read
 
 jobs:
-  publicar:
-    name: Publicar resultado assim que disponível
+  publicar-resumo-diario:
+    name: Gerar 1 vídeo completo e no máximo 1 Short por dia
     runs-on: ubuntu-latest
     timeout-minutes: 360
     concurrency:
-      group: youtube-loterias-publicacao
+      group: youtube-loterias-publicacao-diaria
       cancel-in-progress: false
 
     steps:
@@ -51,64 +46,20 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Definir modo da execução
-        id: modo
-        shell: bash
-        env:
-          EVENT_LOTERIA: ${{ github.event.client_payload.loteria || '' }}
-          EVENT_CONCURSO: ${{ github.event.client_payload.concurso || '' }}
-        run: |
-          if [[ "${{ github.event_name }}" == "push" ]] || [[ "${{ inputs.modo }}" == "ultimos_por_modalidade" ]]; then
-            echo "maximo=50" >> "$GITHUB_OUTPUT"
-            echo "janela=3650" >> "$GITHUB_OUTPUT"
-            echo "ultimo_por_modalidade=true" >> "$GITHUB_OUTPUT"
-            echo "excluir=Loteca" >> "$GITHUB_OUTPUT"
-            echo "alvo_loteria=" >> "$GITHUB_OUTPUT"
-            echo "alvo_concurso=" >> "$GITHUB_OUTPUT"
-            echo "descricao=lançamento do concurso mais recente pendente de cada modalidade" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
-            echo "maximo=1" >> "$GITHUB_OUTPUT"
-            echo "janela=30" >> "$GITHUB_OUTPUT"
-            echo "ultimo_por_modalidade=false" >> "$GITHUB_OUTPUT"
-            echo "excluir=" >> "$GITHUB_OUTPUT"
-            printf 'alvo_loteria=%s\n' "$EVENT_LOTERIA" >> "$GITHUB_OUTPUT"
-            printf 'alvo_concurso=%s\n' "$EVENT_CONCURSO" >> "$GITHUB_OUTPUT"
-            echo "descricao=publicação imediata do resultado informado pela base" >> "$GITHUB_OUTPUT"
-          else
-            echo "maximo=8" >> "$GITHUB_OUTPUT"
-            echo "janela=7" >> "$GITHUB_OUTPUT"
-            echo "ultimo_por_modalidade=false" >> "$GITHUB_OUTPUT"
-            echo "excluir=" >> "$GITHUB_OUTPUT"
-            echo "alvo_loteria=" >> "$GITHUB_OUTPUT"
-            echo "alvo_concurso=" >> "$GITHUB_OUTPUT"
-            echo "descricao=verificação de segurança dos resultados recentes" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Validar padrão de qualidade e segurança
+      - name: Validar novo padrão diário V19
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
           python -m py_compile \
-            gerador_pacote_v18.py gerador_pacote_v17.py voice_narration_v17.py voice_narration_v18.py \
-            lottery_result_v18.py video_specials_v18.py loteca_video_v18.py \
-            loteca_columns_v18.py loteca_visual_aprovado_v18.py loteca_release_v18.py \
-            video_queue.py video_queue_auto.py post_video.py youtube_auth.py youtube_upload.py
+            daily_video_v19.py daily_queue_v19.py lottery_result_v18.py \
+            voice_narration_v18.py voice_narration_v17.py audio_identity_v9.py \
+            video_queue.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
           import os
-          from lottery_result_v18 import parse_lottery_result
-          from post_video import _metadata, _unique_tags
-          from video_queue_auto import _contest_key, _lottery_key
-          from voice_narration_v17 import (
-              VOICE_ANTONIO,
-              VOICE_FRANCISCA,
-              VOICE_THALITA_MULTILINGUAL,
-              VOICE_THALITA_NEURAL,
-              _visual_offset,
-              pair_label,
-              voice_label,
-          )
+          from daily_queue_v19 import _expected_by_date, _metadata, _special_short
+          from daily_video_v19 import FULL_RATE, SHORT_RATE
 
           google_json = (os.getenv("GOOGLE_SERVICE_JSON") or "").strip()
           cofre_id = (os.getenv("COFRE_SHEET_ID") or "").strip()
@@ -116,76 +67,69 @@ jobs:
               raise SystemExit("GOOGLE_SERVICE_JSON ou COFRE_SHEET_ID ausente.")
           json.loads(google_json)
 
-          assert parse_lottery_result("Mais Milionaria", "5,15,33,34,39,44 + 1,2").trevos == ("01", "02")
-          assert parse_lottery_result("Timemania", "7,23,34,37,52,56,65 - CAXIAS /RS").team
-          assert parse_lottery_result("Dia de Sorte", "1,6,12,14,23,26,27 - Julho").lucky_month == "Julho"
-          assert _lottery_key("+Milionária") == "milionaria"
-          assert _contest_key("Concurso 372") == "372"
+          calendar = [
+              ["Loteria", "Dia"],
+              ["Lotofácil", "01/08/2026"],
+              ["Mega-Sena", "01/08/2026"],
+              ["Quina", "01/08/2026"],
+          ]
+          expected = _expected_by_date(calendar)
+          assert len(expected["01/08/2026"]) == 3
 
-          assert voice_label(VOICE_ANTONIO) == "Antônio"
-          assert voice_label(VOICE_FRANCISCA) == "Francisca"
-          assert voice_label(VOICE_THALITA_MULTILINGUAL) == "Thalita"
-          assert voice_label(VOICE_THALITA_NEURAL) == "Thalita"
-          assert pair_label((VOICE_ANTONIO, VOICE_THALITA_NEURAL)) == "Antônio e Thalita"
-          assert "Neural" not in pair_label((VOICE_ANTONIO, VOICE_THALITA_NEURAL))
-          assert "Multilingual" not in pair_label((VOICE_FRANCISCA, VOICE_THALITA_MULTILINGUAL))
-
-          full_reveals = [46.0, 50.55, 55.10, 59.65]
-          short_reveals = [5.64, 6.72, 7.80, 8.88]
-          assert _visual_offset(full_reveals, False) >= 2.80
-          assert _visual_offset(short_reveals, True) >= 0.68
-
-          sample = {
-              "loteria": "Mega Sena",
-              "concurso": "9999",
-              "data": "30/07/2026",
-              "numeros": "1,2,3,4,5,6",
-              "url": "https://www.portalsimonsports.com/",
-          }
-          full = _metadata(sample, "completo")
-          short = _metadata(sample, "short")
-          assert full["title"] and short["title"]
-          assert "Portal SimonSports" in full["tags"]
-          assert len(_unique_tags(full["tags"])) <= 30
-          print("Publicação imediata validada: alvo exato, nomes públicos, sincronização, SEO e duplicidade.")
+          results = [
+              {
+                  "loteria": "Lotofácil",
+                  "concurso": "3750",
+                  "data": "01/08/2026",
+                  "numeros": "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15",
+                  "url": "https://www.portalsimonsports.com/",
+              },
+              {
+                  "loteria": "Mega Sena",
+                  "concurso": "3040",
+                  "data": "01/08/2026",
+                  "numeros": "1,2,3,4,5,6",
+                  "url": "https://www.portalsimonsports.com/",
+              },
+          ]
+          full = _metadata(results, "completo")
+          short = _metadata(results, "short")
+          assert full["title"].startswith("Resultados das Loterias de Hoje")
+          assert "em 1 Minuto" in short["title"]
+          assert _special_short(results) is True
+          assert _special_short([results[0]]) is False
+          assert FULL_RATE == "-5%"
+          assert SHORT_RATE == "-3%"
+          print("Padrão diário V19 validado: agrupamento por data, máximo de duas publicações e voz constante.")
           PY
 
-      - name: Publicar fila selecionada
+      - name: Publicar somente quando o dia estiver completo
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
           SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+          YOUTUBE_CALENDAR_TAB: ${{ vars.YOUTUBE_CALENDAR_TAB || 'Calendário_Loterias' }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
           COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
-          ENFILEIRADO_VIDEOS_COL: ${{ vars.ENFILEIRADO_VIDEOS_COL || 'Enfileirado_Videos' }}
-          PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL || 'Publicado_Youtube' }}
-          MAX_VIDEOS_RODADA: ${{ steps.modo.outputs.maximo }}
+          PUBLICADO_YT_DIARIO_COL: ${{ vars.PUBLICADO_YT_DIARIO_COL || 'Publicado_Youtube_Diario' }}
+          YOUTUBE_DAILY_START_DATE: ${{ vars.YOUTUBE_DAILY_START_DATE || '01/08/2026' }}
+          YOUTUBE_FORCE_SHORT_SINGLE_LOTTERY: ${{ vars.YOUTUBE_FORCE_SHORT_SINGLE_LOTTERY || 'false' }}
+          MAX_VIDEOS_RODADA: "1"
           PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '3.0' }}
-          AUTO_ENQUEUE_VIDEOS: "true"
-          VIDEO_BACKLOG_DAYS: ${{ steps.modo.outputs.janela }}
-          ALLOW_OLD_QUEUED_VIDEOS: "false"
-          LATEST_PER_MODALITY_ONLY: ${{ steps.modo.outputs.ultimo_por_modalidade }}
-          VIDEO_EXCLUDE_MODALITIES: ${{ steps.modo.outputs.excluir }}
-          VIDEO_TARGET_MODALITY: ${{ steps.modo.outputs.alvo_loteria }}
-          VIDEO_TARGET_CONTEST: ${{ steps.modo.outputs.alvo_concurso }}
-          DRY_RUN_VIDEOS: "false"
-          VIDEO_WIDTH: "1080"
-          VIDEO_HEIGHT: "1920"
+          DRY_RUN_VIDEOS: ${{ github.event_name == 'workflow_dispatch' && inputs.modo == 'prever' && 'true' || 'false' }}
           VIDEO_FPS: "30"
           TZ: America/Sao_Paulo
         run: |
-          echo "Modo: ${{ steps.modo.outputs.descricao }}"
-          echo "Alvo: ${{ steps.modo.outputs.alvo_loteria }} / ${{ steps.modo.outputs.alvo_concurso }}"
           mkdir -p output
-          python video_queue_auto.py
+          python daily_queue_v19.py
 
-      - name: Guardar arquivos gerados para auditoria
+      - name: Guardar vídeos e capa para auditoria
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: publicacoes-loterias-v18-${{ github.run_number }}
+          name: resumo-diario-youtube-v19-${{ github.run_number }}
           path: |
             output/*.mp4
             output/*.png
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 14
