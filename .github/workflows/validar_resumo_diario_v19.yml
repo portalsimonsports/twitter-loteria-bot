@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - daily_video_v19.py
+      - daily_video_v19_short_fix.py
       - daily_queue_v19.py
       - youtube_upload.py
       - lottery_result_v18.py
@@ -44,7 +45,7 @@ jobs:
       - name: Compilar módulos V19
         run: |
           python -m py_compile \
-            daily_video_v19.py daily_queue_v19.py youtube_upload.py \
+            daily_video_v19.py daily_video_v19_short_fix.py daily_queue_v19.py youtube_upload.py \
             lottery_result_v18.py voice_narration_v18.py voice_narration_v17.py \
             audio_identity_v9.py video_queue.py post_video.py
 
@@ -52,6 +53,7 @@ jobs:
         run: |
           rm -rf preview_diario_v19
           python - <<'PY'
+          import daily_video_v19_short_fix
           from daily_video_v19 import gerar_pacote_diario
 
           resultados = [
@@ -87,7 +89,7 @@ jobs:
           pacote = gerar_pacote_diario(resultados, output_dir="preview_diario_v19", gerar_short=True)
           assert pacote["completo"].endswith("_completo_v19.mp4")
           assert pacote["short"].endswith("_short_v19.mp4")
-          assert float(pacote["duracao_short"]) <= 60.0
+          assert 30.0 <= float(pacote["duracao_short"]) <= 60.0
           print(pacote)
           PY
           ls -lh preview_diario_v19
