@@ -7,6 +7,7 @@ import traceback
 import unicodedata
 from datetime import datetime
 from typing import Any, Dict, List, Sequence, Tuple
+from zoneinfo import ZoneInfo
 
 from daily_video_v19 import gerar_pacote_diario
 from lottery_result_v18 import parse_lottery_result, team_name_without_code
@@ -21,7 +22,6 @@ from post_video import (
     listar_contas_youtube,
 )
 from video_queue import (
-    _empty,
     _ensure_column,
     _find_col,
     _google_client,
@@ -37,7 +37,8 @@ from youtube_upload import build_watch_url, upload_thumbnail, upload_video
 
 DAILY_COLUMN_DEFAULT = "Publicado_Youtube_Diario"
 CALENDAR_TAB_DEFAULT = "Calendário_Loterias"
-DAILY_START_DATE_DEFAULT = "01/08/2026"
+DAILY_START_DATE_DEFAULT = "31/07/2026"
+DAILY_CUTOFF_HOUR_DEFAULT = 23
 
 DailyCandidate = Tuple[str, List[Tuple[int, Dict[str, Any]]], List[str]]
 
@@ -87,9 +88,34 @@ def _date_sort_key(value: str) -> float:
     return parsed.timestamp() if parsed else 0.0
 
 
+def _now_in_timezone(tz_name: str) -> datetime:
+    try:
+        return datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        return datetime.now()
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     value = str(os.getenv(name, "true" if default else "false") or "").strip().lower()
     return value in {"1", "true", "sim", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(str(os.getenv(name, default)).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _write_step_summary(*lines: str) -> None:
+    path = str(os.getenv("GITHUB_STEP_SUMMARY") or "").strip()
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as stream:
+            stream.write("\n".join(str(line) for line in lines) + "\n")
+    except OSError as error:
+        _log(f"Não foi possível escrever o resumo do GitHub Actions: {error}")
 
 
 def _header_value(row: Sequence[str], headers: Sequence[str], names: Sequence[str]) -> str:
@@ -145,9 +171,12 @@ def _candidate_dates(
     headers: List[str],
     daily_index: int,
     expected_map: Dict[str, List[str]],
+    timezone: str = "America/Sao_Paulo",
 ) -> List[DailyCandidate]:
     start_date = _parse_date(os.getenv("YOUTUBE_DAILY_START_DATE", DAILY_START_DATE_DEFAULT))
-    today = datetime.now().date()
+    now_local = _now_in_timezone(timezone)
+    today = now_local.date()
+    cutoff_hour = max(0, min(23, _env_int("YOUTUBE_DAILY_CUTOFF_HOUR", DAILY_CUTOFF_HOUR_DEFAULT)))
     grouped: Dict[str, Dict[Tuple[str, str], Tuple[int, Dict[str, Any], str]]] = {}
 
     for sheet_row, row in enumerate(values[1:], start=2):
@@ -171,19 +200,41 @@ def _candidate_dates(
 
     candidates: List[DailyCandidate] = []
     for date, unique_rows in grouped.items():
-        expected_order = expected_map.get(date, [])
-        if not expected_order:
+        parsed_date = _parse_date(date)
+        if parsed_date is None:
             continue
         rows = list(unique_rows.values())
         if any(_is_daily_final_marker(marker) for _sheet_row, _data, marker in rows):
             continue
-        actual_modalities = {_lottery_key(data.get("loteria")) for _sheet_row, data, _marker in rows}
-        if not set(expected_order).issubset(actual_modalities):
-            missing = [item for item in expected_order if item not in actual_modalities]
-            _log(f"Resumo diário {date} aguardando modalidades: {', '.join(missing)}")
-            continue
 
-        order_index = {key: index for index, key in enumerate(expected_order)}
+        actual_modalities = {_lottery_key(data.get("loteria")) for _sheet_row, data, _marker in rows}
+        expected_order = list(expected_map.get(date, []))
+        is_past_day = parsed_date.date() < today
+
+        if not is_past_day:
+            if expected_order:
+                missing = [item for item in expected_order if item not in actual_modalities]
+                if missing:
+                    _log(f"Resumo diário {date} aguardando modalidades: {', '.join(missing)}")
+                    continue
+            elif now_local.hour < cutoff_hour:
+                _log(
+                    f"Resumo diário {date} sem calendário fechado; aguardando o horário de corte "
+                    f"das {cutoff_hour:02d}:00 em {timezone}."
+                )
+                continue
+        else:
+            missing = [item for item in expected_order if item not in actual_modalities]
+            if missing:
+                _log(
+                    f"Resumo diário atrasado {date}: calendário indicava {', '.join(missing)}, "
+                    "mas o dia já encerrou. Publicando automaticamente os resultados existentes."
+                )
+
+        ordered_keys = [key for key in expected_order if key in actual_modalities]
+        remaining_keys = sorted(actual_modalities - set(ordered_keys))
+        effective_order = ordered_keys + remaining_keys
+        order_index = {key: index for index, key in enumerate(effective_order)}
         rows.sort(
             key=lambda item: (
                 order_index.get(_lottery_key(item[1].get("loteria")), 999),
@@ -191,7 +242,7 @@ def _candidate_dates(
                 str(item[1].get("concurso") or ""),
             )
         )
-        candidates.append((date, [(sheet_row, data) for sheet_row, data, _marker in rows], expected_order))
+        candidates.append((date, [(sheet_row, data) for sheet_row, data, _marker in rows], effective_order))
 
     candidates.sort(key=lambda item: _date_sort_key(item[0]))
     return candidates
@@ -350,17 +401,22 @@ def _publish_day(
     existing_markers = [worksheet.cell(row_number, daily_index + 1).value or "" for row_number in row_numbers]
     existing_full_url = next((url for url in (_partial_full_url(value) for value in existing_markers) if url), "")
 
-    if dry_run:
-        package = {
-            "completo": "DRYRUN_resultados_diarios_completo.mp4",
-            "short": "DRYRUN_resultados_diarios_short.mp4" if gerar_short else "",
-            "poster": "DRYRUN_resultados_diarios_capa.png",
-        }
-    else:
-        package = gerar_pacote_diario(resultados, output_dir="output", gerar_short=gerar_short)
-
     full_meta = _metadata(resultados, "completo")
     short_meta = _metadata(resultados, "short") if gerar_short else None
+
+    if dry_run:
+        _log(f"PREVISÃO: lote {date} com {len(resultados)} resultados; nenhuma publicação será enviada.")
+        _write_step_summary(
+            "## Prévia do resumo diário",
+            f"- Data: **{date}**",
+            f"- Resultados encontrados: **{len(resultados)}**",
+            "- Vídeo completo: **seria gerado**",
+            f"- Short: **{'seria gerado' if gerar_short else 'não necessário'}**",
+            "- Publicações reais: **0**",
+        )
+        return 0
+
+    package = gerar_pacote_diario(resultados, output_dir="output", gerar_short=gerar_short)
     accounts = listar_contas_youtube(cofre_cache)
     if not accounts:
         raise RuntimeError("Nenhuma conta YOUTUBE com REFRESH_TOKEN no Cofre.")
@@ -381,47 +437,43 @@ def _publish_day(
         custom_tags = _parse_tags(_cofre_get_safe(cofre_get, "YOUTUBE", "TAGS", conta=account, default=""))
 
         try:
-            if dry_run:
-                full_url = existing_full_url or f"https://www.youtube.com/watch?v=DRYRUN_FULL_{account}"
-                short_url = f"https://www.youtube.com/watch?v=DRYRUN_SHORT_{account}" if gerar_short else ""
+            access_token = get_access_token(client_id, client_secret, refresh_token)
+            if existing_full_url:
+                full_url = existing_full_url
             else:
-                access_token = get_access_token(client_id, client_secret, refresh_token)
-                if existing_full_url:
-                    full_url = existing_full_url
-                else:
-                    full_id = upload_video(
-                        access_token=access_token,
-                        video_path=package["completo"],
-                        title=full_meta["title"],
-                        description=full_meta["description"],
-                        tags=_unique_tags(custom_tags, full_meta["tags"]),
-                        category_id=category_id,
-                        privacy_status=privacy,
-                    )
-                    full_url = build_watch_url(full_id)
-                    try:
-                        upload_thumbnail(access_token, full_id, package["poster"])
-                        _log(f"[{account}] Capa diária aplicada ao vídeo completo.")
-                    except Exception as thumbnail_error:
-                        _log(f"[{account}] Vídeo publicado, mas a capa não foi aplicada: {thumbnail_error}")
-                    partial = (
-                        f"PARCIAL YOUTUBE DIÁRIO V19 em {_ts_br(timezone)} | "
-                        f"Completo: {full_url}"
-                    )
-                    _mark_rows(worksheet, row_numbers, daily_index, partial)
+                full_id = upload_video(
+                    access_token=access_token,
+                    video_path=package["completo"],
+                    title=full_meta["title"],
+                    description=full_meta["description"],
+                    tags=_unique_tags(custom_tags, full_meta["tags"]),
+                    category_id=category_id,
+                    privacy_status=privacy,
+                )
+                full_url = build_watch_url(full_id)
+                try:
+                    upload_thumbnail(access_token, full_id, package["poster"])
+                    _log(f"[{account}] Capa diária aplicada ao vídeo completo.")
+                except Exception as thumbnail_error:
+                    _log(f"[{account}] Vídeo publicado, mas a capa não foi aplicada: {thumbnail_error}")
+                partial = (
+                    f"PARCIAL YOUTUBE DIÁRIO V19 em {_ts_br(timezone)} | "
+                    f"Completo: {full_url}"
+                )
+                _mark_rows(worksheet, row_numbers, daily_index, partial)
 
-                short_url = ""
-                if gerar_short:
-                    short_id = upload_video(
-                        access_token=access_token,
-                        video_path=package["short"],
-                        title=short_meta["title"],
-                        description=short_meta["description"],
-                        tags=_unique_tags(custom_tags, short_meta["tags"]),
-                        category_id=category_id,
-                        privacy_status=privacy,
-                    )
-                    short_url = build_watch_url(short_id)
+            short_url = ""
+            if gerar_short:
+                short_id = upload_video(
+                    access_token=access_token,
+                    video_path=package["short"],
+                    title=short_meta["title"],
+                    description=short_meta["description"],
+                    tags=_unique_tags(custom_tags, short_meta["tags"]),
+                    category_id=category_id,
+                    privacy_status=privacy,
+                )
+                short_url = build_watch_url(short_id)
 
             first_full_url = first_full_url or full_url
             first_short_url = first_short_url or short_url
@@ -433,7 +485,16 @@ def _publish_day(
         time.sleep(max(0.5, min(pause, 15.0)))
 
     if successes <= 0:
+        _write_step_summary(
+            "## Falha na publicação diária",
+            f"- Data selecionada: **{date}**",
+            f"- Resultados encontrados: **{len(resultados)}**",
+            "- Publicações confirmadas: **0**",
+        )
         return 0
+
+    if not first_full_url or (gerar_short and not first_short_url):
+        raise RuntimeError("O envio terminou sem URLs completas do YouTube; a publicação não será marcada como concluída.")
 
     final_mark = (
         f"Publicado YOUTUBE DIÁRIO V19 em {_ts_br(timezone)} | "
@@ -444,6 +505,14 @@ def _publish_day(
     else:
         final_mark += " | Short: não necessário — apenas uma loteria no dia"
     _mark_rows(worksheet, row_numbers, daily_index, final_mark)
+    _write_step_summary(
+        "## Publicação diária confirmada",
+        f"- Data: **{date}**",
+        f"- Resultados reunidos: **{len(resultados)}**",
+        f"- Vídeo completo: {first_full_url}",
+        f"- Short: {first_short_url if gerar_short else 'não necessário'}",
+        f"- Canais publicados: **{successes}**",
+    )
     return 1
 
 
@@ -459,25 +528,31 @@ def processar_resumo_diario() -> int:
 
     values = worksheet.get_all_values()
     calendar_values = calendar.get_all_values()
-    if not values or not calendar_values:
-        _log("Planilha principal ou calendário vazio.")
-        return 0
+    if not values:
+        raise RuntimeError("A planilha principal está vazia.")
 
     headers = list(values[0])
     daily_column = os.getenv("PUBLICADO_YT_DIARIO_COL", DAILY_COLUMN_DEFAULT)
     daily_index = _ensure_column(worksheet, headers, daily_column)
-    expected_map = _expected_by_date(calendar_values)
-    candidates = _candidate_dates(values, headers, daily_index, expected_map)
+    expected_map = _expected_by_date(calendar_values or [])
+    candidates = _candidate_dates(values, headers, daily_index, expected_map, config.timezone)
     if not candidates:
-        _log("Nenhum dia completo pendente para publicação consolidada.")
+        message = "Nenhum lote diário pronto. A verificação terminou sem publicar vídeos."
+        _log(message)
+        _write_step_summary(
+            "## Verificação concluída — nenhuma publicação",
+            f"- Resultado: **{message}**",
+            "- Vídeos enviados ao YouTube: **0**",
+            "- O sinal verde indica somente que a verificação não apresentou erro.",
+        )
         return 0
 
     date, rows, expected_order = candidates[0]
     _log(
         f"Publicação diária selecionada: {date} | resultados={len(rows)} | "
-        f"modalidades previstas={len(expected_order)} | máximo diário=1 completo + 1 Short"
+        f"modalidades consideradas={len(expected_order)} | máximo diário=1 completo + 1 Short"
     )
-    return _publish_day(
+    published = _publish_day(
         date,
         rows,
         worksheet,
@@ -488,6 +563,9 @@ def processar_resumo_diario() -> int:
         pause=config.pausa,
         timezone=config.timezone,
     )
+    if not dry_run and published <= 0:
+        raise RuntimeError(f"O lote diário de {date} foi selecionado, mas nenhuma publicação foi confirmada.")
+    return published
 
 
 def main() -> None:
