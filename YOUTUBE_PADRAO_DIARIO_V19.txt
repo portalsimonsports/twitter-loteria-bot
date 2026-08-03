@@ -6,11 +6,11 @@ VIGÊNCIA: 01/08/2026
 
 A publicação automática de resultados das Loterias Caixa deve gerar, por data de sorteio:
 
-- 1 vídeo completo reunindo todas as loterias sorteadas no dia;
+- 1 vídeo completo reunindo as loterias numéricas sorteadas no dia;
 - no máximo 1 Short diário;
-- máximo absoluto de 2 publicações por dia.
+- a Loteca deve permanecer fora desse agrupamento e ser publicada em vídeo próprio, devido ao formato de 14 jogos e placares.
 
-Não é permitida publicação automática separada por modalidade.
+Não é permitida publicação automática separada das demais modalidades numéricas.
 
 2. VÍDEO COMPLETO DIÁRIO
 
@@ -26,9 +26,61 @@ Estrutura:
 - dezenas oficiais;
 - resultados especiais, quando existentes;
 - premiação e ganhadores, quando disponíveis;
-- encerramento solicitando curtida, comentário e inscrição.
+- encerramento solicitando curtida, comentário e inscrição;
+- encerramento informando: portalsimonsports.com, seção Loterias Caixa;
+- manter na descrição o link direto:
+  https://www.portalsimonsports.com/search/label/Loterias%20Caixa?m=1
 
-3. SHORT DIÁRIO
+3. IDENTIDADE VISUAL POR MODALIDADE
+
+Cada resultado deve utilizar a cor predominante da modalidade na tela correspondente, incluindo:
+
+- fundo em degradê;
+- bolas das dezenas;
+- contornos e textos de destaque.
+
+Paletas previstas:
+
+- Mega-Sena: verde;
+- Lotofácil: roxo/magenta;
+- Quina: azul-violeta;
+- Lotomania: laranja;
+- Timemania: verde;
+- Dupla Sena: vermelho;
+- Dia de Sorte: dourado/laranja;
+- Super Sete: verde-limão/oliva;
+- +Milionária: azul-violeta com destaque dourado;
+- Loteria Federal: azul.
+
+A identidade institucional do Portal SimonSports deve continuar presente no cabeçalho e no encerramento.
+
+4. DUPLA SENA
+
+A Dupla Sena deve sempre apresentar:
+
+- 1º sorteio em tela própria;
+- 2º sorteio em tela própria;
+- locução identificando expressamente cada sorteio;
+- no Short, os dois conjuntos devem aparecer separados e identificados.
+
+Nunca juntar as 12 dezenas em uma única sequência de leitura.
+
+5. LOTECA
+
+A Loteca não participa do vídeo diário consolidado.
+
+Ela deve utilizar o workflow próprio:
+
+.github/workflows/publicar_loteca_individual.yml
+
+Esse fluxo deve:
+
+- selecionar somente linhas da Loteca;
+- evitar duplicidade por concurso, data e conteúdo dos 14 jogos;
+- gerar vídeo completo e Short próprios;
+- registrar a publicação na coluna Publicado_Youtube.
+
+6. SHORT DIÁRIO
 
 Título de referência:
 
@@ -39,26 +91,27 @@ Regras:
 - duração obrigatória entre 30 e 60 segundos;
 - começar diretamente pelos resultados;
 - utilizar textos grandes e legíveis;
-- mostrar rapidamente as modalidades do dia;
-- informar que o conteúdo completo está disponível no canal SimonSports.
+- mostrar rapidamente as modalidades numéricas do dia;
+- informar que os resultados completos estão no canal SimonSports;
+- encerrar indicando portalsimonsports.com, seção Loterias Caixa, com link direto na descrição.
 
-Com apenas uma loteria no dia, o Short não é obrigatório. Ele somente deve ser gerado quando:
+Com apenas uma loteria numérica no dia, o Short não é obrigatório. Ele somente deve ser gerado quando:
 
 - for sorteio especial;
 - houver indicação Destaque_Short;
 - a variável YOUTUBE_FORCE_SHORT_SINGLE_LOTTERY estiver explicitamente habilitada.
 
-4. CONDIÇÃO PARA PUBLICAÇÃO
+7. CONDIÇÃO PARA PUBLICAÇÃO
 
 O workflow somente pode publicar quando:
 
-- todos os resultados previstos na aba Calendário_Loterias para a data estiverem presentes na aba ImportadosBlogger2;
+- todos os resultados previstos para a data estiverem presentes, respeitada a exclusão da Loteca;
 - os campos obrigatórios estiverem preenchidos;
 - não existir marca final na coluna Publicado_Youtube_Diario para aquela data.
 
-A coluna Publicado_Youtube não controla o fluxo diário V19 e permanece apenas como histórico do sistema individual legado.
+A coluna Publicado_Youtube não controla o fluxo diário V19 e permanece para publicações próprias, como a Loteca.
 
-5. CONTROLE DE DUPLICIDADE
+8. CONTROLE DE DUPLICIDADE
 
 A marca final utilizada pelo fluxo diário é:
 
@@ -66,10 +119,13 @@ Publicado YOUTUBE DIÁRIO V19
 
 Em caso de falha após o envio do vídeo completo, deve ser gravada uma marca parcial contendo a URL do vídeo completo. Na repetição, o fluxo deve continuar do ponto pendente sem reenviar o vídeo completo.
 
-6. ARQUIVOS PRINCIPAIS
+9. ARQUIVOS PRINCIPAIS
 
 - daily_queue_v19.py
-  Agrupa os resultados por data, verifica o calendário, controla duplicidade, define se haverá Short e envia os vídeos.
+  Agrupa os resultados por data, controla duplicidade e envia os vídeos.
+
+- daily_queue_v19_policy_fix.py
+  Remove a Loteca do agrupamento diário e mantém a ordem das demais modalidades.
 
 - daily_video_v19.py
   Gera o vídeo completo, o Short e a miniatura diária.
@@ -77,37 +133,42 @@ Em caso de falha após o envio do vídeo completo, deve ser gravada uma marca pa
 - daily_video_v19_short_fix.py
   Garante que o Short permaneça entre 30 e 60 segundos.
 
+- daily_video_v19_dupla_fix.py
+  Separa corretamente o primeiro e o segundo sorteios da Dupla Sena.
+
+- daily_video_v19_branding_fix.py
+  Aplica cores por modalidade e o encerramento com portalsimonsports.com, seção Loterias Caixa.
+
+- loteca_queue_v19.py
+  Controla a fila exclusiva da Loteca.
+
 - .github/workflows/publicar_ultimos_e_proximos.yml
   Workflow operacional do padrão diário consolidado.
 
-- .github/workflows/validar_resumo_diario_v19.yml
-  Compila os módulos e gera um exemplo sem publicação para validação.
+- .github/workflows/publicar_loteca_individual.yml
+  Workflow operacional exclusivo da Loteca.
 
 - GITHUB_DISPARO_YOUTUBE_IMEDIATO.txt
-  Fonte do Apps Script. Apesar do nome histórico do arquivo, o conteúdo envia somente um sinal de verificação diária. A função antiga foi mantida como alias de compatibilidade e não autoriza publicação individual.
+  Fonte do Apps Script que envia o sinal de verificação ao GitHub.
 
-7. DISPARO DO APPS SCRIPT
+10. DISPARO DO APPS SCRIPT
 
 Função recomendada:
 
 DISPARAR_VERIFICACAO_YOUTUBE_DIARIA(dataSorteio, loteria, concurso)
 
-O Apps Script apenas informa que um resultado foi atualizado. O GitHub Actions decide se o conjunto diário está completo.
+O Apps Script informa que um resultado foi atualizado. O GitHub Actions decide se o conjunto diário está completo ou se o resultado pertence ao fluxo exclusivo da Loteca.
 
-A verificação de reserva do Apps Script deve usar intervalo de 15 minutos. O workflow do GitHub já executa sua própria verificação periódica a cada 5 minutos.
+11. METADADOS
 
-8. WORKFLOWS LEGADOS
-
-Os workflows de vídeos individuais e da Loteca 1263 devem permanecer apenas como ferramentas manuais de geração de prévias e auditoria, sem qualquer etapa de envio real ao YouTube.
-
-Os scripts antigos podem permanecer no repositório para referência e contingência técnica, mas não devem ser chamados automaticamente por schedule, push ou repository_dispatch.
-
-9. METADADOS
-
-O vídeo completo deve priorizar no título as primeiras modalidades previstas no calendário da data. Quando houver muitas modalidades, utilizar “e Mais” ou “Todos os Sorteios” para respeitar o limite de caracteres do YouTube.
+O vídeo completo deve priorizar no título as primeiras modalidades da data. Quando houver muitas modalidades, utilizar “e Mais” ou “Todos os Sorteios” para respeitar o limite do YouTube.
 
 O Short deve conter #Shorts e encaminhar o público ao vídeo completo do canal SimonSports.
 
-10. OBJETIVO
+A descrição deve manter o link direto da seção Loterias Caixa:
 
-Concentrar visualizações, retenção, tempo de exibição, comentários e inscrições em conteúdos completos, evitando várias publicações semelhantes no mesmo horário.
+https://www.portalsimonsports.com/search/label/Loterias%20Caixa?m=1
+
+12. OBJETIVO
+
+Concentrar visualizações, retenção, tempo de exibição, comentários e inscrições em conteúdos mais completos, com identidade visual profissional e orientação clara para consulta de outros resultados no Portal SimonSports.
