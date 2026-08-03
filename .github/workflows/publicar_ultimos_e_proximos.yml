@@ -12,6 +12,7 @@ on:
       - daily_queue_v19.py
       - daily_video_v19.py
       - daily_video_v19_short_fix.py
+      - youtube_upload.py
       - .github/workflows/publicar_ultimos_e_proximos.yml
   schedule:
     # Reserva automática: verifica a cada cinco minutos.
@@ -70,6 +71,7 @@ jobs:
           import daily_video_v19_short_fix
           from daily_queue_v19 import DAILY_START_DATE_DEFAULT, _expected_by_date, _metadata, _special_short
           from daily_video_v19 import FULL_RATE, SHORT_RATE
+          from youtube_upload import YOUTUBE_TAGS_SAFE_LIMIT, _youtube_tag_cost, sanitize_youtube_tags
 
           google_json = (os.getenv("GOOGLE_SERVICE_JSON") or "").strip()
           cofre_id = (os.getenv("COFRE_SHEET_ID") or "").strip()
@@ -111,6 +113,13 @@ jobs:
           assert _special_short([results[0]]) is False
           assert FULL_RATE == "-5%"
           assert SHORT_RATE == "-3%"
+
+          stress_tags = [f"resultado completo da loteria número {i}" for i in range(100)]
+          safe_tags = sanitize_youtube_tags(stress_tags)
+          used = sum(_youtube_tag_cost(tag, has_previous=index > 0) for index, tag in enumerate(safe_tags))
+          assert used <= YOUTUBE_TAGS_SAFE_LIMIT
+          assert len(safe_tags) <= 25
+          print(f"Tags validadas para o YouTube: {len(safe_tags)} itens, custo {used} caracteres.")
           print("Padrão diário V19 validado: dias encerrados, máximo de duas publicações e URLs obrigatórias.")
           PY
 
