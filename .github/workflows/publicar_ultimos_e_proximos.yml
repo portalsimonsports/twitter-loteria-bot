@@ -14,6 +14,7 @@ on:
       - daily_video_v19.py
       - daily_video_v19_short_fix.py
       - daily_video_v19_dupla_fix.py
+      - daily_video_v19_branding_fix.py
       - youtube_upload.py
       - .github/workflows/publicar_ultimos_e_proximos.yml
   schedule:
@@ -57,15 +58,15 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar Dupla Sena, exclusão da Loteca e tags
+      - name: Validar Dupla Sena, cores por modalidade, URL e exclusão da Loteca
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
           python -m py_compile \
             daily_video_v19.py daily_video_v19_short_fix.py daily_video_v19_dupla_fix.py \
-            daily_queue_v19.py daily_queue_v19_policy_fix.py lottery_result_v18.py \
-            voice_narration_v18.py voice_narration_v17.py audio_identity_v9.py \
+            daily_video_v19_branding_fix.py daily_queue_v19.py daily_queue_v19_policy_fix.py \
+            lottery_result_v18.py voice_narration_v18.py voice_narration_v17.py audio_identity_v9.py \
             video_queue.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
@@ -73,9 +74,11 @@ jobs:
           import daily_video_v19 as video
           import daily_video_v19_short_fix
           import daily_video_v19_dupla_fix
+          import daily_video_v19_branding_fix as branding
           import daily_queue_v19 as queue
           import daily_queue_v19_policy_fix
           from lottery_result_v18 import parse_lottery_result
+          from post_video import RESULTS_INDEX_URL
           from youtube_upload import YOUTUBE_TAGS_SAFE_LIMIT, _youtube_tag_cost, sanitize_youtube_tags
 
           google_json = (os.getenv("GOOGLE_SERVICE_JSON") or "").strip()
@@ -99,6 +102,16 @@ jobs:
           assert "Segundo sorteio" in scenes[1][2]
           assert "Primeiro sorteio" in video._short_speech(dupla)
           assert "Segundo sorteio" in video._short_speech(dupla)
+
+          quina_theme = branding.theme_for_lottery("Quina")
+          lotofacil_theme = branding.theme_for_lottery("Lotofácil")
+          mega_theme = branding.theme_for_lottery("Mega-Sena")
+          assert quina_theme["ball"] != lotofacil_theme["ball"]
+          assert mega_theme["ball"] != quina_theme["ball"]
+          assert branding.RESULTS_DOMAIN_DISPLAY == "PORTALSIMONSPORTS.COM"
+          assert branding.RESULTS_SECTION_DISPLAY == "SEÇÃO LOTERIAS CAIXA"
+          assert "seção Loterias Caixa" in branding.RESULTS_SPEECH
+          assert RESULTS_INDEX_URL == "https://www.portalsimonsports.com/search/label/Loterias%20Caixa?m=1"
 
           headers = ["Loteria", "Concurso", "Data", "Números", "Publicado_Youtube_Diario"]
           values = [
@@ -130,7 +143,7 @@ jobs:
           used = sum(_youtube_tag_cost(tag, has_previous=index > 0) for index, tag in enumerate(safe_tags))
           assert used <= YOUTUBE_TAGS_SAFE_LIMIT
           assert len(safe_tags) <= 25
-          print("Validação concluída: Dupla Sena em dois sorteios e Loteca fora do resumo diário.")
+          print("Validação concluída: cores próprias, URL da seção, Dupla Sena correta e Loteca separada.")
           PY
 
       - name: Verificar dados e publicar quando o lote estiver pronto
@@ -152,7 +165,7 @@ jobs:
           TZ: America/Sao_Paulo
         run: |
           mkdir -p output
-          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_queue_v19; import daily_queue_v19_policy_fix; daily_queue_v19.main()"
+          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_queue_v19; import daily_queue_v19_policy_fix; daily_queue_v19.main()"
 
       - name: Guardar vídeos e capa para auditoria
         if: always()
