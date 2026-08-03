@@ -1,11 +1,19 @@
-name: Publicação diária consolidada no YouTube
+name: Verificar e publicar resumo diário no YouTube
 
 on:
   repository_dispatch:
     types:
       - resultado_loteria_disponivel
+  push:
+    branches:
+      - main
+    paths:
+      - daily_queue_v19.py
+      - daily_video_v19.py
+      - daily_video_v19_short_fix.py
+      - .github/workflows/publicar_ultimos_e_proximos.yml
   schedule:
-    # Reserva: verifica a cada cinco minutos se o conjunto diário ficou completo.
+    # Reserva automática: verifica a cada cinco minutos.
     - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
@@ -22,8 +30,8 @@ permissions:
   contents: read
 
 jobs:
-  publicar-resumo-diario:
-    name: Gerar 1 vídeo completo e no máximo 1 Short por dia
+  verificar-e-publicar:
+    name: Verificar o lote e publicar somente com URLs confirmadas
     runs-on: ubuntu-latest
     timeout-minutes: 360
     concurrency:
@@ -46,7 +54,7 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar novo padrão diário V19
+      - name: Validar o padrão diário V19
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
@@ -59,7 +67,7 @@ jobs:
           import json
           import os
           import daily_video_v19_short_fix
-          from daily_queue_v19 import _expected_by_date, _metadata, _special_short
+          from daily_queue_v19 import DAILY_START_DATE_DEFAULT, _expected_by_date, _metadata, _special_short
           from daily_video_v19 import FULL_RATE, SHORT_RATE
 
           google_json = (os.getenv("GOOGLE_SERVICE_JSON") or "").strip()
@@ -76,20 +84,21 @@ jobs:
           ]
           expected = _expected_by_date(calendar)
           assert len(expected["01/08/2026"]) == 3
+          assert DAILY_START_DATE_DEFAULT == "31/07/2026"
 
           results = [
               {
                   "loteria": "Lotofácil",
                   "concurso": "3750",
-                  "data": "01/08/2026",
+                  "data": "31/07/2026",
                   "numeros": "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15",
                   "url": "https://www.portalsimonsports.com/",
               },
               {
-                  "loteria": "Mega Sena",
-                  "concurso": "3040",
-                  "data": "01/08/2026",
-                  "numeros": "1,2,3,4,5,6",
+                  "loteria": "Quina",
+                  "concurso": "7080",
+                  "data": "31/07/2026",
+                  "numeros": "2,19,24,39,49",
                   "url": "https://www.portalsimonsports.com/",
               },
           ]
@@ -101,10 +110,10 @@ jobs:
           assert _special_short([results[0]]) is False
           assert FULL_RATE == "-5%"
           assert SHORT_RATE == "-3%"
-          print("Padrão diário V19 validado: agrupamento por data, máximo de duas publicações e voz constante.")
+          print("Padrão diário V19 validado: dias encerrados, máximo de duas publicações e URLs obrigatórias.")
           PY
 
-      - name: Publicar somente quando o dia estiver completo
+      - name: Verificar dados e publicar quando o lote estiver pronto
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
@@ -113,7 +122,8 @@ jobs:
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
           COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
           PUBLICADO_YT_DIARIO_COL: ${{ vars.PUBLICADO_YT_DIARIO_COL || 'Publicado_Youtube_Diario' }}
-          YOUTUBE_DAILY_START_DATE: ${{ vars.YOUTUBE_DAILY_START_DATE || '01/08/2026' }}
+          YOUTUBE_DAILY_START_DATE: "31/07/2026"
+          YOUTUBE_DAILY_CUTOFF_HOUR: "23"
           YOUTUBE_FORCE_SHORT_SINGLE_LOTTERY: ${{ vars.YOUTUBE_FORCE_SHORT_SINGLE_LOTTERY || 'false' }}
           MAX_VIDEOS_RODADA: "1"
           PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '3.0' }}
