@@ -113,8 +113,14 @@ jobs:
           assert "loteca" not in selected_names
           assert "quina" in selected_names and "dupla sena" in selected_names
 
+          loteca = {
+              "loteria": "Loteca",
+              "concurso": "1264",
+              "data": "31/07/2026",
+              "numeros": "1 TIME A x TIME B 0",
+          }
           try:
-              video.gerar_pacote_diario([values[1]])
+              video.gerar_pacote_diario([loteca])
               raise AssertionError("Loteca entrou indevidamente no pacote diário")
           except RuntimeError as error:
               assert "Loteca" in str(error)
