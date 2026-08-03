@@ -1,4 +1,5 @@
 name: Verificar e publicar resumo diário no YouTube
+run-name: Verificação diária YouTube — ${{ github.event_name }} — execução ${{ github.run_number }}
 
 on:
   repository_dispatch:
