@@ -1,0 +1,103 @@
+name: Reparar publicação diária de 31/07/2026
+run-name: Corrigir Dupla Sena e retirar Loteca — execução ${{ github.run_number }}
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - repair_daily_31072026.py
+      - daily_video_v19_dupla_fix.py
+      - daily_queue_v19_policy_fix.py
+      - .github/workflows/reparar_publicacao_31072026.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reparar-e-republicar:
+    name: Excluir versão errada e publicar versão corrigida
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    concurrency:
+      group: youtube-loterias-publicacao-diaria
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar FFmpeg, fontes e dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation2
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Validar os módulos do reparo
+        run: |
+          python -m py_compile \
+            repair_daily_31072026.py daily_video_v19.py daily_video_v19_short_fix.py \
+            daily_video_v19_dupla_fix.py daily_queue_v19.py daily_queue_v19_policy_fix.py \
+            lottery_result_v18.py post_video.py video_queue.py youtube_auth.py youtube_upload.py
+          python - <<'PY'
+          from repair_daily_31072026 import BAD_VIDEO_IDS, TARGET_DATE, _video_ids
+          assert TARGET_DATE == "31/07/2026"
+          assert BAD_VIDEO_IDS == {"gdwSXhhENCM", "KB-pSlMwAHY"}
+          marker = (
+              "Publicado YOUTUBE DIÁRIO V19 | "
+              "Completo: https://www.youtube.com/watch?v=gdwSXhhENCM | "
+              "Short: https://www.youtube.com/watch?v=KB-pSlMwAHY"
+          )
+          assert _video_ids(marker) == BAD_VIDEO_IDS
+          print("Reparo validado para os dois vídeos incorretos.")
+          PY
+
+      - name: Excluir vídeos incorretos e limpar somente os marcadores antigos
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          TZ: America/Sao_Paulo
+        run: |
+          python repair_daily_31072026.py
+
+      - name: Republicar lote corrigido sem Loteca
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+          YOUTUBE_CALENDAR_TAB: ${{ vars.YOUTUBE_CALENDAR_TAB || 'Calendário_Loterias' }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          PUBLICADO_YT_DIARIO_COL: ${{ vars.PUBLICADO_YT_DIARIO_COL || 'Publicado_Youtube_Diario' }}
+          YOUTUBE_DAILY_START_DATE: "31/07/2026"
+          YOUTUBE_DAILY_CUTOFF_HOUR: "23"
+          YOUTUBE_FORCE_SHORT_SINGLE_LOTTERY: "false"
+          MAX_VIDEOS_RODADA: "1"
+          PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '3.0' }}
+          DRY_RUN_VIDEOS: "false"
+          VIDEO_FPS: "30"
+          TZ: America/Sao_Paulo
+        run: |
+          mkdir -p output
+          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_queue_v19; import daily_queue_v19_policy_fix; daily_queue_v19.main()"
+
+      - name: Guardar versão corrigida para auditoria
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reparo-resultados-31072026-${{ github.run_number }}
+          path: |
+            output/*.mp4
+            output/*.png
+          if-no-files-found: ignore
+          retention-days: 14
