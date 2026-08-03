@@ -2,16 +2,6 @@ name: Reparar publicação diária de 31/07/2026
 run-name: Corrigir Dupla Sena e retirar Loteca — execução ${{ github.run_number }}
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - repair_daily_31072026.py
-      - daily_video_v19_dupla_fix.py
-      - daily_queue_v19_policy_fix.py
-      - .github/workflows/reparar_publicacao_31072026.yml
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
