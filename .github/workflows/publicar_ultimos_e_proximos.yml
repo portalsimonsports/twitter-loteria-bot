@@ -10,12 +10,13 @@ on:
       - main
     paths:
       - daily_queue_v19.py
+      - daily_queue_v19_policy_fix.py
       - daily_video_v19.py
       - daily_video_v19_short_fix.py
+      - daily_video_v19_dupla_fix.py
       - youtube_upload.py
       - .github/workflows/publicar_ultimos_e_proximos.yml
   schedule:
-    # Reserva automática: verifica a cada cinco minutos.
     - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
@@ -33,7 +34,7 @@ permissions:
 
 jobs:
   verificar-e-publicar:
-    name: Verificar o lote e publicar somente com URLs confirmadas
+    name: Consolidar loterias comuns; Loteca fica separada
     runs-on: ubuntu-latest
     timeout-minutes: 360
     concurrency:
@@ -56,21 +57,25 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar o padrão diário V19
+      - name: Validar Dupla Sena, exclusão da Loteca e tags
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
         run: |
           python -m py_compile \
-            daily_video_v19.py daily_video_v19_short_fix.py daily_queue_v19.py lottery_result_v18.py \
+            daily_video_v19.py daily_video_v19_short_fix.py daily_video_v19_dupla_fix.py \
+            daily_queue_v19.py daily_queue_v19_policy_fix.py lottery_result_v18.py \
             voice_narration_v18.py voice_narration_v17.py audio_identity_v9.py \
             video_queue.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
           import json
           import os
+          import daily_video_v19 as video
           import daily_video_v19_short_fix
-          from daily_queue_v19 import DAILY_START_DATE_DEFAULT, _expected_by_date, _metadata, _special_short
-          from daily_video_v19 import FULL_RATE, SHORT_RATE
+          import daily_video_v19_dupla_fix
+          import daily_queue_v19 as queue
+          import daily_queue_v19_policy_fix
+          from lottery_result_v18 import parse_lottery_result
           from youtube_upload import YOUTUBE_TAGS_SAFE_LIMIT, _youtube_tag_cost, sanitize_youtube_tags
 
           google_json = (os.getenv("GOOGLE_SERVICE_JSON") or "").strip()
@@ -79,48 +84,47 @@ jobs:
               raise SystemExit("GOOGLE_SERVICE_JSON ou COFRE_SHEET_ID ausente.")
           json.loads(google_json)
 
-          calendar = [
-              ["Loteria", "Dia"],
-              ["Lotofácil", "01/08/2026"],
-              ["Mega-Sena", "01/08/2026"],
-              ["Quina", "01/08/2026"],
-          ]
-          expected = _expected_by_date(calendar)
-          assert len(expected["01/08/2026"]) == 3
-          assert DAILY_START_DATE_DEFAULT == "31/07/2026"
+          dupla = {
+              "loteria": "Dupla Sena",
+              "concurso": "2990",
+              "data": "31/07/2026",
+              "numeros": "11,13,14,25,35,38 | 7,15,19,23,40,46",
+          }
+          parts = parse_lottery_result(dupla["loteria"], dupla["numeros"])
+          assert list(parts.main_numbers) == ["11", "13", "14", "25", "35", "38"]
+          assert list(parts.second_draw_numbers) == ["07", "15", "19", "23", "40", "46"]
+          scenes = video._result_full_scenes(dupla)
+          assert len(scenes) == 2
+          assert "Primeiro sorteio" in scenes[0][2]
+          assert "Segundo sorteio" in scenes[1][2]
+          assert "Primeiro sorteio" in video._short_speech(dupla)
+          assert "Segundo sorteio" in video._short_speech(dupla)
 
-          results = [
-              {
-                  "loteria": "Lotofácil",
-                  "concurso": "3750",
-                  "data": "31/07/2026",
-                  "numeros": "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15",
-                  "url": "https://www.portalsimonsports.com/",
-              },
-              {
-                  "loteria": "Quina",
-                  "concurso": "7080",
-                  "data": "31/07/2026",
-                  "numeros": "2,19,24,39,49",
-                  "url": "https://www.portalsimonsports.com/",
-              },
+          headers = ["Loteria", "Concurso", "Data", "Números", "Publicado_Youtube_Diario"]
+          values = [
+              headers,
+              ["Loteca", "1264", "31/07/2026", "1 TIME A x TIME B 0", ""],
+              ["Quina", "7080", "31/07/2026", "2,19,24,39,49", ""],
+              ["Dupla Sena", "2990", "31/07/2026", dupla["numeros"], ""],
           ]
-          full = _metadata(results, "completo")
-          short = _metadata(results, "short")
-          assert full["title"].startswith("Resultados das Loterias de Hoje")
-          assert "em 1 Minuto" in short["title"]
-          assert _special_short(results) is True
-          assert _special_short([results[0]]) is False
-          assert FULL_RATE == "-5%"
-          assert SHORT_RATE == "-3%"
+          candidates = queue._candidate_dates(values, headers, 4, {}, "America/Sao_Paulo")
+          assert candidates
+          selected_names = [item[1]["loteria"].strip().lower() for item in candidates[0][1]]
+          assert "loteca" not in selected_names
+          assert "quina" in selected_names and "dupla sena" in selected_names
+
+          try:
+              video.gerar_pacote_diario([values[1]])
+              raise AssertionError("Loteca entrou indevidamente no pacote diário")
+          except RuntimeError as error:
+              assert "Loteca" in str(error)
 
           stress_tags = [f"resultado completo da loteria número {i}" for i in range(100)]
           safe_tags = sanitize_youtube_tags(stress_tags)
           used = sum(_youtube_tag_cost(tag, has_previous=index > 0) for index, tag in enumerate(safe_tags))
           assert used <= YOUTUBE_TAGS_SAFE_LIMIT
           assert len(safe_tags) <= 25
-          print(f"Tags validadas para o YouTube: {len(safe_tags)} itens, custo {used} caracteres.")
-          print("Padrão diário V19 validado: dias encerrados, máximo de duas publicações e URLs obrigatórias.")
+          print("Validação concluída: Dupla Sena em dois sorteios e Loteca fora do resumo diário.")
           PY
 
       - name: Verificar dados e publicar quando o lote estiver pronto
@@ -142,7 +146,7 @@ jobs:
           TZ: America/Sao_Paulo
         run: |
           mkdir -p output
-          python -c "import daily_video_v19_short_fix; import daily_queue_v19; daily_queue_v19.main()"
+          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_queue_v19; import daily_queue_v19_policy_fix; daily_queue_v19.main()"
 
       - name: Guardar vídeos e capa para auditoria
         if: always()
