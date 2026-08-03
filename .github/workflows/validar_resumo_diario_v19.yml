@@ -7,7 +7,10 @@ on:
     paths:
       - daily_video_v19.py
       - daily_video_v19_short_fix.py
+      - daily_video_v19_dupla_fix.py
+      - daily_video_v19_branding_fix.py
       - daily_queue_v19.py
+      - daily_queue_v19_policy_fix.py
       - youtube_upload.py
       - lottery_result_v18.py
       - voice_narration_v18.py
@@ -45,15 +48,18 @@ jobs:
       - name: Compilar módulos V19
         run: |
           python -m py_compile \
-            daily_video_v19.py daily_video_v19_short_fix.py daily_queue_v19.py youtube_upload.py \
-            lottery_result_v18.py voice_narration_v18.py voice_narration_v17.py \
+            daily_video_v19.py daily_video_v19_short_fix.py daily_video_v19_dupla_fix.py \
+            daily_video_v19_branding_fix.py daily_queue_v19.py daily_queue_v19_policy_fix.py \
+            youtube_upload.py lottery_result_v18.py voice_narration_v18.py voice_narration_v17.py \
             audio_identity_v9.py video_queue.py post_video.py
 
-      - name: Gerar exemplo consolidado
+      - name: Gerar exemplo consolidado com paletas por modalidade
         run: |
           rm -rf preview_diario_v19
           python - <<'PY'
           import daily_video_v19_short_fix
+          import daily_video_v19_dupla_fix
+          import daily_video_v19_branding_fix as branding
           from daily_video_v19 import gerar_pacote_diario
 
           resultados = [
@@ -65,6 +71,13 @@ jobs:
                   "url": "https://www.portalsimonsports.com/",
               },
               {
+                  "loteria": "Lotofácil",
+                  "concurso": "3750",
+                  "data": "01/08/2026",
+                  "numeros": "01,02,05,06,07,11,12,13,15,18,19,20,22,24,25",
+                  "url": "https://www.portalsimonsports.com/",
+              },
+              {
                   "loteria": "Quina",
                   "concurso": "7080",
                   "data": "01/08/2026",
@@ -72,10 +85,10 @@ jobs:
                   "url": "https://www.portalsimonsports.com/",
               },
               {
-                  "loteria": "Timemania",
-                  "concurso": "2425",
+                  "loteria": "Dupla Sena",
+                  "concurso": "2990",
                   "data": "01/08/2026",
-                  "numeros": "03,11,27,38,52,67,79 - CAXIAS /RS",
+                  "numeros": "11,13,14,25,35,38 | 07,15,19,23,40,46",
                   "url": "https://www.portalsimonsports.com/",
               },
               {
@@ -86,6 +99,8 @@ jobs:
                   "url": "https://www.portalsimonsports.com/",
               },
           ]
+          assert branding.theme_for_lottery("Mega-Sena")["ball"] != branding.theme_for_lottery("Quina")["ball"]
+          assert branding.theme_for_lottery("Quina")["ball"] != branding.theme_for_lottery("Lotofácil")["ball"]
           pacote = gerar_pacote_diario(resultados, output_dir="preview_diario_v19", gerar_short=True)
           assert pacote["completo"].endswith("_completo_v19.mp4")
           assert pacote["short"].endswith("_short_v19.mp4")
