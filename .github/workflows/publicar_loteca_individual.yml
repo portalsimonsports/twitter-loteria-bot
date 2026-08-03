@@ -1,0 +1,104 @@
+name: Publicar Loteca separadamente no YouTube
+run-name: Loteca individual — ${{ github.event_name }} — execução ${{ github.run_number }}
+
+on:
+  repository_dispatch:
+    types:
+      - resultado_loteria_disponivel
+  push:
+    branches:
+      - main
+    paths:
+      - loteca_queue_v19.py
+      - post_video.py
+      - gerador_pacote_v10.py
+      - lottery_result_v18.py
+      - youtube_upload.py
+      - .github/workflows/publicar_loteca_individual.yml
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "Gerar prévia ou publicar a Loteca realmente"
+        required: true
+        default: prever
+        type: choice
+        options:
+          - prever
+          - publicar
+
+permissions:
+  contents: read
+
+jobs:
+  publicar-loteca:
+    name: Processar somente linhas da Loteca
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    concurrency:
+      group: youtube-loteca-individual
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar FFmpeg, fontes e dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation2
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Validar filtro exclusivo da Loteca
+        run: |
+          python -m py_compile loteca_queue_v19.py post_video.py video_queue.py youtube_upload.py
+          python - <<'PY'
+          from loteca_queue_v19 import _candidate_key, _is_loteca
+          assert _is_loteca(" Loteca ")
+          assert not _is_loteca("Quina")
+          first = {
+              "concurso": "1264",
+              "data": "31/07/2026",
+              "numeros": "2 TIME A x TIME B 0 | 1 TIME C x TIME D 1",
+          }
+          second = dict(first)
+          second["numeros"] = "  2 TIME A x TIME B 0   | 1 TIME C x TIME D 1  "
+          assert _candidate_key(first) == _candidate_key(second)
+          print("Fila da Loteca validada: exclusiva e com bloqueio de duplicidade.")
+          PY
+
+      - name: Publicar Loteca em vídeo próprio
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          ENFILEIRADO_VIDEOS_COL: ${{ vars.ENFILEIRADO_VIDEOS_COL || 'Enfileirado_Videos' }}
+          PUBLICADO_YT_COL: ${{ vars.PUBLICADO_YT_COL || 'Publicado_Youtube' }}
+          MAX_VIDEOS_RODADA: "1"
+          PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '3.0' }}
+          DRY_RUN_VIDEOS: ${{ github.event_name == 'workflow_dispatch' && inputs.modo == 'prever' && 'true' || 'false' }}
+          VIDEO_FPS: "30"
+          TZ: America/Sao_Paulo
+        run: |
+          mkdir -p output
+          python loteca_queue_v19.py
+
+      - name: Guardar pacote da Loteca para auditoria
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loteca-individual-v19-${{ github.run_number }}
+          path: |
+            output/*.mp4
+            output/*.png
+          if-no-files-found: ignore
+          retention-days: 14
