@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Sequence, Set
+from typing import Any, Dict, List, Set
 
 import requests
 
@@ -88,7 +88,17 @@ def reparar_publicacao_incorreta() -> Dict[str, Any]:
             rows_to_clear.append(sheet_row)
             found_bad_ids.update(matched)
 
-    ids_to_delete = found_bad_ids or set(BAD_VIDEO_IDS)
+    if not rows_to_clear:
+        message = "Nenhum marcador incorreto restante; reparo já aplicado ou não necessário."
+        _log(message)
+        return {
+            "data": TARGET_DATE,
+            "ids": [],
+            "linhas_limpas": [],
+            "tentativas_exclusao": 0,
+            "status": "sem_pendencia",
+        }
+
     accounts = listar_contas_youtube(cofre_cache)
     if not accounts:
         raise RuntimeError("Nenhuma conta YouTube encontrada no Cofre para remover o vídeo incorreto.")
@@ -102,7 +112,7 @@ def reparar_publicacao_incorreta() -> Dict[str, Any]:
             _log(f"[{account}] Credenciais incompletas no reparo.")
             continue
         access_token = get_access_token(client_id, client_secret, refresh_token)
-        for video_id in sorted(ids_to_delete):
+        for video_id in sorted(found_bad_ids):
             deletion_attempts += 1
             _delete_video(access_token, video_id)
 
@@ -114,9 +124,10 @@ def reparar_publicacao_incorreta() -> Dict[str, Any]:
 
     return {
         "data": TARGET_DATE,
-        "ids": sorted(ids_to_delete),
+        "ids": sorted(found_bad_ids),
         "linhas_limpas": rows_to_clear,
         "tentativas_exclusao": deletion_attempts,
+        "status": "reparado",
     }
 
 
