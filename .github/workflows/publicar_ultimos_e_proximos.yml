@@ -9,6 +9,7 @@ on:
     branches:
       - main
     paths:
+      - data/to_publish_videos.json
       - daily_queue_v19.py
       - daily_queue_v19_policy_fix.py
       - daily_video_v19.py
