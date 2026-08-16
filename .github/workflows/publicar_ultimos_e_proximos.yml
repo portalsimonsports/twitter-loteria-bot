@@ -12,6 +12,7 @@ on:
       - data/to_publish_videos.json
       - daily_queue_v19.py
       - daily_queue_v19_policy_fix.py
+      - daily_growth_v20.py
       - daily_video_v19.py
       - daily_video_v19_short_fix.py
       - daily_video_v19_dupla_fix.py
@@ -59,7 +60,7 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar Dupla Sena, cores por modalidade, URL e exclusão da Loteca
+      - name: Validar Dupla Sena, cores por modalidade, URL, exclusão da Loteca e SEO
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
@@ -67,6 +68,7 @@ jobs:
           python -m py_compile \
             daily_video_v19.py daily_video_v19_short_fix.py daily_video_v19_dupla_fix.py \
             daily_video_v19_branding_fix.py daily_queue_v19.py daily_queue_v19_policy_fix.py \
+            daily_growth_v20.py \
             lottery_result_v18.py voice_narration_v18.py voice_narration_v17.py audio_identity_v9.py \
             video_queue.py post_video.py youtube_auth.py youtube_upload.py
           python - <<'PY'
@@ -78,6 +80,7 @@ jobs:
           import daily_video_v19_branding_fix as branding
           import daily_queue_v19 as queue
           import daily_queue_v19_policy_fix
+          import daily_growth_v20
           from lottery_result_v18 import parse_lottery_result
           from post_video import RESULTS_INDEX_URL
           from youtube_upload import YOUTUBE_TAGS_SAFE_LIMIT, _youtube_tag_cost, sanitize_youtube_tags
@@ -139,12 +142,22 @@ jobs:
           except RuntimeError as error:
               assert "Loteca" in str(error)
 
+          seo_sample = [
+              {"loteria": "Quina", "concurso": "7080", "data": "31/07/2026", "numeros": "2,19,24,39,49"},
+              {"loteria": "Dupla Sena", "concurso": "2990", "data": "31/07/2026", "numeros": dupla["numeros"]},
+          ]
+          meta = queue._metadata(seo_sample, "completo")
+          assert meta["title"].startswith("Resultado Quina 7080")
+          assert "resultado Quina concurso 7080" in " | ".join(meta["tags"])
+          assert "Inscreva-se" in meta["description"]
+          assert len(meta["title"]) <= 95
+
           stress_tags = [f"resultado completo da loteria número {i}" for i in range(100)]
           safe_tags = sanitize_youtube_tags(stress_tags)
           used = sum(_youtube_tag_cost(tag, has_previous=index > 0) for index, tag in enumerate(safe_tags))
           assert used <= YOUTUBE_TAGS_SAFE_LIMIT
           assert len(safe_tags) <= 25
-          print("Validação concluída: cores próprias, URL da seção, Dupla Sena correta e Loteca separada.")
+          print("Validação concluída: cores próprias, URL da seção, Dupla Sena correta, Loteca separada e SEO V20 ativo.")
           PY
 
       - name: Verificar dados e publicar quando o lote estiver pronto
@@ -166,7 +179,7 @@ jobs:
           TZ: America/Sao_Paulo
         run: |
           mkdir -p output
-          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_queue_v19; import daily_queue_v19_policy_fix; daily_queue_v19.main()"
+          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_queue_v19; import daily_queue_v19_policy_fix; import daily_growth_v20; daily_queue_v19.main()"
 
       - name: Guardar vídeos e capa para auditoria
         if: always()
