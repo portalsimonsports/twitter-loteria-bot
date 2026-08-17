@@ -192,7 +192,12 @@ def add_to_playlist(access_token: str, playlist_id: str, video_id: str) -> None:
 
 
 def already_published(access_token: str, title: str) -> bool:
-    # Busca nos uploads recentes do canal para evitar duplicidade em reexecução.
+    """Evita duplicidade quando a API Search está disponível.
+
+    Alguns refresh tokens permitem upload, thumbnail e playlist, mas a consulta
+    search.list com forMine pode retornar 403. Esse diagnóstico não deve impedir
+    uma publicação solicitada explicitamente.
+    """
     headers = {"Authorization": f"Bearer {access_token}"}
     response = requests.get(
         "https://www.googleapis.com/youtube/v3/search",
@@ -200,7 +205,13 @@ def already_published(access_token: str, title: str) -> bool:
         params={"part": "snippet", "forMine": "true", "type": "video", "maxResults": 50, "q": title[:45]},
         timeout=120,
     )
-    response.raise_for_status()
+    if not response.ok:
+        print(
+            f"[SPIRITUAL] Aviso: checagem de duplicidade indisponível "
+            f"(HTTP {response.status_code}); seguindo a publicação solicitada.",
+            flush=True,
+        )
+        return False
     for item in response.json().get("items", []):
         found = (item.get("snippet", {}).get("title") or "").strip().casefold()
         if found == title.strip().casefold():
