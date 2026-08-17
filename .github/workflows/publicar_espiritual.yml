@@ -1,0 +1,50 @@
+name: Publicar vídeos espirituais no YouTube
+
+on:
+  push:
+    paths:
+      - '.github/workflows/publicar_espiritual.yml'
+      - 'spiritual_publish.py'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-spiritual-youtube
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar FFmpeg e dependências Python
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Validar publicador espiritual
+        run: |
+          python -m py_compile spiritual_publish.py youtube_auth.py youtube_upload.py post_video.py bot.py
+
+      - name: Publicar no YouTube e organizar playlists
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ secrets.COFRE_ABA_CRED || vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          COFRE_ABA_CANAIS: ${{ secrets.COFRE_ABA_CANAIS || vars.COFRE_ABA_CANAIS || 'Redes_Sociais_Canais' }}
+          YOUTUBE_SPIRITUAL_ACCOUNT: ${{ vars.YOUTUBE_SPIRITUAL_ACCOUNT }}
+        run: |
+          python spiritual_publish.py
