@@ -6,6 +6,9 @@ on:
       - '.github/workflows/publicar_espiritual.yml'
       - 'spiritual_publish.py'
   workflow_dispatch:
+  schedule:
+    # 10:00 UTC = 07:00 em America/Sao_Paulo (UTC-3)
+    - cron: '0 10 * * *'
 
 concurrency:
   group: publish-spiritual-youtube
