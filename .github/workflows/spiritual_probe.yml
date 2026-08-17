@@ -1,0 +1,27 @@
+name: Spiritual Media Probe
+
+on:
+  push:
+    paths:
+      - '.github/workflows/spiritual_probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mostrar service account para compartilhamento dos arquivos
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+        run: |
+          python - <<'PY'
+          import json, os
+          raw=(os.getenv('GOOGLE_SERVICE_JSON') or '').strip()
+          if not raw:
+              raise SystemExit('GOOGLE_SERVICE_JSON ausente')
+          info=json.loads(raw)
+          print('SERVICE_ACCOUNT_EMAIL=' + str(info.get('client_email','')))
+          PY
