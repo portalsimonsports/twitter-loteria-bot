@@ -38,7 +38,7 @@ jobs:
         run: |
           python -m py_compile spiritual_publish.py youtube_auth.py youtube_upload.py post_video.py bot.py
 
-      - name: Publicar 1 vídeo espiritual no YouTube
+      - name: Publicar conteúdo espiritual
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
