@@ -1,10 +1,6 @@
 name: Publicar vídeos espirituais no YouTube
 
 on:
-  push:
-    paths:
-      - '.github/workflows/publicar_espiritual.yml'
-      - 'spiritual_publish.py'
   workflow_dispatch:
   schedule:
     # 10:00 UTC = 07:00 em America/Sao_Paulo (UTC-3)
@@ -42,12 +38,13 @@ jobs:
         run: |
           python -m py_compile spiritual_publish.py youtube_auth.py youtube_upload.py post_video.py bot.py
 
-      - name: Publicar no YouTube e organizar playlists
+      - name: Publicar 1 vídeo espiritual no YouTube
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
           COFRE_ABA_CRED: ${{ secrets.COFRE_ABA_CRED || vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
           COFRE_ABA_CANAIS: ${{ secrets.COFRE_ABA_CANAIS || vars.COFRE_ABA_CANAIS || 'Redes_Sociais_Canais' }}
           YOUTUBE_SPIRITUAL_ACCOUNT: ${{ vars.YOUTUBE_SPIRITUAL_ACCOUNT }}
+          SPIRITUAL_DAILY_LIMIT: '1'
         run: |
           python spiritual_publish.py
