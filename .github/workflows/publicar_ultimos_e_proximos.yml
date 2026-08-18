@@ -10,6 +10,7 @@ on:
       - main
     paths:
       - data/to_publish_videos.json
+      - daily_calendar_api_v21.py
       - daily_queue_v19.py
       - daily_queue_v19_policy_fix.py
       - daily_growth_v20.py
@@ -37,7 +38,7 @@ permissions:
 
 jobs:
   verificar-e-publicar:
-    name: Consolidar loterias comuns; Loteca fica separada
+    name: Calendário oficial -> aguardar pacote completo -> publicar imediatamente
     runs-on: ubuntu-latest
     timeout-minutes: 360
     concurrency:
@@ -60,117 +61,27 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar Dupla Sena, cores por modalidade, URL, exclusão da Loteca e SEO
-        env:
-          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
-          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+      - name: Validar módulos do publicador diário
         run: |
           python -m py_compile \
+            daily_calendar_api_v21.py \
             daily_video_v19.py daily_video_v19_short_fix.py daily_video_v19_dupla_fix.py \
             daily_video_v19_branding_fix.py daily_queue_v19.py daily_queue_v19_policy_fix.py \
-            daily_growth_v20.py \
-            lottery_result_v18.py voice_narration_v18.py voice_narration_v17.py audio_identity_v9.py \
-            video_queue.py post_video.py youtube_auth.py youtube_upload.py
-          python - <<'PY'
-          import json
-          import os
-          import daily_video_v19 as video
-          import daily_video_v19_short_fix
-          import daily_video_v19_dupla_fix
-          import daily_video_v19_branding_fix as branding
-          import daily_queue_v19 as queue
-          import daily_queue_v19_policy_fix
-          import daily_growth_v20
-          from lottery_result_v18 import parse_lottery_result
-          from post_video import RESULTS_INDEX_URL
-          from youtube_upload import YOUTUBE_TAGS_SAFE_LIMIT, _youtube_tag_cost, sanitize_youtube_tags
+            daily_growth_v20.py lottery_result_v18.py voice_narration_v18.py \
+            voice_narration_v17.py audio_identity_v9.py video_queue.py post_video.py \
+            youtube_auth.py youtube_upload.py
 
-          google_json = (os.getenv("GOOGLE_SERVICE_JSON") or "").strip()
-          cofre_id = (os.getenv("COFRE_SHEET_ID") or "").strip()
-          if not google_json or not cofre_id:
-              raise SystemExit("GOOGLE_SERVICE_JSON ou COFRE_SHEET_ID ausente.")
-          json.loads(google_json)
-
-          dupla = {
-              "loteria": "Dupla Sena",
-              "concurso": "2990",
-              "data": "31/07/2026",
-              "numeros": "11,13,14,25,35,38 | 7,15,19,23,40,46",
-          }
-          parts = parse_lottery_result(dupla["loteria"], dupla["numeros"])
-          assert list(parts.main_numbers) == ["11", "13", "14", "25", "35", "38"]
-          assert list(parts.second_draw_numbers) == ["07", "15", "19", "23", "40", "46"]
-          scenes = video._result_full_scenes(dupla)
-          assert len(scenes) == 2
-          assert "Primeiro sorteio" in scenes[0][2]
-          assert "Segundo sorteio" in scenes[1][2]
-          assert "Primeiro sorteio" in video._short_speech(dupla)
-          assert "Segundo sorteio" in video._short_speech(dupla)
-
-          quina_theme = branding.theme_for_lottery("Quina")
-          lotofacil_theme = branding.theme_for_lottery("Lotofácil")
-          mega_theme = branding.theme_for_lottery("Mega-Sena")
-          assert quina_theme["ball"] != lotofacil_theme["ball"]
-          assert mega_theme["ball"] != quina_theme["ball"]
-          assert branding.RESULTS_DOMAIN_DISPLAY == "PORTALSIMONSPORTS.COM"
-          assert branding.RESULTS_SECTION_DISPLAY == "SEÇÃO LOTERIAS CAIXA"
-          assert "seção Loterias Caixa" in branding.RESULTS_SPEECH
-          assert RESULTS_INDEX_URL == "https://www.portalsimonsports.com/search/label/Loterias%20Caixa?m=1"
-
-          headers = ["Loteria", "Concurso", "Data", "Números", "Publicado_Youtube_Diario"]
-          values = [
-              headers,
-              ["Loteca", "1264", "31/07/2026", "1 TIME A x TIME B 0", ""],
-              ["Quina", "7080", "31/07/2026", "2,19,24,39,49", ""],
-              ["Dupla Sena", "2990", "31/07/2026", dupla["numeros"], ""],
-          ]
-          candidates = queue._candidate_dates(values, headers, 4, {}, "America/Sao_Paulo")
-          assert candidates
-          selected_names = [item[1]["loteria"].strip().lower() for item in candidates[0][1]]
-          assert "loteca" not in selected_names
-          assert "quina" in selected_names and "dupla sena" in selected_names
-
-          loteca = {
-              "loteria": "Loteca",
-              "concurso": "1264",
-              "data": "31/07/2026",
-              "numeros": "1 TIME A x TIME B 0",
-          }
-          try:
-              video.gerar_pacote_diario([loteca])
-              raise AssertionError("Loteca entrou indevidamente no pacote diário")
-          except RuntimeError as error:
-              assert "Loteca" in str(error)
-
-          seo_sample = [
-              {"loteria": "Quina", "concurso": "7080", "data": "31/07/2026", "numeros": "2,19,24,39,49"},
-              {"loteria": "Dupla Sena", "concurso": "2990", "data": "31/07/2026", "numeros": dupla["numeros"]},
-          ]
-          meta = queue._metadata(seo_sample, "completo")
-          assert meta["title"].startswith("Resultado Quina 7080")
-          assert "resultado Quina concurso 7080" in " | ".join(meta["tags"])
-          assert "Inscreva-se" in meta["description"]
-          assert len(meta["title"]) <= 95
-
-          stress_tags = [f"resultado completo da loteria número {i}" for i in range(100)]
-          safe_tags = sanitize_youtube_tags(stress_tags)
-          used = sum(_youtube_tag_cost(tag, has_previous=index > 0) for index, tag in enumerate(safe_tags))
-          assert used <= YOUTUBE_TAGS_SAFE_LIMIT
-          assert len(safe_tags) <= 25
-          print("Validação concluída: cores próprias, URL da seção, Dupla Sena correta, Loteca separada e SEO V20 ativo.")
-          PY
-
-      - name: Verificar dados e publicar quando o lote estiver pronto
+      - name: Verificar calendário oficial e publicar assim que todos os resultados estiverem prontos
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
           SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
-          YOUTUBE_CALENDAR_TAB: ${{ vars.YOUTUBE_CALENDAR_TAB || 'Calendário_Loterias' }}
           COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
           COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
           PUBLICADO_YT_DIARIO_COL: ${{ vars.PUBLICADO_YT_DIARIO_COL || 'Publicado_Youtube_Diario' }}
-          YOUTUBE_DAILY_START_DATE: "31/07/2026"
-          YOUTUBE_DAILY_CUTOFF_HOUR: "23"
+          YOUTUBE_API_CALENDAR_SHEET_ID: ${{ vars.YOUTUBE_API_CALENDAR_SHEET_ID || '1gHenJLO5Qr23wWLgmRUXHldaDsUdKcICeFR1Ee621X8' }}
+          YOUTUBE_API_CALENDAR_TAB: ${{ vars.YOUTUBE_API_CALENDAR_TAB || 'API_CALENDARIO_LOTERIAS' }}
+          YOUTUBE_API_HISTORY_CONFIG_TAB: ${{ vars.YOUTUBE_API_HISTORY_CONFIG_TAB || 'CONFIG_HISTORICO_CAIXA' }}
           YOUTUBE_FORCE_SHORT_SINGLE_LOTTERY: ${{ vars.YOUTUBE_FORCE_SHORT_SINGLE_LOTTERY || 'false' }}
           MAX_VIDEOS_RODADA: "1"
           PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '3.0' }}
@@ -179,13 +90,13 @@ jobs:
           TZ: America/Sao_Paulo
         run: |
           mkdir -p output
-          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_queue_v19; import daily_queue_v19_policy_fix; import daily_growth_v20; daily_queue_v19.main()"
+          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_queue_v19_policy_fix; import daily_growth_v20; import daily_calendar_api_v21; daily_calendar_api_v21.main()"
 
       - name: Guardar vídeos e capa para auditoria
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: resumo-diario-youtube-v19-${{ github.run_number }}
+          name: resumo-diario-youtube-v21-${{ github.run_number }}
           path: |
             output/*.mp4
             output/*.png
