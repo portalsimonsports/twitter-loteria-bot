@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import traceback
 from datetime import datetime
 from typing import Any, Dict, List, Sequence, Tuple
 from zoneinfo import ZoneInfo
@@ -44,7 +45,6 @@ def _today(tz_name: str) -> str:
 
 
 def targets_for_date(calendar_values: List[List[str]], date: str) -> List[Tuple[str, str, str]]:
-    """Retorna (chave_loteria, nome_exibicao, concurso) previstos exatamente para a data."""
     if not calendar_values:
         return []
     headers = calendar_values[0]
@@ -85,16 +85,9 @@ def history_imported_map(history_values: List[List[str]]) -> Dict[str, str]:
     return imported
 
 
-def _find_today_rows(
-    values: List[List[str]],
-    headers: List[str],
-    daily_index: int,
-    date: str,
-    targets: Sequence[Tuple[str, str, str]],
-) -> Tuple[List[Tuple[int, Dict[str, Any]]], List[str]]:
+def _find_today_rows(values, headers, daily_index, date, targets):
     wanted = {(key, contest): display for key, display, contest in targets}
-    found: Dict[Tuple[str, str], Tuple[int, Dict[str, Any], str]] = {}
-
+    found = {}
     for sheet_row, row in enumerate(values[1:], start=2):
         try:
             data = queue._row_data(row, headers)
@@ -115,10 +108,11 @@ def _find_today_rows(
     if missing:
         return [], missing
 
-    ordered: List[Tuple[int, Dict[str, Any]]] = []
+    ordered = []
     for key, _display, contest in targets:
         sheet_row, data, marker = found[(key, contest)]
-        if queue._is_daily_final_marker(marker) or "YOUTUBE DIÁRIO V22 LIVE" in str(marker).upper():
+        marker_upper = str(marker or "").upper()
+        if queue._is_daily_final_marker(marker) or "YOUTUBE DIÁRIO V22 LIVE" in marker_upper or "YOUTUBE DIARIO V22 LIVE" in marker_upper:
             return [], ["JÁ PUBLICADO"]
         ordered.append((sheet_row, data))
     return ordered, []
@@ -150,15 +144,15 @@ def processar_resumo_por_calendario_api() -> int:
         queue._write_step_summary("## Calendário oficial", f"- {message}", "- Publicações: **0**")
         return 0
 
-    # FASE 1 — cria uma página/live única para o dia antes dos resultados.
-    # Nas execuções seguintes a mesma transmissão é localizada pela data e reutilizada.
-    live_urls = live.ensure_daily_lives(
-        date,
-        targets,
-        cofre_get,
-        cofre_cache,
-        timezone=config.timezone,
-    )
+    # FASE 1: tentativa de preparar a live do dia. Erro aqui nunca derruba o workflow.
+    live_urls: List[str] = []
+    try:
+        live_urls = live.ensure_daily_lives(
+            date, targets, cofre_get, cofre_cache, timezone=config.timezone
+        )
+    except Exception as error:
+        queue._log(f"Falha ao preparar live diária; fluxo continuará normalmente: {error}")
+        traceback.print_exc()
 
     imported = history_imported_map(history_values)
     waiting_history = [
@@ -169,11 +163,11 @@ def processar_resumo_por_calendario_api() -> int:
     if waiting_history:
         queue._log("Aguardando atualização oficial: " + ", ".join(waiting_history))
         queue._write_step_summary(
-            "## Alerta diário preparado; aguardando resultados",
+            "## Alerta diário / aguardando resultados",
             f"- Data: **{date}**",
             "- Programadas: " + ", ".join(f"{display} {contest}" for _key, display, contest in targets),
             "- Ainda não importadas: " + ", ".join(waiting_history),
-            f"- Live do dia: {live_urls[0] if live_urls else 'não criada — verificar permissão Live do OAuth/canal'}",
+            f"- Live do dia: {live_urls[0] if live_urls else 'indisponível nesta execução'}",
             "- Publicação final: **aguardando**",
         )
         return 0
@@ -187,34 +181,41 @@ def processar_resumo_por_calendario_api() -> int:
             queue._log(f"Resumo diário {date} já publicado.")
             return 0
         queue._log("API já atualizada, mas a base de publicação ainda aguarda: " + ", ".join(missing_rows))
-        queue._write_step_summary(
-            "## API pronta; aguardando base de publicação",
-            f"- Data: **{date}**",
-            "- Pendências na ImportadosBlogger2: " + ", ".join(missing_rows),
-            f"- Live do dia: {live_urls[0] if live_urls else 'indisponível'}",
-            "- Publicação final: **aguardando**",
-        )
         return 0
 
     queue._log(
-        f"SINAL VERDE {date}: todos os {len(targets)} concursos previstos foram importados e estão na base. "
-        "Gerando e transmitindo o resultado consolidado na mesma live do alerta."
+        f"SINAL VERDE {date}: todos os {len(targets)} concursos previstos foram importados."
     )
 
-    # FASE 2 — gera o pacote final, envia via RTMP para a live criada na FASE 1,
-    # encerra a transmissão e mantém o mesmo videoId/URL como replay do resultado.
-    return live.publish_day_as_live(
-        date,
-        targets,
-        rows,
-        worksheet,
-        daily_index,
-        cofre_get,
-        cofre_cache,
-        dry_run=config.dry_run,
-        pause=config.pausa,
-        timezone=config.timezone,
-    )
+    # FASE 2: tenta manter o mesmo URL via live. Se qualquer erro escapar da V22,
+    # usa imediatamente o publicador diário V19 como fallback e não deixa o Actions vermelho.
+    try:
+        return live.publish_day_as_live(
+            date,
+            targets,
+            rows,
+            worksheet,
+            daily_index,
+            cofre_get,
+            cofre_cache,
+            dry_run=config.dry_run,
+            pause=config.pausa,
+            timezone=config.timezone,
+        )
+    except Exception as error:
+        queue._log(f"V22 LIVE falhou; acionando fallback diário V19: {error}")
+        traceback.print_exc()
+        return queue._publish_day(
+            date,
+            rows,
+            worksheet,
+            daily_index,
+            cofre_get,
+            cofre_cache,
+            dry_run=config.dry_run,
+            pause=config.pausa,
+            timezone=config.timezone,
+        )
 
 
 def main() -> None:
