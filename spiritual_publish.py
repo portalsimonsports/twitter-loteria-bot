@@ -1,15 +1,21 @@
 # -*- coding: utf-8 -*-
 """Publicador dedicado de vídeos espirituais via GitHub Actions.
 
-Fluxo isolado das loterias: baixa áudio/capa do Google Drive compartilhado com
-service account, gera MP4 16:9 com FFmpeg, publica no YouTube, aplica thumbnail
-e organiza em playlist.
+Regras de segurança:
+- fluxo isolado das loterias;
+- no máximo SPIRITUAL_DAILY_LIMIT publicações por execução (padrão 1);
+- cada conteúdo possui publish_id único;
+- publish_id é gravado em spiritual_published.json imediatamente após o upload;
+- o estado é persistido no próprio GitHub antes de thumbnail/playlist, evitando
+  republicação caso uma etapa posterior falhe.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -23,9 +29,11 @@ from youtube_upload import build_watch_url, upload_thumbnail, upload_video
 DRIVE_API = "https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
 YOUTUBE_PLAYLISTS = "https://www.googleapis.com/youtube/v3/playlists"
 YOUTUBE_PLAYLIST_ITEMS = "https://www.googleapis.com/youtube/v3/playlistItems"
+STATE_PATH = Path("spiritual_published.json")
 
 JOBS = [
     {
+        "publish_id": "ganesha-original-20260817",
         "slug": "ganesha",
         "audio_drive_id": "1nnRBLTnnDznskeClxq-cGYF9rP9Bk85W",
         "cover_drive_id": "1CpUCEOzNCB1rAfV_v_E9mDPjiq1wyPGF",
@@ -44,6 +52,7 @@ JOBS = [
         "playlist_description": "Mantras e práticas espirituais voltados à prosperidade, proteção, equilíbrio e abertura de caminhos.",
     },
     {
+        "publish_id": "hooponopono-original-20260817",
         "slug": "hooponopono",
         "audio_drive_id": "1h-ouGyylnq-6mje_NlZVfuk187rpumbC",
         "cover_drive_id": "10oDET7VtyKL7eD50IZK6SYv01KIn_K4T",
@@ -62,6 +71,74 @@ JOBS = [
         "playlist_description": "Práticas de Ho'oponopono, meditação, limpeza emocional, abundância e prosperidade.",
     },
 ]
+
+
+def load_state() -> dict:
+    if not STATE_PATH.exists():
+        return {"published": {}}
+    try:
+        data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        data = {"published": {}}
+    if not isinstance(data, dict):
+        data = {"published": {}}
+    data.setdefault("published", {})
+    return data
+
+
+def save_state_local(state: dict) -> None:
+    tmp = STATE_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(STATE_PATH)
+
+
+def persist_state_github(state: dict) -> None:
+    """Persiste o estado imediatamente no branch atual usando GITHUB_TOKEN."""
+    token = (os.getenv("GITHUB_TOKEN") or "").strip()
+    repo = (os.getenv("GITHUB_REPOSITORY") or "").strip()
+    branch = (os.getenv("GITHUB_REF_NAME") or "main").strip() or "main"
+    if not token or not repo:
+        print("[SPIRITUAL] Aviso: GITHUB_TOKEN/GITHUB_REPOSITORY ausente; estado salvo apenas localmente.", flush=True)
+        return
+
+    api = f"https://api.github.com/repos/{repo}/contents/{STATE_PATH.as_posix()}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    current = requests.get(api, headers=headers, params={"ref": branch}, timeout=120)
+    sha = None
+    if current.status_code == 200:
+        sha = current.json().get("sha")
+    elif current.status_code != 404:
+        current.raise_for_status()
+
+    raw = json.dumps(state, ensure_ascii=False, indent=2) + "\n"
+    payload = {
+        "message": "Atualizar trava anti-duplicidade de vídeos espirituais",
+        "content": base64.b64encode(raw.encode("utf-8")).decode("ascii"),
+        "branch": branch,
+    }
+    if sha:
+        payload["sha"] = sha
+
+    response = requests.put(api, headers=headers, json=payload, timeout=120)
+    response.raise_for_status()
+    print("[SPIRITUAL] Estado anti-duplicidade persistido no GitHub.", flush=True)
+
+
+def mark_published(state: dict, job: dict, video_id: str | None, status: str) -> None:
+    publish_id = job["publish_id"]
+    state["published"][publish_id] = {
+        "slug": job["slug"],
+        "title": job["title"],
+        "video_id": video_id or "",
+        "status": status,
+        "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    save_state_local(state)
+    persist_state_github(state)
 
 
 def _service_drive_token() -> str:
@@ -192,12 +269,7 @@ def add_to_playlist(access_token: str, playlist_id: str, video_id: str) -> None:
 
 
 def already_published(access_token: str, title: str) -> bool:
-    """Evita duplicidade quando a API Search está disponível.
-
-    Alguns refresh tokens permitem upload, thumbnail e playlist, mas a consulta
-    search.list com forMine pode retornar 403. Esse diagnóstico não deve impedir
-    uma publicação solicitada explicitamente.
-    """
+    """Checagem auxiliar no YouTube. A trava principal é spiritual_published.json."""
     headers = {"Authorization": f"Bearer {access_token}"}
     response = requests.get(
         "https://www.googleapis.com/youtube/v3/search",
@@ -207,8 +279,8 @@ def already_published(access_token: str, title: str) -> bool:
     )
     if not response.ok:
         print(
-            f"[SPIRITUAL] Aviso: checagem de duplicidade indisponível "
-            f"(HTTP {response.status_code}); seguindo a publicação solicitada.",
+            f"[SPIRITUAL] Aviso: checagem YouTube indisponível (HTTP {response.status_code}); "
+            "usando registro persistente do GitHub.",
             flush=True,
         )
         return False
@@ -220,9 +292,16 @@ def already_published(access_token: str, title: str) -> bool:
 
 
 def main() -> None:
+    state = load_state()
+    try:
+        daily_limit = max(1, int((os.getenv("SPIRITUAL_DAILY_LIMIT") or "1").strip()))
+    except ValueError:
+        daily_limit = 1
+
     bot._cofre_load()
     account = youtube_account()
     print(f"[SPIRITUAL] Conta YouTube: {account}", flush=True)
+    print(f"[SPIRITUAL] Limite desta execução: {daily_limit}", flush=True)
 
     client_id = bot._cofre_get("YOUTUBE", "CLIENT_ID", conta=account, default="") or ""
     client_secret = bot._cofre_get("YOUTUBE", "CLIENT_SECRET", conta=account, default="") or ""
@@ -237,11 +316,19 @@ def main() -> None:
 
     work = Path("spiritual_work")
     work.mkdir(exist_ok=True)
+    published_this_run = 0
 
     for job in JOBS:
+        publish_id = job["publish_id"]
         title = job["title"]
+
+        if publish_id in state["published"]:
+            print(f"[SPIRITUAL] BLOQUEADO POR REGISTRO: {publish_id} | {title}", flush=True)
+            continue
+
         if already_published(access_token, title):
-            print(f"[SPIRITUAL] Já publicado, pulando: {title}", flush=True)
+            print(f"[SPIRITUAL] Já existe no YouTube; registrando e pulando: {title}", flush=True)
+            mark_published(state, job, None, "detected_on_youtube")
             continue
 
         slug = job["slug"]
@@ -264,10 +351,36 @@ def main() -> None:
             category_id=category_id,
             privacy_status=privacy,
         )
-        upload_thumbnail(access_token, video_id, str(thumb))
-        playlist_id = ensure_playlist(access_token, job["playlist"], job["playlist_description"])
-        add_to_playlist(access_token, playlist_id, video_id)
-        print(f"[SPIRITUAL] PUBLICADO: {build_watch_url(video_id)} | playlist={job['playlist']}", flush=True)
+
+        # TRAVA CRÍTICA: grava imediatamente após o upload, antes de qualquer
+        # operação acessória que possa falhar. Uma nova execução verá este ID.
+        mark_published(state, job, video_id, "uploaded")
+        published_this_run += 1
+        print(f"[SPIRITUAL] REGISTRADO ANTI-DUPLICIDADE: {publish_id} -> {video_id}", flush=True)
+
+        try:
+            upload_thumbnail(access_token, video_id, str(thumb))
+        except Exception as exc:
+            print(f"[SPIRITUAL] Aviso thumbnail: {exc}", flush=True)
+
+        try:
+            playlist_id = ensure_playlist(access_token, job["playlist"], job["playlist_description"])
+            add_to_playlist(access_token, playlist_id, video_id)
+            state["published"][publish_id]["playlist"] = job["playlist"]
+            state["published"][publish_id]["status"] = "published_and_organized"
+            save_state_local(state)
+            persist_state_github(state)
+        except Exception as exc:
+            print(f"[SPIRITUAL] Aviso playlist: {exc}", flush=True)
+
+        print(f"[SPIRITUAL] PUBLICADO: {build_watch_url(video_id)}", flush=True)
+
+        if published_this_run >= daily_limit:
+            print("[SPIRITUAL] Limite diário atingido. Encerrando execução.", flush=True)
+            break
+
+    if published_this_run == 0:
+        print("[SPIRITUAL] Nenhum conteúdo novo elegível para publicar nesta execução.", flush=True)
 
 
 if __name__ == "__main__":
