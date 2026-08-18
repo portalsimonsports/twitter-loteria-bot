@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 import daily_queue_v19 as queue
+import youtube_daily_live_v22 as live
 
 
 API_CALENDAR_SHEET_ID_DEFAULT = "1gHenJLO5Qr23wWLgmRUXHldaDsUdKcICeFR1Ee621X8"
@@ -63,7 +64,6 @@ def targets_for_date(calendar_values: List[List[str]], date: str) -> List[Tuple[
             continue
         if status and "programado" not in status:
             continue
-        # Loteca mantém seu publicador específico já aprovado.
         if key == "loteca":
             continue
         targets.append((key, queue._display_lottery(lottery), contest))
@@ -118,7 +118,7 @@ def _find_today_rows(
     ordered: List[Tuple[int, Dict[str, Any]]] = []
     for key, _display, contest in targets:
         sheet_row, data, marker = found[(key, contest)]
-        if queue._is_daily_final_marker(marker):
+        if queue._is_daily_final_marker(marker) or "YOUTUBE DIÁRIO V22 LIVE" in str(marker).upper():
             return [], ["JÁ PUBLICADO"]
         ordered.append((sheet_row, data))
     return ordered, []
@@ -150,6 +150,16 @@ def processar_resumo_por_calendario_api() -> int:
         queue._write_step_summary("## Calendário oficial", f"- {message}", "- Publicações: **0**")
         return 0
 
+    # FASE 1 — cria uma página/live única para o dia antes dos resultados.
+    # Nas execuções seguintes a mesma transmissão é localizada pela data e reutilizada.
+    live_urls = live.ensure_daily_lives(
+        date,
+        targets,
+        cofre_get,
+        cofre_cache,
+        timezone=config.timezone,
+    )
+
     imported = history_imported_map(history_values)
     waiting_history = [
         f"{display} {contest}"
@@ -159,11 +169,12 @@ def processar_resumo_por_calendario_api() -> int:
     if waiting_history:
         queue._log("Aguardando atualização oficial: " + ", ".join(waiting_history))
         queue._write_step_summary(
-            "## Aguardando resultados oficiais",
+            "## Alerta diário preparado; aguardando resultados",
             f"- Data: **{date}**",
             "- Programadas: " + ", ".join(f"{display} {contest}" for _key, display, contest in targets),
             "- Ainda não importadas: " + ", ".join(waiting_history),
-            "- Publicações: **0**",
+            f"- Live do dia: {live_urls[0] if live_urls else 'não criada — verificar permissão Live do OAuth/canal'}",
+            "- Publicação final: **aguardando**",
         )
         return 0
 
@@ -180,16 +191,21 @@ def processar_resumo_por_calendario_api() -> int:
             "## API pronta; aguardando base de publicação",
             f"- Data: **{date}**",
             "- Pendências na ImportadosBlogger2: " + ", ".join(missing_rows),
-            "- Publicações: **0**",
+            f"- Live do dia: {live_urls[0] if live_urls else 'indisponível'}",
+            "- Publicação final: **aguardando**",
         )
         return 0
 
     queue._log(
         f"SINAL VERDE {date}: todos os {len(targets)} concursos previstos foram importados e estão na base. "
-        "Gerando o resumo diário imediatamente."
+        "Gerando e transmitindo o resultado consolidado na mesma live do alerta."
     )
-    return queue._publish_day(
+
+    # FASE 2 — gera o pacote final, envia via RTMP para a live criada na FASE 1,
+    # encerra a transmissão e mantém o mesmo videoId/URL como replay do resultado.
+    return live.publish_day_as_live(
         date,
+        targets,
         rows,
         worksheet,
         daily_index,
