@@ -199,6 +199,12 @@ def install_daily_policy_fix() -> None:
     queue._candidate_dates = _candidate_dates_without_loteca
     queue._compact_result = _compact_result_with_dupla
 
+    # V21: o workflow continua chamando daily_queue_v19.main(), mas a decisão
+    # de publicação passa a usar a base oficial API_CALENDARIO_LOTERIAS e a
+    # confirmação de importação em CONFIG_HISTORICO_CAIXA.
+    import daily_calendar_api_v21
+    queue.main = daily_calendar_api_v21.main
+
 
 install_daily_policy_fix()
 
