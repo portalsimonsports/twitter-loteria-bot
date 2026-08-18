@@ -1,0 +1,15 @@
+{
+  "published": {
+    "ganesha-original-20260817": {
+      "slug": "ganesha",
+      "status": "published_before_persistent_lock",
+      "published_at": "2026-08-17"
+    },
+    "hooponopono-original-20260817": {
+      "slug": "hooponopono",
+      "video_id": "SnIjXfzE2ig",
+      "status": "published_before_persistent_lock",
+      "published_at": "2026-08-17"
+    }
+  }
+}
