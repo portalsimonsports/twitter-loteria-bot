@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   publicar:
@@ -46,5 +46,6 @@ jobs:
           COFRE_ABA_CANAIS: ${{ secrets.COFRE_ABA_CANAIS || vars.COFRE_ABA_CANAIS || 'Redes_Sociais_Canais' }}
           YOUTUBE_SPIRITUAL_ACCOUNT: ${{ vars.YOUTUBE_SPIRITUAL_ACCOUNT }}
           SPIRITUAL_DAILY_LIMIT: '1'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python spiritual_publish.py
