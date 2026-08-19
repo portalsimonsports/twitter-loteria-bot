@@ -72,6 +72,51 @@ jobs:
             voice_narration_v17.py audio_identity_v9.py video_queue.py post_video.py \
             youtube_auth.py youtube_upload.py
 
+      - name: Validar acesso da service account às bases
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          YOUTUBE_API_CALENDAR_SHEET_ID: ${{ vars.YOUTUBE_API_CALENDAR_SHEET_ID || '1gHenJLO5Qr23wWLgmRUXHldaDsUdKcICeFR1Ee621X8' }}
+          YOUTUBE_API_CALENDAR_TAB: ${{ vars.YOUTUBE_API_CALENDAR_TAB || 'API_CALENDARIO_LOTERIAS' }}
+          YOUTUBE_API_HISTORY_CONFIG_TAB: ${{ vars.YOUTUBE_API_HISTORY_CONFIG_TAB || 'CONFIG_HISTORICO_CAIXA' }}
+        run: |
+          python - <<'PY'
+          import json, os
+          import gspread
+          from oauth2client.service_account import ServiceAccountCredentials
+
+          raw = os.environ.get('GOOGLE_SERVICE_JSON', '')
+          if not raw:
+              raise RuntimeError('GOOGLE_SERVICE_JSON ausente')
+          info = json.loads(raw)
+          print('Service account:', info.get('client_email', 'não informada'))
+          scopes = [
+              'https://www.googleapis.com/auth/spreadsheets',
+              'https://www.googleapis.com/auth/drive',
+          ]
+          creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scopes)
+          client = gspread.authorize(creds)
+
+          main = client.open_by_key(os.environ['GOOGLE_SHEET_ID'])
+          main.worksheet(os.environ['SHEET_TAB'])
+          print('OK planilha principal:', main.title)
+
+          api = client.open_by_key(os.environ['YOUTUBE_API_CALENDAR_SHEET_ID'])
+          api.worksheet(os.environ['YOUTUBE_API_CALENDAR_TAB'])
+          api.worksheet(os.environ['YOUTUBE_API_HISTORY_CONFIG_TAB'])
+          print('OK base API Loterias:', api.title)
+
+          cofre_id = os.environ.get('COFRE_SHEET_ID', '').strip()
+          if not cofre_id:
+              raise RuntimeError('COFRE_SHEET_ID ausente')
+          cofre = client.open_by_key(cofre_id)
+          cofre.worksheet(os.environ['COFRE_ABA_CRED'])
+          print('OK Cofre:', cofre.title)
+          PY
+
       - name: Criar alerta do dia e finalizar no mesmo URL quando todos os resultados chegarem
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
