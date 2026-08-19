@@ -11,6 +11,7 @@ on:
     paths:
       - data/to_publish_videos.json
       - daily_calendar_api_v21.py
+      - caixa_direct_fallback_v23.py
       - youtube_daily_live_v22.py
       - daily_queue_v19.py
       - daily_queue_v19_policy_fix.py
@@ -39,7 +40,7 @@ permissions:
 
 jobs:
   verificar-e-publicar:
-    name: Calendário oficial -> alerta/live do dia -> resultado no mesmo URL
+    name: Calendário oficial -> API CAIXA fallback -> alerta/live -> resultado
     runs-on: ubuntu-latest
     timeout-minutes: 360
     concurrency:
@@ -62,10 +63,10 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar módulos do publicador diário V22
+      - name: Validar módulos do publicador diário V23
         run: |
           python -m py_compile \
-            daily_calendar_api_v21.py youtube_daily_live_v22.py \
+            daily_calendar_api_v21.py caixa_direct_fallback_v23.py youtube_daily_live_v22.py \
             daily_video_v19.py daily_video_v19_short_fix.py daily_video_v19_dupla_fix.py \
             daily_video_v19_branding_fix.py daily_queue_v19.py daily_queue_v19_policy_fix.py \
             daily_growth_v20.py lottery_result_v18.py voice_narration_v18.py \
@@ -117,7 +118,7 @@ jobs:
           print('OK Cofre:', cofre.title)
           PY
 
-      - name: Criar alerta do dia e finalizar no mesmo URL quando todos os resultados chegarem
+      - name: Criar alerta do dia e finalizar quando todos os resultados chegarem
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
@@ -137,13 +138,13 @@ jobs:
           TZ: America/Sao_Paulo
         run: |
           mkdir -p output
-          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_queue_v19_policy_fix; import daily_growth_v20; import youtube_daily_live_v22; import daily_calendar_api_v21; daily_calendar_api_v21.main()"
+          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_queue_v19_policy_fix; import daily_growth_v20; import caixa_direct_fallback_v23; import youtube_daily_live_v22; import daily_calendar_api_v21; daily_calendar_api_v21.main()"
 
       - name: Guardar vídeos e capa para auditoria
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: resumo-diario-youtube-v22-${{ github.run_number }}
+          name: resumo-diario-youtube-v23-${{ github.run_number }}
           path: |
             output/*.mp4
             output/*.png
