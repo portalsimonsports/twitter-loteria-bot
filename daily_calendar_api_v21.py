@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
+import caixa_direct_fallback_v23 as caixa_fallback
 import daily_queue_v19 as queue
 import youtube_daily_live_v22 as live
 
@@ -144,14 +145,15 @@ def processar_resumo_por_calendario_api() -> int:
         queue._write_step_summary("## Calendário oficial", f"- {message}", "- Publicações: **0**")
         return 0
 
-    # FASE 1: tentativa de preparar a live do dia. Erro aqui nunca derruba o workflow.
+    # FASE 1 — tenta criar/reusar a live-alerta. O token atual pode não ter escopo Live;
+    # nesse caso a exceção é registrada e o fluxo continua sem derrubar o Actions.
     live_urls: List[str] = []
     try:
         live_urls = live.ensure_daily_lives(
             date, targets, cofre_get, cofre_cache, timezone=config.timezone
         )
     except Exception as error:
-        queue._log(f"Falha ao preparar live diária; fluxo continuará normalmente: {error}")
+        queue._log(f"Live-alerta indisponível nesta execução: {error}")
         traceback.print_exc()
 
     imported = history_imported_map(history_values)
@@ -160,35 +162,56 @@ def processar_resumo_por_calendario_api() -> int:
         for key, display, contest in targets
         if imported.get(key) != contest
     ]
+
+    # FASE 1B — se o Apps Script da base estiver atrasado/sem cota de UrlFetch,
+    # o próprio GitHub consulta a API oficial da CAIXA. Quando o concurso já existe,
+    # grava uma linha mínima em ImportadosBlogger2, sem enfileirar outras redes.
     if waiting_history:
-        queue._log("Aguardando atualização oficial: " + ", ".join(waiting_history))
-        queue._write_step_summary(
-            "## Alerta diário / aguardando resultados",
-            f"- Data: **{date}**",
-            "- Programadas: " + ", ".join(f"{display} {contest}" for _key, display, contest in targets),
-            "- Ainda não importadas: " + ", ".join(waiting_history),
-            f"- Live do dia: {live_urls[0] if live_urls else 'indisponível nesta execução'}",
-            "- Publicação final: **aguardando**",
+        queue._log(
+            "Histórico CAIXA ainda não atualizou: " + ", ".join(waiting_history) +
+            ". Tentando fallback direto pela API oficial."
         )
-        return 0
+        try:
+            inserted = caixa_fallback.append_missing_results(
+                worksheet,
+                values,
+                targets,
+                expected_date=date,
+                log=queue._log,
+            )
+            if inserted:
+                queue._log(f"Fallback CAIXA inseriu {len(inserted)} resultado(s) oficial(is).")
+                values = worksheet.get_all_values()
+        except Exception as error:
+            queue._log(f"Fallback direto CAIXA falhou sem interromper o workflow: {error}")
+            traceback.print_exc()
 
     headers = list(values[0])
     daily_column = os.getenv("PUBLICADO_YT_DIARIO_COL", queue.DAILY_COLUMN_DEFAULT)
     daily_index = queue._ensure_column(worksheet, headers, daily_column)
     rows, missing_rows = _find_today_rows(values, headers, daily_index, date, targets)
+
     if not rows:
         if missing_rows == ["JÁ PUBLICADO"]:
             queue._log(f"Resumo diário {date} já publicado.")
             return 0
-        queue._log("API já atualizada, mas a base de publicação ainda aguarda: " + ", ".join(missing_rows))
+        queue._log("Aguardando resultados oficiais ainda indisponíveis: " + ", ".join(missing_rows))
+        queue._write_step_summary(
+            "## Aguardando resultados oficiais",
+            f"- Data: **{date}**",
+            "- Programadas: " + ", ".join(f"{display} {contest}" for _key, display, contest in targets),
+            "- Ainda ausentes: " + ", ".join(missing_rows),
+            f"- Live do dia: {live_urls[0] if live_urls else 'não criada — OAuth atual sem escopo Live'}",
+            "- GitHub tentou a API CAIXA diretamente para contornar a cota do Apps Script.",
+        )
         return 0
 
     queue._log(
-        f"SINAL VERDE {date}: todos os {len(targets)} concursos previstos foram importados."
+        f"SINAL VERDE {date}: todos os {len(targets)} concursos previstos estão na base."
     )
 
-    # FASE 2: tenta manter o mesmo URL via live. Se qualquer erro escapar da V22,
-    # usa imediatamente o publicador diário V19 como fallback e não deixa o Actions vermelho.
+    # FASE 2 — tenta finalizar no mesmo URL via live. Se o OAuth não tiver escopo Live,
+    # usa o upload diário normal, garantindo que o resultado seja publicado.
     try:
         return live.publish_day_as_live(
             date,
