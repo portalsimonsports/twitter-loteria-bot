@@ -23,7 +23,7 @@ on:
       - youtube_upload.py
       - .github/workflows/publicar_ultimos_e_proximos.yml
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "7 * * * *"
   workflow_dispatch:
     inputs:
       modo:
