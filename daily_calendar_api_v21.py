@@ -45,6 +45,25 @@ def _today(tz_name: str) -> str:
     return now.strftime("%d/%m/%Y")
 
 
+def _weekday_for_date(date_text: str) -> int | None:
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(str(date_text or "").strip(), fmt).weekday()
+        except ValueError:
+            continue
+    return None
+
+
+def _allowed_lottery_on_date(key: str, date_text: str) -> bool:
+    weekday = _weekday_for_date(date_text)
+    if weekday is None:
+        return True
+    # Regra operacional da Loteria Federal: quarta-feira (2) e sábado (5).
+    if key == "loteria federal":
+        return weekday in (2, 5)
+    return True
+
+
 def targets_for_date(calendar_values: List[List[str]], date: str) -> List[Tuple[str, str, str]]:
     if not calendar_values:
         return []
@@ -67,8 +86,53 @@ def targets_for_date(calendar_values: List[List[str]], date: str) -> List[Tuple[
             continue
         if key == "loteca":
             continue
+        if not _allowed_lottery_on_date(key, next_date):
+            queue._log(f"Ignorando {queue._display_lottery(lottery)} em {next_date}: fora do dia oficial permitido.")
+            continue
         targets.append((key, queue._display_lottery(lottery), contest))
     return targets
+
+
+def largest_prize_for_date(calendar_values: List[List[str]], date: str, targets: Sequence[Tuple[str, str, str]]) -> Dict[str, str]:
+    if not calendar_values or not targets:
+        return {}
+    headers = calendar_values[0]
+    i_lottery = _header_index(headers, "loteria")
+    i_contest = _header_index(headers, "proximoConcurso", "proximo concurso")
+    i_date = _header_index(headers, "dataProximoConcurso", "data proximo concurso")
+    i_value = _header_index(headers, "valorEstimado", "valor estimado", "premio", "prêmio")
+    wanted = {(key, contest) for key, _display, contest in targets}
+
+    def parse_money(value: str) -> float:
+        text = re.sub(r"[^0-9,.-]", "", str(value or "")).strip()
+        if not text:
+            return 0.0
+        if "," in text:
+            text = text.replace(".", "").replace(",", ".")
+        try:
+            return float(text)
+        except ValueError:
+            return 0.0
+
+    best: Dict[str, str] = {}
+    best_value = 0.0
+    for row in calendar_values[1:]:
+        lottery = _cell(row, i_lottery)
+        contest = _contest_key(_cell(row, i_contest))
+        row_date = _cell(row, i_date)
+        key = queue._lottery_key(lottery)
+        if row_date != date or (key, contest) not in wanted:
+            continue
+        raw_value = _cell(row, i_value)
+        numeric = parse_money(raw_value)
+        if numeric > best_value:
+            best_value = numeric
+            best = {
+                "loteria": queue._display_lottery(lottery),
+                "concurso": contest,
+                "premio": raw_value,
+            }
+    return best
 
 
 def history_imported_map(history_values: List[List[str]]) -> Dict[str, str]:
@@ -145,12 +209,19 @@ def processar_resumo_por_calendario_api() -> int:
         queue._write_step_summary("## Calendário oficial", f"- {message}", "- Publicações: **0**")
         return 0
 
+    prize_highlight = largest_prize_for_date(calendar_values, date, targets)
+
     # FASE 1 — cria/reutiliza a LIVE do dia. Ela funciona como alerta e preserva
     # exatamente o mesmo URL que receberá o vídeo consolidado quando os resultados chegarem.
     live_urls: List[str] = []
     try:
         live_urls = live.ensure_daily_lives(
-            date, targets, cofre_get, cofre_cache, timezone=config.timezone
+            date,
+            targets,
+            cofre_get,
+            cofre_cache,
+            timezone=config.timezone,
+            prize_highlight=prize_highlight,
         )
     except Exception as error:
         queue._log(f"Live-alerta indisponível nesta execução: {error}")
@@ -163,8 +234,6 @@ def processar_resumo_por_calendario_api() -> int:
         if imported.get(key) != contest
     ]
 
-    # FASE 2 — se o Apps Script da base estiver atrasado/sem cota de UrlFetch,
-    # o próprio GitHub consulta a API oficial da CAIXA.
     if waiting_history:
         queue._log(
             "Histórico CAIXA ainda não atualizou: " + ", ".join(waiting_history) +
@@ -201,14 +270,13 @@ def processar_resumo_por_calendario_api() -> int:
             "- Programadas: " + ", ".join(f"{display} {contest}" for _key, display, contest in targets),
             "- Ainda ausentes: " + ", ".join(missing_rows),
             f"- URL da Live do dia: {live_urls[0] if live_urls else 'não criada — verificar OAuth Live'}",
+            f"- Maior prêmio do dia: {prize_highlight.get('loteria', '')} {prize_highlight.get('premio', '')}" if prize_highlight else "- Maior prêmio do dia: não informado",
             "- GitHub tentou a API CAIXA diretamente para contornar eventual atraso do Apps Script.",
         )
         return 0
 
     queue._log(f"SINAL VERDE {date}: todos os {len(targets)} concursos previstos estão na base.")
 
-    # FASE 3 — transmite o vídeo final para a Live já criada, encerra a transmissão,
-    # troca título/descrição/capa para o resultado final e mantém o MESMO URL.
     return live.publish_day_as_live(
         date,
         targets,
@@ -220,6 +288,7 @@ def processar_resumo_por_calendario_api() -> int:
         dry_run=config.dry_run,
         pause=config.pausa,
         timezone=config.timezone,
+        prize_highlight=prize_highlight,
     )
 
 
