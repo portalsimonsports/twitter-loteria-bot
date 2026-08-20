@@ -31,7 +31,7 @@ def _uploads_playlist(token: str) -> str:
     return (((items[0].get("contentDetails") or {}).get("relatedPlaylists") or {}).get("uploads") or "") if items else ""
 
 
-def _today_alert_id(token: str, date: str) -> str:
+def _recent_loterias_de_hoje_id(token: str) -> str:
     playlist = _uploads_playlist(token)
     if not playlist:
         return ""
@@ -43,10 +43,51 @@ def _today_alert_id(token: str, date: str) -> str:
     )
     r.raise_for_status()
     for item in r.json().get("items") or []:
-        title = str((item.get("snippet") or {}).get("title") or "")
-        if date in title and "Loterias de Hoje" in title:
+        snippet = item.get("snippet") or {}
+        title = str(snippet.get("title") or "").strip()
+        if "loterias de hoje" in title.casefold():
             return str((item.get("contentDetails") or {}).get("videoId") or "").strip()
     return ""
+
+
+def _recent_live_id(token: str) -> str:
+    for status in ("upcoming", "active", "completed"):
+        r = requests.get(
+            f"{API}/liveBroadcasts",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"part": "id,snippet,status", "broadcastStatus": status, "mine": "true", "maxResults": 50},
+            timeout=30,
+        )
+        if not r.ok:
+            continue
+        for item in r.json().get("items") or []:
+            title = str((item.get("snippet") or {}).get("title") or "").strip()
+            if "loterias de hoje" in title.casefold():
+                return str(item.get("id") or "").strip()
+    return ""
+
+
+def _update_title_description(token: str, video_id: str, date: str, targets, prize: dict) -> None:
+    names = ", ".join(display for _key, display, _contest in targets[:4])
+    title = f"Loterias de Hoje — {names} | {date}" if names else f"Loterias de Hoje | {date}"
+    if len(title) > 95:
+        title = f"Loterias de Hoje — Sorteios e Resultados | {date}"
+    lines = [f"Loterias programadas para hoje, {date}:"]
+    for _key, display, contest in targets:
+        lines.append(f"• {display} — concurso {contest}")
+    if prize:
+        lines += ["", f"Maior prêmio estimado do dia: {prize.get('loteria','')} — {prize.get('premio','')}"]
+    lines += ["", "Inscreva-se no canal e ative o sino para receber as atualizações assim que os resultados oficiais forem confirmados."]
+    body = {"id": video_id, "snippet": {"title": title[:95], "description": "\n".join(lines)[:4500], "categoryId": "24"}}
+    r = requests.put(
+        f"{API}/videos",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        params={"part": "snippet"},
+        json=body,
+        timeout=60,
+    )
+    if not r.ok:
+        print(f"[REPAIR V26] Metadados não atualizados: HTTP {r.status_code} {r.text[:600]}", flush=True)
 
 
 def main() -> int:
@@ -60,6 +101,8 @@ def main() -> int:
 
     date = _today(cfg.timezone)
     targets = cal.targets_for_date(values, date)
+    if not targets:
+        raise RuntimeError(f"Nenhuma loteria válida encontrada para {date}.")
     prize = cal.largest_prize_for_date(values, date, targets)
     thumb = gerar_capa_live(date, targets, prize_highlight=prize)
 
@@ -72,16 +115,18 @@ def main() -> int:
             continue
 
         token = get_access_token(cid, sec, ref)
-        vid = _today_alert_id(token, date)
+        vid = _recent_loterias_de_hoje_id(token) or _recent_live_id(token)
         if not vid:
+            print(f"[REPAIR V26] [{account}] nenhum alerta recente encontrado.", flush=True)
             continue
 
+        _update_title_description(token, vid, date, targets, prize)
         upload_thumbnail(token, vid, thumb)
         updated += 1
-        print(f"[REPAIR V26] Capa atualizada: https://www.youtube.com/watch?v={vid}", flush=True)
+        print(f"[REPAIR V26] Atualizado: https://www.youtube.com/watch?v={vid}", flush=True)
 
     if updated == 0:
-        raise RuntimeError(f"Nenhum vídeo 'Loterias de Hoje' de {date} foi encontrado para atualizar a capa.")
+        raise RuntimeError("Nenhum alerta 'Loterias de Hoje' foi encontrado para correção.")
     return updated
 
 
