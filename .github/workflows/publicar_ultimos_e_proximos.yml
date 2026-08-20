@@ -12,7 +12,7 @@ on:
       - data/to_publish_videos.json
       - daily_calendar_api_v21.py
       - caixa_direct_fallback_v23.py
-      - youtube_daily_live_v22.py
+      - youtube_daily_alert_v25.py
       - youtube_thumbnail_v24.py
       - daily_queue_v19.py
       - daily_queue_v19_policy_fix.py
@@ -41,7 +41,7 @@ permissions:
 
 jobs:
   verificar-e-publicar:
-    name: Calendário oficial -> API CAIXA fallback -> alerta/live -> resultado
+    name: Calendário oficial -> alerta do dia -> API CAIXA fallback -> resultado consolidado
     runs-on: ubuntu-latest
     timeout-minutes: 360
     concurrency:
@@ -64,10 +64,10 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar módulos do publicador diário V24
+      - name: Validar módulos do publicador diário V25
         run: |
           python -m py_compile \
-            daily_calendar_api_v21.py caixa_direct_fallback_v23.py youtube_daily_live_v22.py youtube_thumbnail_v24.py \
+            daily_calendar_api_v21.py caixa_direct_fallback_v23.py youtube_daily_alert_v25.py youtube_thumbnail_v24.py \
             daily_video_v19.py daily_video_v19_short_fix.py daily_video_v19_dupla_fix.py \
             daily_video_v19_branding_fix.py daily_queue_v19.py daily_queue_v19_policy_fix.py \
             daily_growth_v20.py lottery_result_v18.py voice_narration_v18.py \
@@ -119,7 +119,7 @@ jobs:
           print('OK Cofre:', cofre.title)
           PY
 
-      - name: Criar alerta do dia e finalizar quando todos os resultados chegarem
+      - name: Publicar alerta do dia e, quando liberado, o resultado consolidado
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
@@ -130,7 +130,9 @@ jobs:
           YOUTUBE_API_CALENDAR_SHEET_ID: ${{ vars.YOUTUBE_API_CALENDAR_SHEET_ID || '1gHenJLO5Qr23wWLgmRUXHldaDsUdKcICeFR1Ee621X8' }}
           YOUTUBE_API_CALENDAR_TAB: ${{ vars.YOUTUBE_API_CALENDAR_TAB || 'API_CALENDARIO_LOTERIAS' }}
           YOUTUBE_API_HISTORY_CONFIG_TAB: ${{ vars.YOUTUBE_API_HISTORY_CONFIG_TAB || 'CONFIG_HISTORICO_CAIXA' }}
-          YOUTUBE_DAILY_LIVE_SCHEDULE_HOUR: ${{ vars.YOUTUBE_DAILY_LIVE_SCHEDULE_HOUR || '21' }}
+          YOUTUBE_DAILY_ALERT_SHEET: ${{ vars.YOUTUBE_DAILY_ALERT_SHEET || 'YOUTUBE_ALERTAS' }}
+          YOUTUBE_DAILY_ALERT_START_HOUR: ${{ vars.YOUTUBE_DAILY_ALERT_START_HOUR || '6' }}
+          YOUTUBE_DAILY_ALERT_DURATION: ${{ vars.YOUTUBE_DAILY_ALERT_DURATION || '12' }}
           YOUTUBE_FORCE_SHORT_SINGLE_LOTTERY: ${{ vars.YOUTUBE_FORCE_SHORT_SINGLE_LOTTERY || 'false' }}
           MAX_VIDEOS_RODADA: "1"
           PAUSA_ENTRE_VIDEOS: ${{ vars.PAUSA_ENTRE_VIDEOS || '3.0' }}
@@ -139,7 +141,7 @@ jobs:
           TZ: America/Sao_Paulo
         run: |
           mkdir -p output
-          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_queue_v19_policy_fix; import daily_growth_v20; import caixa_direct_fallback_v23; import youtube_daily_live_v22; import daily_calendar_api_v21; daily_calendar_api_v21.main()"
+          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_queue_v19_policy_fix; import daily_growth_v20; import caixa_direct_fallback_v23; import youtube_daily_alert_v25; import daily_calendar_api_v21; daily_calendar_api_v21.main()"
 
       - name: Gerar e aplicar a capa correta no último vídeo diário
         env:
@@ -158,7 +160,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: resumo-diario-youtube-v24-${{ github.run_number }}
+          name: resumo-diario-youtube-v25-${{ github.run_number }}
           path: |
             output/*.mp4
             output/*.png
