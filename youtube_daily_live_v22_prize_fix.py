@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-"""Patch V22 LIVE: aplica a capa padrão aprovada na Live do dia.
+"""Patch V22 LIVE: aplica a capa aprovada apenas UMA VEZ na criação da Live.
 
-A capa é criada com as modalidades, concursos e o maior prêmio estimado do dia.
-Também preserva compatibilidade com o método original de publicação/replay.
+A versão anterior reaplicava a thumbnail a cada execução horária do workflow,
+provocando uploadRateLimitExceeded (HTTP 429) no YouTube. Agora verificamos se
+a Live já existia antes de criá-la; capa só é enviada para transmissões novas.
 """
 
 from typing import Any, Dict, Sequence, Tuple
@@ -18,28 +19,12 @@ _ORIGINAL_ENSURE = live.ensure_daily_lives
 _ORIGINAL_PUBLISH = live.publish_day_as_live
 
 
-def _apply_live_thumbnail(date, targets, cofre_get, cofre_cache, timezone, prize_highlight=None):
-    thumb = gerar_capa_live(date, targets, prize_highlight=prize_highlight or {})
-    updated = 0
-    for account in listar_contas_youtube(cofre_cache):
-        client_id = _cofre_get_safe(cofre_get, "YOUTUBE", "CLIENT_ID", conta=account)
-        client_secret = _cofre_get_safe(cofre_get, "YOUTUBE", "CLIENT_SECRET", conta=account)
-        refresh_token = _cofre_get_safe(cofre_get, "YOUTUBE", "REFRESH_TOKEN", conta=account)
-        privacy = _cofre_get_safe(cofre_get, "YOUTUBE", "PRIVACY_STATUS", conta=account, default="public") or "public"
-        if not (client_id and client_secret and refresh_token):
-            continue
-        try:
-            token = get_access_token(client_id, client_secret, refresh_token)
-            broadcast = live.ensure_daily_live_for_account(token, date, targets, timezone, privacy)
-            video_id = str(broadcast.get("id") or "").strip()
-            if not video_id:
-                continue
-            upload_thumbnail(token, video_id, thumb)
-            updated += 1
-            live.queue._log(f"[{account}] Capa da Live aplicada: {video_id}")
-        except Exception as exc:
-            live.queue._log(f"[{account}] Falha ao aplicar capa da Live: {exc}")
-    return updated
+def _account_credentials(cofre_get, account: str):
+    client_id = _cofre_get_safe(cofre_get, "YOUTUBE", "CLIENT_ID", conta=account)
+    client_secret = _cofre_get_safe(cofre_get, "YOUTUBE", "CLIENT_SECRET", conta=account)
+    refresh_token = _cofre_get_safe(cofre_get, "YOUTUBE", "REFRESH_TOKEN", conta=account)
+    privacy = _cofre_get_safe(cofre_get, "YOUTUBE", "PRIVACY_STATUS", conta=account, default="public") or "public"
+    return client_id, client_secret, refresh_token, privacy
 
 
 def ensure_daily_lives(
@@ -51,11 +36,46 @@ def ensure_daily_lives(
     timezone: str,
     prize_highlight: Dict[str, str] | None = None,
 ):
+    # Registra quais contas JÁ tinham Live antes desta execução.
+    existing_before = set()
+    tokens: Dict[str, str] = {}
+    privacy_map: Dict[str, str] = {}
+
+    for account in listar_contas_youtube(cofre_cache):
+        client_id, client_secret, refresh_token, privacy = _account_credentials(cofre_get, account)
+        if not (client_id and client_secret and refresh_token):
+            continue
+        try:
+            token = get_access_token(client_id, client_secret, refresh_token)
+            tokens[account] = token
+            privacy_map[account] = privacy
+            if live._find_daily_broadcast(token, date):
+                existing_before.add(account)
+        except Exception as exc:
+            live.queue._log(f"[{account}] Não foi possível verificar Live existente: {exc}")
+
     urls = _ORIGINAL_ENSURE(date, targets, cofre_get, cofre_cache, timezone=timezone)
-    try:
-        _apply_live_thumbnail(date, targets, cofre_get, cofre_cache, timezone, prize_highlight)
-    except Exception as exc:
-        live.queue._log(f"Capa da Live não aplicada nesta execução: {exc}")
+
+    # Só envia thumbnail para a Live que nasceu NESTA execução.
+    thumb = None
+    for account, token in tokens.items():
+        if account in existing_before:
+            live.queue._log(f"[{account}] Live já existia; thumbnail não será reenviada.")
+            continue
+        try:
+            broadcast = live._find_daily_broadcast(token, date)
+            if not broadcast:
+                continue
+            video_id = str(broadcast.get("id") or "").strip()
+            if not video_id:
+                continue
+            if thumb is None:
+                thumb = gerar_capa_live(date, targets, prize_highlight=prize_highlight or {})
+            upload_thumbnail(token, video_id, thumb)
+            live.queue._log(f"[{account}] Capa aplicada uma única vez na nova Live: {video_id}")
+        except Exception as exc:
+            live.queue._log(f"[{account}] Capa da nova Live não aplicada: {exc}")
+
     return urls
 
 
@@ -66,13 +86,14 @@ def publish_day_as_live(
     worksheet,
     daily_index,
     cofre_get,
-    cofre_cache,
+    cofre_cache: Dict[str, Any],
     *,
     dry_run,
     pause,
     timezone,
     prize_highlight=None,
 ):
+    # O método original já aplica a capa final uma única vez após concluir a Live.
     return _ORIGINAL_PUBLISH(
         date,
         targets,
