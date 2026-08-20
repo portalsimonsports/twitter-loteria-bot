@@ -17,135 +17,107 @@ OUT_DIR = Path("output")
 
 
 def _font(size: int, bold: bool = False):
-    candidates = [
+    paths = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
     ]
-    for path in candidates:
+    for path in paths:
         if os.path.exists(path):
             return ImageFont.truetype(path, size=size)
     return ImageFont.load_default()
 
 
-def _extract_video_id(text: str) -> str:
-    match = re.search(r"youtube\.com/watch\?v=([A-Za-z0-9_-]{6,})", str(text or ""))
-    return match.group(1) if match else ""
+def _fit(draw, text, max_width, start, minimum=18, bold=True):
+    for size in range(start, minimum - 1, -2):
+        f = _font(size, bold)
+        if draw.textbbox((0, 0), text, font=f)[2] <= max_width:
+            return f
+    return _font(minimum, bold)
 
 
-def _fit_text(draw: ImageDraw.ImageDraw, text: str, max_width: int, start_size: int, min_size: int = 20, bold: bool = True):
-    size = start_size
-    while size >= min_size:
-        font = _font(size, bold=bold)
-        box = draw.textbbox((0, 0), text, font=font)
-        if box[2] - box[0] <= max_width:
-            return font
-        size -= 2
-    return _font(min_size, bold=bold)
-
-
-def _parse_money(value: str) -> float:
-    text = re.sub(r"[^0-9,.-]", "", str(value or "")).strip()
+def _money_value(value: str) -> float:
+    text = re.sub(r"[^0-9,.-]", "", str(value or ""))
     if not text:
         return 0.0
     if "," in text:
         text = text.replace(".", "").replace(",", ".")
     try:
         return float(text)
-    except ValueError:
+    except Exception:
         return 0.0
 
 
-def _format_prize(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    if "R$" in text.upper():
-        return text
-    amount = _parse_money(text)
+def _money_text(value: str) -> str:
+    amount = _money_value(value)
     if amount <= 0:
-        return text
-    formatted = f"{amount:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    return f"R$ {formatted}"
+        return str(value or "").strip()
+    return "R$ " + f"{amount:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def _largest_from_items(loterias: Sequence[Dict[str, str]], explicit: Dict[str, str] | None = None) -> Dict[str, str]:
-    if explicit and str(explicit.get("premio") or "").strip():
-        return {
-            "loteria": str(explicit.get("loteria") or "").strip(),
-            "premio": _format_prize(str(explicit.get("premio") or "").strip()),
-        }
-    best: Dict[str, str] = {}
-    best_value = 0.0
+def _largest(loterias: Sequence[Dict[str, str]], explicit: Dict[str, str] | None = None) -> Dict[str, str]:
+    if explicit and _money_value(explicit.get("premio", "")) > 0:
+        return {"loteria": str(explicit.get("loteria") or "").strip(), "premio": _money_text(explicit.get("premio", "")), "concurso": str(explicit.get("concurso") or "").strip()}
+    best, best_value = {}, 0.0
     for item in loterias:
-        raw = str(item.get("premio") or "").strip()
-        amount = _parse_money(raw)
+        amount = _money_value(item.get("premio", ""))
         if amount > best_value:
             best_value = amount
-            best = {
-                "loteria": str(item.get("loteria") or "").strip(),
-                "premio": _format_prize(raw),
-            }
+            best = {"loteria": str(item.get("loteria") or "").strip(), "premio": _money_text(item.get("premio", "")), "concurso": str(item.get("concurso") or "").strip()}
     return best
 
 
-def _draw_cover(data: str, loterias: List[Dict[str, str]], *, prize_highlight: Dict[str, str] | None = None, mode: str = "alerta") -> Image.Image:
-    img = Image.new("RGB", (WIDTH, HEIGHT), (4, 18, 35))
+def _draw_approved(data: str, loterias: List[Dict[str, str]], *, prize_highlight=None, mode="alerta") -> Image.Image:
+    img = Image.new("RGB", (WIDTH, HEIGHT), (5, 22, 39))
     draw = ImageDraw.Draw(img)
+    draw.rectangle((0, 0, WIDTH, 70), fill=(0, 105, 170))
+    draw.rectangle((0, 650, WIDTH, 720), fill=(0, 42, 68))
+    draw.text((34, 18), "PORTAL SIMONSPORTS", font=_font(26, True), fill="white")
+    draw.text((1000, 20), "LOTERIAS CAIXA", font=_font(21, True), fill=(255, 205, 0))
 
-    # identidade visual aprovada: azul profundo, faixa superior, títulos grandes e cartões limpos
-    draw.rectangle((0, 0, WIDTH, 78), fill=(4, 73, 119))
-    draw.rectangle((0, 650, WIDTH, HEIGHT), fill=(2, 35, 59))
-    draw.text((38, 20), "PORTAL SIMONSPORTS", font=_font(28, True), fill=(255, 255, 255))
-    draw.text((1000, 23), "LOTERIAS CAIXA", font=_font(22, True), fill=(255, 204, 0))
+    focus = _largest(loterias, prize_highlight)
+    if not focus and loterias:
+        focus = dict(loterias[0])
 
-    heading = "LOTERIAS DE HOJE" if mode == "alerta" else "RESULTADOS DAS LOTERIAS"
-    subheading = data
-    heading_font = _fit_text(draw, heading, 820, 62, 36, True)
-    draw.text((42, 105), heading, font=heading_font, fill=(255, 255, 255))
-    draw.rounded_rectangle((960, 103, 1238, 176), radius=18, fill=(255, 204, 0))
-    date_font = _fit_text(draw, subheading, 240, 30, 22, True)
-    box = draw.textbbox((0, 0), subheading, font=date_font)
-    draw.text((1099 - (box[2] - box[0]) / 2, 125), subheading, font=date_font, fill=(9, 26, 45))
+    focus_name = str(focus.get("loteria") or "LOTERIAS DE HOJE").upper()
+    focus_contest = str(focus.get("concurso") or "")
+    focus_prize = str(focus.get("premio") or "")
 
-    largest = _largest_from_items(loterias, prize_highlight)
-    card_top = 245
-    if largest:
-        prize_text = f"MAIOR PRÊMIO DO DIA  •  {largest['loteria'].upper()}  •  {largest['premio']}"
-        draw.rounded_rectangle((42, 188, 1238, 233), radius=14, fill=(255, 204, 0))
-        prize_font = _fit_text(draw, prize_text, 1155, 25, 17, True)
-        draw.text((62, 199), prize_text, font=prize_font, fill=(9, 26, 45))
+    draw.text((42, 102), focus_name, font=_fit(draw, focus_name, 760, 74, 40, True), fill="white")
+    if focus_contest:
+        draw.rounded_rectangle((44, 187, 350, 236), radius=14, fill=(0, 105, 170))
+        draw.text((64, 198), f"CONCURSO {focus_contest}", font=_font(24, True), fill="white")
 
-    cols = 3
-    card_w = 382
-    card_h = 118
-    gap_x = 24
-    gap_y = 18
-    x0 = 42
-    for idx, item in enumerate(loterias[:6]):
-        col = idx % cols
-        row = idx // cols
-        x = x0 + col * (card_w + gap_x)
-        y = card_top + row * (card_h + gap_y)
-        draw.rounded_rectangle((x, y, x + card_w, y + card_h), radius=20, fill=(9, 51, 84), outline=(38, 156, 216), width=3)
-        nome = str(item.get("loteria") or "Loteria").strip()
-        concurso = str(item.get("concurso") or "").strip()
-        name_font = _fit_text(draw, nome.upper(), card_w - 30, 30, 20, True)
-        draw.text((x + 16, y + 14), nome.upper(), font=name_font, fill=(255, 255, 255))
-        if concurso:
-            draw.text((x + 16, y + 67), f"CONCURSO {concurso}", font=_font(23, True), fill=(255, 204, 0))
+    main_label = "SORTEIO DE HOJE" if mode == "alerta" else "RESULTADO DE HOJE"
+    draw.text((42, 263), main_label, font=_fit(draw, main_label, 720, 66, 36, True), fill=(255, 205, 0))
 
-    if mode == "alerta":
-        footer = "ATIVE O SINO • INSCREVA-SE • RESULTADOS ATUALIZADOS EM PRIMEIRA MÃO"
-    else:
-        footer = "RESULTADOS OFICIAIS • CAIXA LOTERIAS • SIMONSPORTS"
-    footer_font = _fit_text(draw, footer, 1180, 26, 18, True)
-    draw.text((WIDTH / 2, 674), footer, font=footer_font, fill=(255, 255, 255), anchor="mm")
+    if focus_prize:
+        draw.text((42, 345), "MAIOR PRÊMIO DO DIA", font=_font(27, True), fill=(171, 225, 255))
+        draw.rounded_rectangle((42, 383, 830, 480), radius=22, fill=(255, 205, 0))
+        draw.text((70, 404), focus_prize, font=_fit(draw, focus_prize, 730, 54, 30, True), fill=(8, 27, 44))
+
+    draw.rounded_rectangle((920, 104, 1235, 184), radius=20, fill=(255, 205, 0))
+    df = _fit(draw, data, 265, 34, 24, True)
+    box = draw.textbbox((0, 0), data, font=df)
+    draw.text((1078 - (box[2] - box[0]) / 2, 127), data, font=df, fill=(8, 27, 44))
+
+    others = []
+    focus_key = focus_name.casefold()
+    for item in loterias:
+        name = str(item.get("loteria") or "").strip()
+        if name and name.casefold() != focus_key:
+            others.append(name.upper())
+    if others:
+        line = " + ".join(others[:5])
+        draw.text((42, 533), line, font=_fit(draw, line, 1160, 31, 20, True), fill="white")
+
+    footer = "INSCREVA-SE • ATIVE O SINO • RECEBA AS ATUALIZAÇÕES EM PRIMEIRA MÃO" if mode == "alerta" else "RESULTADOS OFICIAIS • CAIXA LOTERIAS • SIMONSPORTS"
+    draw.text((WIDTH / 2, 684), footer, font=_fit(draw, footer, 1190, 25, 17, True), fill="white", anchor="mm")
     return img
 
 
 def gerar_capa_live(data: str, targets: Sequence[Tuple[str, str, str]], *, prize_highlight: Dict[str, str] | None = None) -> str:
     loterias = [{"loteria": display, "concurso": contest, "premio": ""} for _key, display, contest in targets]
-    image = _draw_cover(data, loterias, prize_highlight=prize_highlight, mode="alerta")
+    image = _draw_approved(data, loterias, prize_highlight=prize_highlight, mode="alerta")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / f"thumbnail_live_{data.replace('/', '-')}.jpg"
     image.save(path, "JPEG", quality=94, optimize=True)
@@ -153,92 +125,49 @@ def gerar_capa_live(data: str, targets: Sequence[Tuple[str, str, str]], *, prize
 
 
 def gerar_capa_diaria(data: str, loterias: List[Dict[str, str]], *, video_id: str = "", prize_highlight: Dict[str, str] | None = None) -> str:
+    image = _draw_approved(data, loterias, prize_highlight=prize_highlight, mode="resultado")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    image = _draw_cover(data, loterias, prize_highlight=prize_highlight, mode="resultado")
-    name = f"thumbnail_diaria_{data.replace('/', '-')}_{video_id or 'novo'}.jpg"
-    path = OUT_DIR / name
+    path = OUT_DIR / f"thumbnail_diaria_{data.replace('/', '-')}_{video_id or 'novo'}.jpg"
     image.save(path, "JPEG", quality=94, optimize=True)
     return str(path)
 
 
+def _extract_video_id(text: str) -> str:
+    m = re.search(r"youtube\.com/watch\?v=([A-Za-z0-9_-]{6,})", str(text or ""))
+    return m.group(1) if m else ""
+
+
 def reparar_ultima_capa_publicada() -> int:
-    cfg = queue.carregar_config()
-    client = queue._google_client()
-    cofre_cache, cofre_get = queue._load_cofre(client, cfg)
-    ws = client.open_by_key(cfg.google_sheet_id).worksheet(cfg.sheet_tab)
-    values = ws.get_all_values()
-    if not values:
-        return 0
-
-    headers = list(values[0])
-    daily_idx = queue._find_col(headers, [os.getenv("PUBLICADO_YT_DIARIO_COL", queue.DAILY_COLUMN_DEFAULT)])
-    if daily_idx is None:
-        print("[THUMB V24] Coluna de publicação diária não encontrada.", flush=True)
-        return 0
-
+    cfg = queue.carregar_config(); client = queue._google_client(); cofre_cache, cofre_get = queue._load_cofre(client, cfg)
+    ws = client.open_by_key(cfg.google_sheet_id).worksheet(cfg.sheet_tab); values = ws.get_all_values()
+    if not values: return 0
+    headers = list(values[0]); daily_idx = queue._find_col(headers, [os.getenv("PUBLICADO_YT_DIARIO_COL", queue.DAILY_COLUMN_DEFAULT)])
+    if daily_idx is None: return 0
     video_id = ""
     for row in reversed(values[1:]):
-        marker = row[daily_idx] if daily_idx < len(row) else ""
-        vid = _extract_video_id(marker)
-        if vid:
-            video_id = vid
-            break
-    if not video_id:
-        print("[THUMB V24] Nenhum videoId diário encontrado.", flush=True)
-        return 0
-
-    loterias: List[Dict[str, str]] = []
-    data = ""
-    seen = set()
+        video_id = _extract_video_id(row[daily_idx] if daily_idx < len(row) else "")
+        if video_id: break
+    if not video_id: return 0
+    loterias=[]; data=""; seen=set()
     for row in values[1:]:
-        marker = row[daily_idx] if daily_idx < len(row) else ""
-        if _extract_video_id(marker) != video_id:
-            continue
-        try:
-            item = queue._row_data(row, headers)
-        except Exception:
-            continue
-        nome = str(item.get("loteria") or "").strip()
-        concurso = str(item.get("concurso") or "").strip()
-        premio = str(item.get("premio") or item.get("premiacao") or item.get("prêmio") or "").strip()
-        if not nome:
-            continue
-        key = (nome.casefold(), concurso)
-        if key in seen:
-            continue
-        seen.add(key)
-        loterias.append({"loteria": nome, "concurso": concurso, "premio": premio})
-        data = data or str(item.get("data") or "").strip()
-
-    if not loterias:
-        print(f"[THUMB V24] Video {video_id} encontrado, mas sem linhas associadas.", flush=True)
-        return 0
-
-    thumb = gerar_capa_diaria(data or "", loterias, video_id=video_id)
-
-    accounts = []
-    for network, account, key in (cofre_cache.get("creds_rc", {}) or {}).keys():
-        if str(network).strip().upper() == "YOUTUBE" and str(key).strip().upper() == "REFRESH_TOKEN" and account:
-            accounts.append(str(account).strip())
-    accounts = sorted(set(accounts))
-
-    updated = 0
+        marker=row[daily_idx] if daily_idx < len(row) else ""
+        if _extract_video_id(marker)!=video_id: continue
+        try: item=queue._row_data(row,headers)
+        except Exception: continue
+        nome=str(item.get("loteria") or "").strip(); concurso=str(item.get("concurso") or "").strip(); premio=str(item.get("premio") or item.get("premiacao") or item.get("prêmio") or "").strip()
+        key=(nome.casefold(),concurso)
+        if not nome or key in seen: continue
+        seen.add(key); loterias.append({"loteria":nome,"concurso":concurso,"premio":premio}); data=data or str(item.get("data") or "").strip()
+    if not loterias: return 0
+    thumb=gerar_capa_diaria(data,loterias,video_id=video_id)
+    accounts=sorted({str(account).strip() for network,account,key in (cofre_cache.get("creds_rc",{}) or {}).keys() if str(network).strip().upper()=="YOUTUBE" and str(key).strip().upper()=="REFRESH_TOKEN" and account})
+    updated=0
     for account in accounts:
-        client_id = cofre_get("YOUTUBE", "CLIENT_ID", conta=account, default="")
-        client_secret = cofre_get("YOUTUBE", "CLIENT_SECRET", conta=account, default="")
-        refresh_token = cofre_get("YOUTUBE", "REFRESH_TOKEN", conta=account, default="")
-        if not (client_id and client_secret and refresh_token):
-            continue
-        try:
-            access_token = get_access_token(client_id, client_secret, refresh_token)
-            upload_thumbnail(access_token, video_id, thumb)
-            updated += 1
-            print(f"[THUMB V24] Capa aplicada em https://www.youtube.com/watch?v={video_id} ({account})", flush=True)
-        except Exception as exc:
-            print(f"[THUMB V24] Erro ao aplicar capa em {account}: {exc}", flush=True)
-
+        cid=cofre_get("YOUTUBE","CLIENT_ID",conta=account,default=""); sec=cofre_get("YOUTUBE","CLIENT_SECRET",conta=account,default=""); ref=cofre_get("YOUTUBE","REFRESH_TOKEN",conta=account,default="")
+        if not (cid and sec and ref): continue
+        try: upload_thumbnail(get_access_token(cid,sec,ref),video_id,thumb); updated+=1
+        except Exception as exc: print(f"[THUMB] {account}: {exc}",flush=True)
     return updated
 
 
-if __name__ == "__main__":
-    reparar_ultima_capa_publicada()
+if __name__ == "__main__": reparar_ultima_capa_publicada()
