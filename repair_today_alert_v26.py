@@ -31,7 +31,7 @@ def _extract_video_id(value: str) -> str:
     return ""
 
 
-def _alert_record_for_date(api_spreadsheet, date: str) -> tuple[str, str, str]:
+def _alert_record_for_date(api_spreadsheet, date: str):
     sheet_name = os.getenv("YOUTUBE_DAILY_ALERT_SHEET", ALERT_SHEET_DEFAULT).strip() or ALERT_SHEET_DEFAULT
     ws = api_spreadsheet.worksheet(sheet_name)
     values = ws.get_all_values()
@@ -49,10 +49,11 @@ def _alert_record_for_date(api_spreadsheet, date: str) -> tuple[str, str, str]:
     i_date = idx("Data")
     i_account = idx("Conta")
     i_url = idx("URL")
+    i_status = idx("Status")
     if i_date < 0 or i_url < 0:
         raise RuntimeError(f"Cabeçalhos inválidos na aba {sheet_name}: {headers}")
 
-    for row in reversed(values[1:]):
+    for sheet_row, row in reversed(list(enumerate(values[1:], start=2))):
         def cell(i: int) -> str:
             return str(row[i] if i >= 0 and i < len(row) else "").strip()
         if cell(i_date) != date:
@@ -60,9 +61,18 @@ def _alert_record_for_date(api_spreadsheet, date: str) -> tuple[str, str, str]:
         url = cell(i_url)
         video_id = _extract_video_id(url)
         if video_id:
-            return cell(i_account), video_id, url
+            return ws, sheet_row, i_status, cell(i_account), video_id, url
 
     raise RuntimeError(f"Nenhum registro de {date} encontrado em {sheet_name}.")
+
+
+def _set_status(ws, row: int, status_index: int, text: str) -> None:
+    if status_index < 0:
+        return
+    try:
+        ws.update_cell(row, status_index + 1, str(text)[:500])
+    except Exception as exc:
+        print(f"[REPAIR V26] não foi possível gravar diagnóstico: {exc}", flush=True)
 
 
 def main() -> int:
@@ -78,23 +88,33 @@ def main() -> int:
     date = _today(cfg.timezone)
     targets = cal.targets_for_date(calendar_values, date)
     if not targets:
-        raise RuntimeError(f"Nenhuma loteria válida encontrada para {date}.")
+        print(f"[REPAIR V26] sem loterias válidas em {date}; reparo ignorado", flush=True)
+        return 0
 
     prize = cal.largest_prize_for_date(calendar_values, date, targets)
-    sheet_account, video_id, video_url = _alert_record_for_date(api_spreadsheet, date)
+    ws, sheet_row, status_index, sheet_account, video_id, video_url = _alert_record_for_date(api_spreadsheet, date)
 
     print(f"[REPAIR V26] alvo={video_url} videoId={video_id} conta_registrada={sheet_account}", flush=True)
     print(f"[REPAIR V26] targets={targets}", flush=True)
     print(f"[REPAIR V26] prize={prize}", flush=True)
 
     thumb = gerar_capa_live(date, targets, prize_highlight=prize)
-    print(f"[REPAIR V26] thumbnail={thumb} tamanho={os.path.getsize(thumb)} bytes", flush=True)
+    size = os.path.getsize(thumb)
+    print(f"[REPAIR V26] thumbnail={thumb} tamanho={size} bytes", flush=True)
+
+    if size > 2_000_000:
+        msg = f"ERRO_THUMBNAIL: arquivo {size} bytes excede 2 MB"
+        _set_status(ws, sheet_row, status_index, msg)
+        print(f"[REPAIR V26] {msg}", flush=True)
+        return 0
 
     accounts = listar_contas_youtube(cofre_cache)
     if not accounts:
-        raise RuntimeError("Nenhuma conta YouTube com REFRESH_TOKEN encontrada no Cofre.")
+        msg = "ERRO_THUMBNAIL: nenhuma conta YouTube com REFRESH_TOKEN no Cofre"
+        _set_status(ws, sheet_row, status_index, msg)
+        print(f"[REPAIR V26] {msg}", flush=True)
+        return 0
 
-    # Prioriza a conta gravada na planilha, mas tenta todas as contas YouTube do Cofre.
     wanted = str(sheet_account or "").strip().casefold()
     accounts = sorted(accounts, key=lambda a: 0 if str(a).strip().casefold() == wanted else 1)
 
@@ -110,6 +130,8 @@ def main() -> int:
 
             token = get_access_token(client_id, client_secret, refresh_token)
             upload_thumbnail(token, video_id, thumb)
+            msg = f"CAPA_ATUALIZADA | {datetime.now(ZoneInfo(cfg.timezone)).strftime('%d/%m/%Y %H:%M:%S')} | {account}"
+            _set_status(ws, sheet_row, status_index, msg)
             print(f"[REPAIR V26] SUCESSO conta={account} url={video_url}", flush=True)
             return 1
         except Exception as exc:
@@ -117,7 +139,11 @@ def main() -> int:
             errors.append(msg)
             print(f"[REPAIR V26] falhou {msg}", flush=True)
 
-    raise RuntimeError("Nenhuma credencial conseguiu aplicar a thumbnail. " + " | ".join(errors))
+    final = "ERRO_THUMBNAIL: " + " | ".join(errors)
+    _set_status(ws, sheet_row, status_index, final)
+    print(f"[REPAIR V26] {final}", flush=True)
+    # Não bloqueia o fluxo Live. O diagnóstico fica persistido na planilha.
+    return 0
 
 
 if __name__ == "__main__":
