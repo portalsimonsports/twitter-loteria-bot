@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
+import re
 import requests
 
 import daily_queue_v19 as queue
@@ -13,61 +14,98 @@ from youtube_upload import upload_thumbnail
 from youtube_thumbnail_v24 import gerar_capa_live
 
 API = "https://www.googleapis.com/youtube/v3"
+ALERT_SHEET_DEFAULT = "YOUTUBE_ALERTAS"
 
 
 def _today(tz: str) -> str:
     return datetime.now(ZoneInfo(tz)).strftime("%d/%m/%Y")
 
 
-def _uploads_playlist(token: str) -> str:
-    r = requests.get(
-        f"{API}/channels",
-        headers={"Authorization": f"Bearer {token}"},
-        params={"part": "contentDetails", "mine": "true"},
-        timeout=30,
-    )
-    r.raise_for_status()
-    items = r.json().get("items") or []
-    return (((items[0].get("contentDetails") or {}).get("relatedPlaylists") or {}).get("uploads") or "") if items else ""
-
-
-def _recent_loterias_de_hoje_id(token: str) -> str:
-    playlist = _uploads_playlist(token)
-    if not playlist:
-        return ""
-    r = requests.get(
-        f"{API}/playlistItems",
-        headers={"Authorization": f"Bearer {token}"},
-        params={"part": "snippet,contentDetails", "playlistId": playlist, "maxResults": 25},
-        timeout=30,
-    )
-    r.raise_for_status()
-    for item in r.json().get("items") or []:
-        snippet = item.get("snippet") or {}
-        title = str(snippet.get("title") or "").strip()
-        if "loterias de hoje" in title.casefold():
-            return str((item.get("contentDetails") or {}).get("videoId") or "").strip()
+def _extract_video_id(value: str) -> str:
+    text = str(value or "").strip()
+    for pattern in (
+        r"youtube\.com/watch\?v=([A-Za-z0-9_-]{6,})",
+        r"youtu\.be/([A-Za-z0-9_-]{6,})",
+    ):
+        m = re.search(pattern, text)
+        if m:
+            return m.group(1)
     return ""
 
 
-def _recent_live_id(token: str) -> str:
-    for status in ("upcoming", "active", "completed"):
+def _video_id_from_alert_sheet(api_spreadsheet, date: str, account: str) -> str:
+    sheet_name = os.getenv("YOUTUBE_DAILY_ALERT_SHEET", ALERT_SHEET_DEFAULT).strip() or ALERT_SHEET_DEFAULT
+    try:
+        ws = api_spreadsheet.worksheet(sheet_name)
+    except Exception as exc:
+        print(f"[REPAIR V26] Aba {sheet_name} não encontrada: {exc}", flush=True)
+        return ""
+
+    values = ws.get_all_values()
+    if not values:
+        return ""
+    headers = [str(x or "").strip().casefold() for x in values[0]]
+
+    def idx(name: str) -> int:
+        try:
+            return headers.index(name.casefold())
+        except ValueError:
+            return -1
+
+    i_date = idx("Data")
+    i_account = idx("Conta")
+    i_url = idx("URL")
+
+    for row in reversed(values[1:]):
+        def cell(i: int) -> str:
+            return str(row[i] if i >= 0 and i < len(row) else "").strip()
+        if cell(i_date) != date:
+            continue
+        row_account = cell(i_account)
+        if row_account and account and row_account != account:
+            continue
+        video_id = _extract_video_id(cell(i_url))
+        if video_id:
+            print(f"[REPAIR V26] [{account}] vídeo localizado pela aba {sheet_name}: {video_id}", flush=True)
+            return video_id
+    return ""
+
+
+def _video_id_from_recent_uploads(token: str) -> str:
+    try:
         r = requests.get(
-            f"{API}/liveBroadcasts",
+            f"{API}/channels",
             headers={"Authorization": f"Bearer {token}"},
-            params={"part": "id,snippet,status", "broadcastStatus": status, "mine": "true", "maxResults": 50},
+            params={"part": "contentDetails", "mine": "true"},
             timeout=30,
         )
         if not r.ok:
-            continue
+            print(f"[REPAIR V26] Busca via channels indisponível: HTTP {r.status_code}", flush=True)
+            return ""
+        items = r.json().get("items") or []
+        if not items:
+            return ""
+        playlist = (((items[0].get("contentDetails") or {}).get("relatedPlaylists") or {}).get("uploads") or "")
+        if not playlist:
+            return ""
+        r = requests.get(
+            f"{API}/playlistItems",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"part": "snippet,contentDetails", "playlistId": playlist, "maxResults": 25},
+            timeout=30,
+        )
+        if not r.ok:
+            return ""
         for item in r.json().get("items") or []:
-            title = str((item.get("snippet") or {}).get("title") or "").strip()
-            if "loterias de hoje" in title.casefold():
-                return str(item.get("id") or "").strip()
+            title = str((item.get("snippet") or {}).get("title") or "").strip().casefold()
+            if "loterias de hoje" in title:
+                return str((item.get("contentDetails") or {}).get("videoId") or "").strip()
+    except Exception as exc:
+        print(f"[REPAIR V26] Busca via YouTube ignorada: {exc}", flush=True)
     return ""
 
 
-def _update_title_description(token: str, video_id: str, date: str, targets, prize: dict) -> None:
+def _try_update_metadata(token: str, video_id: str, date: str, targets, prize: dict) -> None:
     names = ", ".join(display for _key, display, _contest in targets[:4])
     title = f"Loterias de Hoje — {names} | {date}" if names else f"Loterias de Hoje | {date}"
     if len(title) > 95:
@@ -86,8 +124,10 @@ def _update_title_description(token: str, video_id: str, date: str, targets, pri
         json=body,
         timeout=60,
     )
-    if not r.ok:
-        print(f"[REPAIR V26] Metadados não atualizados: HTTP {r.status_code} {r.text[:600]}", flush=True)
+    if r.ok:
+        print(f"[REPAIR V26] Metadados atualizados: {video_id}", flush=True)
+    else:
+        print(f"[REPAIR V26] Metadados não atualizados (não bloqueante): HTTP {r.status_code} {r.text[:500]}", flush=True)
 
 
 def main() -> int:
@@ -97,36 +137,49 @@ def main() -> int:
 
     api_sheet_id = os.getenv("YOUTUBE_API_CALENDAR_SHEET_ID", cal.API_CALENDAR_SHEET_ID_DEFAULT).strip()
     api_tab = os.getenv("YOUTUBE_API_CALENDAR_TAB", cal.API_CALENDAR_TAB_DEFAULT).strip()
-    values = client.open_by_key(api_sheet_id).worksheet(api_tab).get_all_values()
+    api_spreadsheet = client.open_by_key(api_sheet_id)
+    values = api_spreadsheet.worksheet(api_tab).get_all_values()
 
     date = _today(cfg.timezone)
     targets = cal.targets_for_date(values, date)
     if not targets:
         raise RuntimeError(f"Nenhuma loteria válida encontrada para {date}.")
+
     prize = cal.largest_prize_for_date(values, date, targets)
     thumb = gerar_capa_live(date, targets, prize_highlight=prize)
+    print(f"[REPAIR V26] Capa gerada: {thumb}", flush=True)
+    if prize:
+        print(f"[REPAIR V26] Destaque: {prize.get('loteria')} {prize.get('premio')}", flush=True)
 
     updated = 0
+    errors = []
     for account in listar_contas_youtube(cofre_cache):
         cid = _cofre_get_safe(cofre_get, "YOUTUBE", "CLIENT_ID", conta=account)
         sec = _cofre_get_safe(cofre_get, "YOUTUBE", "CLIENT_SECRET", conta=account)
         ref = _cofre_get_safe(cofre_get, "YOUTUBE", "REFRESH_TOKEN", conta=account)
         if not (cid and sec and ref):
             continue
+        try:
+            token = get_access_token(cid, sec, ref)
+            # Primeiro usa o URL que o próprio publicador gravou na planilha. Isso não exige
+            # escopo YouTube de leitura e funciona com o refresh token antigo de upload.
+            vid = _video_id_from_alert_sheet(api_spreadsheet, date, account)
+            if not vid:
+                vid = _video_id_from_recent_uploads(token)
+            if not vid:
+                errors.append(f"{account}: videoId não localizado")
+                continue
 
-        token = get_access_token(cid, sec, ref)
-        vid = _recent_loterias_de_hoje_id(token) or _recent_live_id(token)
-        if not vid:
-            print(f"[REPAIR V26] [{account}] nenhum alerta recente encontrado.", flush=True)
-            continue
-
-        _update_title_description(token, vid, date, targets, prize)
-        upload_thumbnail(token, vid, thumb)
-        updated += 1
-        print(f"[REPAIR V26] Atualizado: https://www.youtube.com/watch?v={vid}", flush=True)
+            _try_update_metadata(token, vid, date, targets, prize)
+            upload_thumbnail(token, vid, thumb)
+            updated += 1
+            print(f"[REPAIR V26] CAPA ATUALIZADA: https://www.youtube.com/watch?v={vid}", flush=True)
+        except Exception as exc:
+            errors.append(f"{account}: {exc}")
+            print(f"[REPAIR V26] [{account}] ERRO: {exc}", flush=True)
 
     if updated == 0:
-        raise RuntimeError("Nenhum alerta 'Loterias de Hoje' foi encontrado para correção.")
+        raise RuntimeError("Falha ao atualizar a capa do alerta. " + " | ".join(errors))
     return updated
 
 
