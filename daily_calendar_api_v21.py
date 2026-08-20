@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import caixa_direct_fallback_v23 as caixa_fallback
 import daily_queue_v19 as queue
-import youtube_daily_alert_v25 as alert
+import youtube_daily_live_v22 as live
 
 
 API_CALENDAR_SHEET_ID_DEFAULT = "1gHenJLO5Qr23wWLgmRUXHldaDsUdKcICeFR1Ee621X8"
@@ -145,22 +145,15 @@ def processar_resumo_por_calendario_api() -> int:
         queue._write_step_summary("## Calendário oficial", f"- {message}", "- Publicações: **0**")
         return 0
 
-    # FASE 1 — publica uma única vez o vídeo de alerta do dia, a partir do calendário oficial.
-    # O controle fica na aba YOUTUBE_ALERTAS e também reconcilia os uploads recentes do canal,
-    # evitando duplicidade mesmo em execuções horárias.
-    alert_urls: List[str] = []
+    # FASE 1 — cria/reutiliza a LIVE do dia. Ela funciona como alerta e preserva
+    # exatamente o mesmo URL que receberá o vídeo consolidado quando os resultados chegarem.
+    live_urls: List[str] = []
     try:
-        alert_urls = alert.ensure_daily_alerts(
-            date,
-            targets,
-            cofre_get,
-            cofre_cache,
-            api_spreadsheet,
-            dry_run=config.dry_run,
-            timezone=config.timezone,
+        live_urls = live.ensure_daily_lives(
+            date, targets, cofre_get, cofre_cache, timezone=config.timezone
         )
     except Exception as error:
-        queue._log(f"Alerta diário indisponível nesta execução: {error}")
+        queue._log(f"Live-alerta indisponível nesta execução: {error}")
         traceback.print_exc()
 
     imported = history_imported_map(history_values)
@@ -171,8 +164,7 @@ def processar_resumo_por_calendario_api() -> int:
     ]
 
     # FASE 2 — se o Apps Script da base estiver atrasado/sem cota de UrlFetch,
-    # o próprio GitHub consulta a API oficial da CAIXA. Quando o concurso já existe,
-    # grava uma linha mínima em ImportadosBlogger2, sem enfileirar outras redes.
+    # o próprio GitHub consulta a API oficial da CAIXA.
     if waiting_history:
         queue._log(
             "Histórico CAIXA ainda não atualizou: " + ", ".join(waiting_history) +
@@ -208,19 +200,18 @@ def processar_resumo_por_calendario_api() -> int:
             f"- Data: **{date}**",
             "- Programadas: " + ", ".join(f"{display} {contest}" for _key, display, contest in targets),
             "- Ainda ausentes: " + ", ".join(missing_rows),
-            f"- Alerta do dia: {alert_urls[0] if alert_urls else 'já existente, ainda não iniciado ou indisponível nesta execução'}",
+            f"- URL da Live do dia: {live_urls[0] if live_urls else 'não criada — verificar OAuth Live'}",
             "- GitHub tentou a API CAIXA diretamente para contornar eventual atraso do Apps Script.",
         )
         return 0
 
-    queue._log(
-        f"SINAL VERDE {date}: todos os {len(targets)} concursos previstos estão na base."
-    )
+    queue._log(f"SINAL VERDE {date}: todos os {len(targets)} concursos previstos estão na base.")
 
-    # FASE 3 — publica um NOVO vídeo consolidado de resultados. O vídeo-alerta permanece
-    # como chamada do dia; o YouTube não permite substituir o arquivo mantendo o mesmo URL.
-    return queue._publish_day(
+    # FASE 3 — transmite o vídeo final para a Live já criada, encerra a transmissão,
+    # troca título/descrição/capa para o resultado final e mantém o MESMO URL.
+    return live.publish_day_as_live(
         date,
+        targets,
         rows,
         worksheet,
         daily_index,
