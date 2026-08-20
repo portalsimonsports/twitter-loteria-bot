@@ -12,6 +12,7 @@ on:
       - data/to_publish_videos.json
       - daily_calendar_api_v21.py
       - caixa_direct_fallback_v23.py
+      - repair_today_alert_v26.py
       - youtube_daily_live_v22.py
       - youtube_daily_live_v22_prize_fix.py
       - youtube_thumbnail_v24.py
@@ -45,7 +46,7 @@ permissions:
 
 jobs:
   verificar-e-publicar:
-    name: Calendário oficial -> Live alerta -> API CAIXA -> resultado no mesmo URL
+    name: Calendário oficial -> reparar alerta -> Live -> API CAIXA -> resultado no mesmo URL
     runs-on: ubuntu-latest
     timeout-minutes: 360
     concurrency:
@@ -53,32 +54,30 @@ jobs:
       cancel-in-progress: false
 
     steps:
-      - name: Checkout do repositório
-        uses: actions/checkout@v4
-
-      - name: Configurar Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Instalar FFmpeg, fontes e dependências
+      - name: Instalar dependências
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation2
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Validar módulos do publicador diário LIVE
+      - name: Validar módulos
         run: |
           python -m py_compile \
-            daily_calendar_api_v21.py caixa_direct_fallback_v23.py youtube_daily_live_v22.py youtube_daily_live_v22_prize_fix.py youtube_thumbnail_v24.py \
-            daily_video_v19.py daily_video_v19_cta_fix.py daily_video_v19_short_fix.py daily_video_v19_dupla_fix.py \
-            daily_video_v19_branding_fix.py daily_queue_v19.py daily_queue_v19_policy_fix.py \
-            daily_growth_v20.py lottery_result_v18.py voice_narration_v18.py \
-            voice_narration_v17.py audio_identity_v9.py video_queue.py post_video.py \
-            youtube_auth.py youtube_upload.py oauth_youtube.py
+            daily_calendar_api_v21.py caixa_direct_fallback_v23.py repair_today_alert_v26.py \
+            youtube_daily_live_v22.py youtube_daily_live_v22_prize_fix.py youtube_thumbnail_v24.py \
+            daily_video_v19.py daily_video_v19_cta_fix.py daily_video_v19_short_fix.py \
+            daily_video_v19_dupla_fix.py daily_video_v19_branding_fix.py daily_queue_v19.py \
+            daily_queue_v19_policy_fix.py daily_growth_v20.py lottery_result_v18.py \
+            voice_narration_v18.py voice_narration_v17.py audio_identity_v9.py \
+            video_queue.py post_video.py youtube_auth.py youtube_upload.py oauth_youtube.py
 
-      - name: Validar acesso da service account às bases
+      - name: Reparar imediatamente a capa do alerta já publicado hoje
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
@@ -87,43 +86,12 @@ jobs:
           COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
           YOUTUBE_API_CALENDAR_SHEET_ID: ${{ vars.YOUTUBE_API_CALENDAR_SHEET_ID || '1gHenJLO5Qr23wWLgmRUXHldaDsUdKcICeFR1Ee621X8' }}
           YOUTUBE_API_CALENDAR_TAB: ${{ vars.YOUTUBE_API_CALENDAR_TAB || 'API_CALENDARIO_LOTERIAS' }}
-          YOUTUBE_API_HISTORY_CONFIG_TAB: ${{ vars.YOUTUBE_API_HISTORY_CONFIG_TAB || 'CONFIG_HISTORICO_CAIXA' }}
+          TZ: America/Sao_Paulo
         run: |
-          python - <<'PY'
-          import json, os
-          import gspread
-          from oauth2client.service_account import ServiceAccountCredentials
+          mkdir -p output
+          python repair_today_alert_v26.py
 
-          raw = os.environ.get('GOOGLE_SERVICE_JSON', '')
-          if not raw:
-              raise RuntimeError('GOOGLE_SERVICE_JSON ausente')
-          info = json.loads(raw)
-          print('Service account:', info.get('client_email', 'não informada'))
-          scopes = [
-              'https://www.googleapis.com/auth/spreadsheets',
-              'https://www.googleapis.com/auth/drive',
-          ]
-          creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scopes)
-          client = gspread.authorize(creds)
-
-          main = client.open_by_key(os.environ['GOOGLE_SHEET_ID'])
-          main.worksheet(os.environ['SHEET_TAB'])
-          print('OK planilha principal:', main.title)
-
-          api = client.open_by_key(os.environ['YOUTUBE_API_CALENDAR_SHEET_ID'])
-          api.worksheet(os.environ['YOUTUBE_API_CALENDAR_TAB'])
-          api.worksheet(os.environ['YOUTUBE_API_HISTORY_CONFIG_TAB'])
-          print('OK base API Loterias:', api.title)
-
-          cofre_id = os.environ.get('COFRE_SHEET_ID', '').strip()
-          if not cofre_id:
-              raise RuntimeError('COFRE_SHEET_ID ausente')
-          cofre = client.open_by_key(cofre_id)
-          cofre.worksheet(os.environ['COFRE_ABA_CRED'])
-          print('OK Cofre:', cofre.title)
-          PY
-
-      - name: Criar Live do dia e finalizar no mesmo URL quando os resultados chegarem
+      - name: Executar fluxo diário Live
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
@@ -145,7 +113,8 @@ jobs:
           mkdir -p output
           python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_video_v19_cta_fix; import daily_queue_v19_policy_fix; import daily_growth_v20; import caixa_direct_fallback_v23; import youtube_daily_live_v22; import youtube_daily_live_v22_prize_fix; import daily_calendar_api_v21; daily_calendar_api_v21.main()"
 
-      - name: Gerar e aplicar a capa correta no replay diário
+      - name: Aplicar capa no replay final
+        if: always()
         env:
           GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
           GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
@@ -155,10 +124,9 @@ jobs:
           PUBLICADO_YT_DIARIO_COL: ${{ vars.PUBLICADO_YT_DIARIO_COL || 'Publicado_Youtube_Diario' }}
           TZ: America/Sao_Paulo
         run: |
-          mkdir -p output
           python youtube_thumbnail_v24.py
 
-      - name: Guardar vídeos e capa para auditoria
+      - name: Guardar artefatos
         if: always()
         uses: actions/upload-artifact@v4
         with:
