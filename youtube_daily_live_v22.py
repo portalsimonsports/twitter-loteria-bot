@@ -78,6 +78,8 @@ def _alert_metadata(date: str, targets: Sequence[Tuple[str, str, str]]) -> Dict[
         "Portal SimonSports — Loterias Caixa",
         "https://www.portalsimonsports.com/search/label/Loterias%20Caixa?m=1",
         "Fonte: CAIXA Loterias. Conteúdo informativo.",
+        "",
+        LIVE_MARKER,
     ])
     return {"title": title[:95], "description": description[:4500]}
 
@@ -105,19 +107,12 @@ def _find_daily_broadcast(token: str, date: str) -> Dict[str, Any] | None:
 def _create_stream(token: str, date: str) -> Dict[str, Any]:
     body = {
         "snippet": {"title": f"SimonSports Loterias {date}"},
-        "cdn": {
-            "frameRate": "30fps",
-            "ingestionType": "rtmp",
-            "resolution": "1080p",
-        },
+        "cdn": {"frameRate": "30fps", "ingestionType": "rtmp", "resolution": "1080p"},
         "contentDetails": {"isReusable": False},
     }
     payload = _request(
-        "POST",
-        f"{API}/liveStreams",
-        token=token,
-        params={"part": "id,snippet,cdn,contentDetails,status"},
-        json_body=body,
+        "POST", f"{API}/liveStreams", token=token,
+        params={"part": "id,snippet,cdn,contentDetails,status"}, json_body=body,
     )
     if not payload.get("id"):
         raise RuntimeError(f"Criação do liveStream não retornou id: {payload}")
@@ -129,7 +124,7 @@ def _create_broadcast(token: str, date: str, targets: Sequence[Tuple[str, str, s
     body = {
         "snippet": {
             "title": meta["title"],
-            "description": meta["description"] + f"\n\n{LIVE_MARKER}",
+            "description": meta["description"],
             "scheduledStartTime": _scheduled_start_iso(timezone),
         },
         "status": {
@@ -146,11 +141,8 @@ def _create_broadcast(token: str, date: str, targets: Sequence[Tuple[str, str, s
         },
     }
     payload = _request(
-        "POST",
-        f"{API}/liveBroadcasts",
-        token=token,
-        params={"part": "id,snippet,status,contentDetails"},
-        json_body=body,
+        "POST", f"{API}/liveBroadcasts", token=token,
+        params={"part": "id,snippet,status,contentDetails"}, json_body=body,
     )
     if not payload.get("id"):
         raise RuntimeError(f"Criação do liveBroadcast não retornou id: {payload}")
@@ -159,20 +151,12 @@ def _create_broadcast(token: str, date: str, targets: Sequence[Tuple[str, str, s
 
 def _bind(token: str, broadcast_id: str, stream_id: str) -> Dict[str, Any]:
     return _request(
-        "POST",
-        f"{API}/liveBroadcasts/bind",
-        token=token,
+        "POST", f"{API}/liveBroadcasts/bind", token=token,
         params={"part": "id,snippet,status,contentDetails", "id": broadcast_id, "streamId": stream_id},
     )
 
 
-def ensure_daily_live_for_account(
-    token: str,
-    date: str,
-    targets: Sequence[Tuple[str, str, str]],
-    timezone: str,
-    privacy: str,
-) -> Dict[str, Any]:
+def ensure_daily_live_for_account(token: str, date: str, targets: Sequence[Tuple[str, str, str]], timezone: str, privacy: str) -> Dict[str, Any]:
     existing = _find_daily_broadcast(token, date)
     if existing:
         bound = str((existing.get("contentDetails") or {}).get("boundStreamId") or "").strip()
@@ -191,14 +175,7 @@ def ensure_daily_live_for_account(
     return broadcast
 
 
-def ensure_daily_lives(
-    date: str,
-    targets: Sequence[Tuple[str, str, str]],
-    cofre_get,
-    cofre_cache: Dict[str, Any],
-    *,
-    timezone: str,
-) -> List[str]:
+def ensure_daily_lives(date: str, targets: Sequence[Tuple[str, str, str]], cofre_get, cofre_cache: Dict[str, Any], *, timezone: str) -> List[str]:
     urls: List[str] = []
     accounts = listar_contas_youtube(cofre_cache)
     for account in accounts:
@@ -221,19 +198,14 @@ def ensure_daily_lives(
 
 
 def _stream_details(token: str, stream_id: str) -> Dict[str, Any]:
-    payload = _request(
-        "GET",
-        f"{API}/liveStreams",
-        token=token,
-        params={"part": "id,cdn,status", "id": stream_id},
-    )
+    payload = _request("GET", f"{API}/liveStreams", token=token, params={"part": "id,cdn,status", "id": stream_id})
     items = list(payload.get("items") or [])
     if not items:
         raise RuntimeError(f"liveStream {stream_id} não encontrado")
     return items[0]
 
 
-def _wait_stream_active(token: str, stream_id: str, timeout_seconds: int = 120) -> Dict[str, Any]:
+def _wait_stream_active(token: str, stream_id: str, timeout_seconds: int = 180) -> Dict[str, Any]:
     deadline = time.time() + timeout_seconds
     last = {}
     while time.time() < deadline:
@@ -247,9 +219,7 @@ def _wait_stream_active(token: str, stream_id: str, timeout_seconds: int = 120) 
 
 def _transition(token: str, broadcast_id: str, status: str) -> Dict[str, Any]:
     return _request(
-        "POST",
-        f"{API}/liveBroadcasts/transition",
-        token=token,
+        "POST", f"{API}/liveBroadcasts/transition", token=token,
         params={"part": "id,snippet,status,contentDetails", "id": broadcast_id, "broadcastStatus": status},
     )
 
@@ -286,41 +256,6 @@ def _start_ffmpeg(video_path: str, target: str) -> subprocess.Popen:
         "-f", "flv", target,
     ]
     return subprocess.Popen(cmd)
-
-
-def _publish_fallback_regular(
-    token: str,
-    package: Dict[str, str],
-    full_meta: Dict[str, Any],
-    short_meta: Dict[str, Any] | None,
-    gerar_short: bool,
-    category_id: str,
-    privacy: str,
-    tags: Sequence[str],
-) -> Tuple[str, str]:
-    full_id = upload_video(
-        access_token=token,
-        video_path=package["completo"],
-        title=full_meta["title"],
-        description=full_meta["description"],
-        tags=tags,
-        category_id=category_id,
-        privacy_status=privacy,
-    )
-    upload_thumbnail(token, full_id, package["poster"])
-    short_url = ""
-    if gerar_short and short_meta:
-        short_id = upload_video(
-            access_token=token,
-            video_path=package["short"],
-            title=short_meta["title"],
-            description=short_meta["description"],
-            tags=short_meta["tags"],
-            category_id=category_id,
-            privacy_status=privacy,
-        )
-        short_url = build_watch_url(short_id)
-    return build_watch_url(full_id), short_url
 
 
 def publish_day_as_live(
@@ -364,6 +299,7 @@ def publish_day_as_live(
         custom_tags = _parse_tags(_cofre_get_safe(cofre_get, "YOUTUBE", "TAGS", conta=account, default=""))
         if not (client_id and client_secret and refresh_token):
             continue
+
         token = get_access_token(client_id, client_secret, refresh_token)
         full_tags = _unique_tags(custom_tags, full_meta["tags"])
 
@@ -383,10 +319,7 @@ def publish_day_as_live(
             if rc != 0:
                 raise RuntimeError(f"FFmpeg terminou com código {rc}")
             time.sleep(8)
-            try:
-                _transition(token, broadcast_id, "complete")
-            except Exception as complete_error:
-                queue._log(f"[{account}] Aviso ao encerrar live: {complete_error}")
+            _transition(token, broadcast_id, "complete")
             _update_video_metadata(token, broadcast_id, full_meta, category_id, full_tags)
             try:
                 upload_thumbnail(token, broadcast_id, package["poster"])
@@ -412,34 +345,23 @@ def publish_day_as_live(
             successes += 1
             queue._log(f"[{account}] Live diária concluída no mesmo URL: {full_url}")
         except Exception as live_error:
-            queue._log(f"[{account}] Live não disponível; aplicando fallback de upload normal: {live_error}")
+            # O modelo definido é LIVE. Não convertemos silenciosamente para upload normal,
+            # pois isso criaria outro URL e quebraria a premissa do alerta do dia.
+            queue._log(f"[{account}] ERRO LIVE — nenhuma publicação alternativa será criada: {live_error}")
             traceback.print_exc()
-            try:
-                full_url, short_url = _publish_fallback_regular(
-                    token, package, full_meta, short_meta, gerar_short, category_id, privacy, full_tags
-                )
-                first_full_url = first_full_url or full_url
-                first_short_url = first_short_url or short_url
-                successes += 1
-                queue._log(f"[{account}] Fallback publicado: {full_url}")
-            except Exception as fallback_error:
-                queue._log(f"[{account}] Falha também no fallback: {fallback_error}")
-                traceback.print_exc()
         time.sleep(max(0.5, min(pause, 15.0)))
 
     if successes <= 0 or not first_full_url:
         return 0
 
-    final_mark = (
-        f"Publicado YOUTUBE DIÁRIO V22 LIVE em {_ts_br(timezone)} | Completo: {first_full_url}"
-    )
+    final_mark = f"Publicado YOUTUBE DIÁRIO V22 LIVE em {_ts_br(timezone)} | Completo: {first_full_url}"
     if gerar_short:
         final_mark += f" | Short: {first_short_url or 'falhou'}"
     else:
         final_mark += " | Short: não necessário"
     queue._mark_rows(worksheet, row_numbers, daily_index, final_mark)
     queue._write_step_summary(
-        "## Publicação diária V22",
+        "## Publicação diária V22 LIVE",
         f"- Data: **{date}**",
         f"- Mesmo URL desde o alerta: {first_full_url}",
         f"- Resultados reunidos: **{len(resultados)}**",
