@@ -1,7 +1,7 @@
 # ===============================================================
 # Portal SimonSports — Publicador Automático de Loterias
 # Arquivo: requirements.txt
-# Revisão: 2026-07-29 (V11 com diálogo neural de três vozes)
+# Revisão: 2026-08-20 — OAuth completo para YouTube Live
 # ---------------------------------------------------------------
 # Dependências para publicação automática, Google Sheets,
 # geração visual, vídeo, trilha e locução neural.
@@ -11,6 +11,7 @@
 gspread>=6.1.4
 oauth2client>=4.1.3
 google-auth>=2.15.0
+google-auth-oauthlib>=1.2.1
 google-api-python-client>=2.100.0
 
 # Redes sociais / comunicação
