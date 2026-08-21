@@ -13,7 +13,6 @@ on:
       - daily_calendar_api_v21.py
       - pending_alert_fix_v27.py
       - caixa_direct_fallback_v23.py
-      - repair_today_alert_v26.py
       - youtube_daily_live_v22.py
       - youtube_daily_live_v22_prize_fix.py
       - youtube_thumbnail_v24.py
@@ -70,7 +69,7 @@ jobs:
       - name: Validar módulos
         run: |
           python -m py_compile \
-            daily_calendar_api_v21.py pending_alert_fix_v27.py caixa_direct_fallback_v23.py repair_today_alert_v26.py \
+            daily_calendar_api_v21.py pending_alert_fix_v27.py caixa_direct_fallback_v23.py \
             youtube_daily_live_v22.py youtube_daily_live_v22_prize_fix.py youtube_thumbnail_v24.py \
             daily_video_v19.py daily_video_v19_cta_fix.py daily_video_v19_short_fix.py \
             daily_video_v19_dupla_fix.py daily_video_v19_branding_fix.py daily_queue_v19.py \
@@ -99,21 +98,6 @@ jobs:
         run: |
           mkdir -p output
           python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_video_v19_cta_fix; import daily_queue_v19_policy_fix; import daily_growth_v20; import caixa_direct_fallback_v23; import youtube_daily_live_v22; import youtube_daily_live_v22_prize_fix; import daily_calendar_api_v21; import pending_alert_fix_v27; pending_alert_fix_v27.processar_resumo_por_calendario_api_v27()"
-
-      - name: Reparar capa do alerta de hoje sem bloquear o fluxo
-        continue-on-error: true
-        env:
-          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
-          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
-          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
-          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
-          COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
-          YOUTUBE_API_CALENDAR_SHEET_ID: ${{ vars.YOUTUBE_API_CALENDAR_SHEET_ID || '1gHenJLO5Qr23wWLgmRUXHldaDsUdKcICeFR1Ee621X8' }}
-          YOUTUBE_API_CALENDAR_TAB: ${{ vars.YOUTUBE_API_CALENDAR_TAB || 'API_CALENDARIO_LOTERIAS' }}
-          TZ: America/Sao_Paulo
-        run: |
-          mkdir -p output
-          python repair_today_alert_v26.py
 
       - name: Guardar artefatos
         if: always()
