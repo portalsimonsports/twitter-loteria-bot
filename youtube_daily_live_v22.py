@@ -177,23 +177,36 @@ def ensure_daily_live_for_account(token: str, date: str, targets: Sequence[Tuple
 
 def ensure_daily_lives(date: str, targets: Sequence[Tuple[str, str, str]], cofre_get, cofre_cache: Dict[str, Any], *, timezone: str) -> List[str]:
     urls: List[str] = []
+    errors: List[str] = []
     accounts = listar_contas_youtube(cofre_cache)
+    if not accounts:
+        raise RuntimeError("Nenhuma conta YouTube encontrada no Cofre.")
+
     for account in accounts:
         client_id = _cofre_get_safe(cofre_get, "YOUTUBE", "CLIENT_ID", conta=account)
         client_secret = _cofre_get_safe(cofre_get, "YOUTUBE", "CLIENT_SECRET", conta=account)
         refresh_token = _cofre_get_safe(cofre_get, "YOUTUBE", "REFRESH_TOKEN", conta=account)
         privacy = _cofre_get_safe(cofre_get, "YOUTUBE", "PRIVACY_STATUS", conta=account, default="public") or "public"
         if not (client_id and client_secret and refresh_token):
+            errors.append(f"{account}: credenciais incompletas")
             continue
         try:
             token = get_access_token(client_id, client_secret, refresh_token)
             broadcast = ensure_daily_live_for_account(token, date, targets, timezone, privacy)
-            url = build_watch_url(str(broadcast.get("id") or ""))
+            video_id = str(broadcast.get("id") or "").strip()
+            if not video_id:
+                raise RuntimeError("liveBroadcast sem id")
+            url = build_watch_url(video_id)
             urls.append(url)
             queue._log(f"[{account}] Live diária preparada: {url}")
         except Exception as error:
+            detail = f"{account}: {type(error).__name__}: {error}"
+            errors.append(detail)
             queue._log(f"[{account}] Não foi possível preparar a live diária: {error}")
             traceback.print_exc()
+
+    if not urls:
+        raise RuntimeError("Nenhuma Live diária foi criada/reutilizada. " + " | ".join(errors))
     return urls
 
 
@@ -345,8 +358,6 @@ def publish_day_as_live(
             successes += 1
             queue._log(f"[{account}] Live diária concluída no mesmo URL: {full_url}")
         except Exception as live_error:
-            # O modelo definido é LIVE. Não convertemos silenciosamente para upload normal,
-            # pois isso criaria outro URL e quebraria a premissa do alerta do dia.
             queue._log(f"[{account}] ERRO LIVE — nenhuma publicação alternativa será criada: {live_error}")
             traceback.print_exc()
         time.sleep(max(0.5, min(pause, 15.0)))
