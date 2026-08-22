@@ -22,7 +22,6 @@ def _date_obj(value: str):
 
 
 def _last_result_targets(calendar_values: List[List[str]], date: str) -> List[Tuple[str, str, str]]:
-    """Recupera os concursos já realizados na data usando concursoAtual/dataUltimoConcurso."""
     if not calendar_values:
         return []
     headers = calendar_values[0]
@@ -61,6 +60,42 @@ def _alert_rows(api_spreadsheet):
         if date:
             rows.append((sheet_row, date, status))
     return ws, rows, idx
+
+
+def _upsert_alert_status(api_spreadsheet, date: str, url: str, status: str, timezone: str) -> None:
+    name = os.getenv("YOUTUBE_DAILY_ALERT_SHEET", ALERT_SHEET_DEFAULT).strip() or ALERT_SHEET_DEFAULT
+    ws = api_spreadsheet.worksheet(name)
+    values = ws.get_all_values()
+    headers = list(values[0]) if values else []
+    wanted = ["Data", "Conta", "Assinatura", "URL", "PublicadoEm", "Status"]
+    if not headers:
+        ws.append_row(wanted)
+        headers = wanted
+
+    norm = [str(x or "").strip().casefold() for x in headers]
+    def idx(label: str) -> int:
+        try:
+            return norm.index(label.casefold())
+        except ValueError:
+            return -1
+
+    i_date, i_url, i_status = idx("Data"), idx("URL"), idx("Status")
+    stamp = datetime.now(ZoneInfo(timezone)).strftime("%d/%m/%Y %H:%M:%S")
+    found_row = 0
+    for sheet_row, row in enumerate(values[1:], start=2):
+        row_date = str(row[i_date] if i_date >= 0 and i_date < len(row) else "").strip()
+        if row_date == date:
+            found_row = sheet_row
+            break
+
+    if found_row:
+        if i_url >= 0 and url:
+            ws.update_cell(found_row, i_url + 1, url)
+        if i_status >= 0:
+            ws.update_cell(found_row, i_status + 1, status)
+    else:
+        row = [date, "", "LIVE_V27", url, stamp, status]
+        ws.append_row(row)
 
 
 def _is_final(status: str) -> bool:
@@ -112,7 +147,6 @@ def _process_date(
     prize_highlight = cal.largest_prize_for_date(calendar_values, date, targets) if is_today else {}
     live_urls: List[str] = []
 
-    # Só cria/repara alerta para HOJE. Para data anterior, apenas finaliza o aviso já existente.
     if is_today:
         try:
             live_urls = live.ensure_daily_lives(
@@ -123,8 +157,14 @@ def _process_date(
                 timezone=config.timezone,
                 prize_highlight=prize_highlight,
             )
+            live_url = live_urls[0] if live_urls else ""
+            _upsert_alert_status(api_spreadsheet, date, live_url, "LIVE_CRIADA", config.timezone)
+            queue._log(f"{date}: aviso Live registrado: {live_url}")
         except Exception as error:
-            queue._log(f"Live-alerta de {date} indisponível nesta execução: {error}")
+            message = f"ERRO_LIVE: {type(error).__name__}: {error}"
+            _upsert_alert_status(api_spreadsheet, date, "", message[:4500], config.timezone)
+            queue._log(f"Live-alerta de {date} FALHOU: {error}")
+            raise
 
     imported = cal.history_imported_map(history_values)
     waiting_history = [f"{display} {contest}" for key, display, contest in targets if imported.get(key) != contest]
@@ -194,7 +234,6 @@ def processar_resumo_por_calendario_api_v27() -> int:
     today = cal._today(config.timezone)
     pending = _pending_dates(api_spreadsheet, today)
 
-    # Primeiro fecha avisos anteriores pendentes; depois mantém/cria o aviso de hoje.
     dates = [d for d in pending if d != today]
     dates.append(today)
 
@@ -216,5 +255,4 @@ def processar_resumo_por_calendario_api_v27() -> int:
     return published
 
 
-# Substitui o processamento chamado por daily_calendar_api_v21.main().
 cal.processar_resumo_por_calendario_api = processar_resumo_por_calendario_api_v27
