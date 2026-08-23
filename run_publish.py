@@ -41,7 +41,7 @@ def _apply_x_env_overrides() -> None:
 def main() -> None:
     bot._log("Start seguro", f"Origem={bot.BOT_ORIGEM} | DRY_RUN={bot.DRY_RUN}")
     keepalive_thread = bot.iniciar_keepalive() if bot.ENABLE_KEEPALIVE else None
-    critical_x = False
+    x_warning = ""
 
     try:
         bot._cofre_load()
@@ -53,13 +53,19 @@ def main() -> None:
         if "X" in networks:
             try:
                 x_result = publicar_x_automatico(ws)
-                critical_x = x_result.circuit_opened and (
+                if x_result.circuit_opened and (
                     "401" in x_result.circuit_reason or "403" in x_result.circuit_reason
-                )
+                ):
+                    x_warning = x_result.circuit_reason or "X bloqueado por 401/403"
+                    bot._log(f"[X-SEGURO][AVISO] {x_warning}")
+                    print(f"::warning title=X temporariamente isolado::{x_warning}", flush=True)
             except Exception as exc:
-                bot._log(f"[X-SEGURO][FATAL] {exc}")
-                print(f"::error title=Falha no publicador do X::{exc}", flush=True)
-                critical_x = True
+                # O X é uma rede independente. Falha nele não pode impedir Telegram,
+                # Facebook, Discord e Pinterest de serem processados nem deixar a
+                # automação inteira vermelha a cada 10 minutos.
+                x_warning = str(exc)
+                bot._log(f"[X-SEGURO][AVISO] {exc}")
+                print(f"::warning title=Falha isolada no publicador do X::{exc}", flush=True)
 
         dispatch = {
             "FACEBOOK": bot.publicar_em_facebook,
@@ -86,12 +92,10 @@ def main() -> None:
                 continue
             publisher(ws, candidates)
 
-        bot._log("Concluído.")
-
-        # O fluxo das demais redes termina normalmente, mas a Action fica vermelha
-        # quando o X recebeu 401/403, facilitando a identificação do bloqueio.
-        if critical_x:
-            raise RuntimeError("Automação do X entrou em proteção por erro crítico 401/403.")
+        if x_warning:
+            bot._log("Concluído com aviso isolado do X; demais redes preservadas.")
+        else:
+            bot._log("Concluído.")
 
     finally:
         if bot.ENABLE_KEEPALIVE and keepalive_thread:
