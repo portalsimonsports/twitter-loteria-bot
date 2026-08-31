@@ -5818,5 +5818,20 @@
     "Caption": "Timemania 2435 • Data: 30/08/2026 • Números: 07, 15, 26, 42, 53, 78, 80, -, CRUZEIRO, /MG\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
     "TelegramC1": "",
     "TelegramC2": ""
+  },
+  {
+    "id": "quina-7105",
+    "Tipo": "VIDEO",
+    "Produto": "Quina 7105",
+    "Loteria": "Quina",
+    "Concurso": "7105",
+    "Data": "30/08/2026",
+    "Numeros": "02, 33, 41, 48, 78",
+    "URL": "",
+    "Logo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/logos/quina.png",
+    "ImagemFundo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/fundos/quina.jpg",
+    "Caption": "Quina 7105 • Data: 30/08/2026 • Números: 02, 33, 41, 48, 78\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
+    "TelegramC1": "",
+    "TelegramC2": ""
   }
 ]
