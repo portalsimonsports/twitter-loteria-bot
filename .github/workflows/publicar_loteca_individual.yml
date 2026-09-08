@@ -16,7 +16,7 @@ on:
       - youtube_upload.py
       - .github/workflows/publicar_loteca_individual.yml
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch:
     inputs:
       modo:
