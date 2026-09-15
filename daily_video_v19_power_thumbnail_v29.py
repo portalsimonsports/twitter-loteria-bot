@@ -1,25 +1,43 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Sequence, Tuple
+import re
+import unicodedata
+from pathlib import Path
+from typing import Any, Dict, List, Sequence, Tuple
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 import daily_video_v19 as base
 
-
+# Patch visual do fluxo existente. Não cria um segundo publicador.
+# O módulo continua sendo importado pelo workflow atual e substitui somente
+# o render visual de abertura/capa e das cenas verticais dos Shorts.
 THEMES = {
-    "Mega-Sena": ((0, 185, 85), (0, 92, 42), (0, 255, 122)),
-    "Lotofácil": ((232, 0, 175), (108, 0, 89), (255, 66, 210)),
-    "Quina": ((0, 193, 220), (0, 88, 128), (0, 238, 255)),
-    "Timemania": ((160, 210, 0), (24, 115, 35), (225, 255, 0)),
-    "Dupla Sena": ((220, 24, 46), (104, 0, 20), (255, 74, 74)),
-    "Lotomania": ((255, 126, 0), (123, 45, 0), (255, 177, 54)),
-    "Dia de Sorte": ((230, 151, 0), (110, 57, 0), (255, 211, 65)),
-    "Super Sete": ((116, 177, 36), (42, 83, 7), (172, 255, 61)),
-    "+Milionária": ((89, 72, 220), (36, 27, 110), (132, 113, 255)),
-    "Loteria Federal": ((0, 133, 218), (0, 51, 102), (68, 189, 255)),
-    "Loteca": ((0, 102, 214), (0, 37, 84), (44, 162, 255)),
+    "mega-sena": ((0, 150, 69), (0, 67, 39), (32, 255, 128)),
+    "lotofacil": ((164, 28, 142), (67, 9, 69), (255, 68, 215)),
+    "quina": ((0, 91, 171), (0, 35, 83), (0, 213, 255)),
+    "timemania": ((90, 157, 39), (23, 71, 31), (216, 255, 44)),
+    "dupla-sena": ((190, 30, 58), (76, 8, 31), (255, 79, 101)),
+    "lotomania": ((235, 112, 19), (100, 38, 8), (255, 180, 65)),
+    "loteca": ((0, 87, 191), (0, 32, 78), (62, 171, 255)),
+    "dia-de-sorte": ((205, 140, 0), (92, 51, 0), (255, 213, 64)),
+    "super-sete": ((99, 164, 38), (34, 74, 11), (173, 255, 74)),
+    "milionaria": ((78, 62, 185), (32, 23, 87), (151, 127, 255)),
+    "federal": ((0, 127, 185), (0, 48, 80), (83, 209, 255)),
 }
+
+LOGO_DIR = Path("assets") / "logos"
+
+
+def _slug(value: Any) -> str:
+    text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").lower()
+    text = text.replace("+", "mais-")
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    aliases = {
+        "loteria-federal": "federal",
+        "mais-milionaria": "milionaria",
+    }
+    return aliases.get(text, text)
 
 
 def _norm_name(value: Any) -> str:
@@ -27,98 +45,198 @@ def _norm_name(value: Any) -> str:
 
 
 def _theme(name: str):
-    return THEMES.get(name, ((0, 160, 220), (0, 64, 110), (0, 224, 255)))
+    return THEMES.get(_slug(name), ((0, 115, 190), (0, 37, 78), (65, 190, 255)))
+
+
+def _gradient(size: Tuple[int, int], top=(4, 18, 45), bottom=(1, 5, 17)) -> Image.Image:
+    width, height = size
+    image = Image.new("RGB", size)
+    draw = ImageDraw.Draw(image)
+    for y in range(height):
+        t = y / max(1, height - 1)
+        color = tuple(round(top[i] * (1 - t) + bottom[i] * t) for i in range(3))
+        draw.line((0, y, width, y), fill=color)
+    return image
 
 
 def _glow_rect(draw: ImageDraw.ImageDraw, box, *, fill, outline, width=5, radius=28):
     x1, y1, x2, y2 = box
-    for spread, alpha in ((16, 40), (10, 70), (5, 110)):
+    for spread, alpha in ((15, 35), (8, 60)):
         draw.rounded_rectangle((x1-spread, y1-spread, x2+spread, y2+spread), radius=radius+spread, outline=(*outline, alpha), width=max(2, width))
     draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
 
-def _ball(draw: ImageDraw.ImageDraw, cx: int, cy: int, r: int, fill, outline, label: str = ""):
-    for spread, alpha in ((28, 22), (18, 35), (10, 60)):
-        draw.ellipse((cx-r-spread, cy-r-spread, cx+r+spread, cy+r+spread), outline=(*outline, alpha), width=8)
-    draw.ellipse((cx-r, cy-r, cx+r, cy+r), fill=fill, outline=outline, width=8)
-    draw.ellipse((cx-r+25, cy-r+22, cx+r-25, cy+r-30), outline=(255,255,255,85), width=5)
-    if label:
-        font = base._fit_font(draw, label, int(r*1.45), int(r*0.38), 24)
-        draw.text((cx, cy), label, font=font, fill="white", anchor="mm", stroke_width=4, stroke_fill=(0,0,0))
+def _brand(draw: ImageDraw.ImageDraw, size: Tuple[int, int]) -> None:
+    width, height = size
+    portrait = height > width
+    scale = width / (1080 if portrait else 1920)
+    x1 = int(42 * scale)
+    y1 = int(35 * scale)
+    x2 = int((690 if not portrait else 875) * scale)
+    y2 = int(150 * scale)
+    draw.rounded_rectangle((x1, y1, x2, y2), radius=max(18, int(28*scale)), fill=(0, 7, 25, 225), outline=(70, 188, 255, 180), width=max(2, int(3*scale)))
+    r = max(28, int(42 * scale))
+    cx, cy = x1 + r + int(22*scale), (y1+y2)//2
+    draw.ellipse((cx-r, cy-r, cx+r, cy+r), fill=(0, 119, 210), outline=(179, 239, 255), width=max(2, int(3*scale)))
+    draw.text((cx, cy), "S", font=base._font(max(24, int(42*scale)), True), fill="white", anchor="mm")
+    tx = cx + r + int(25*scale)
+    draw.text((tx, y1 + int(18*scale)), "PORTAL", font=base._font(max(16, int(25*scale)), True), fill=(176, 232, 255))
+    draw.text((tx, y1 + int(47*scale)), "SIMONSPORTS", font=base._font(max(28, int(48*scale)), True), fill="white")
+
+
+def _load_logo(name: str, max_size: Tuple[int, int]) -> Image.Image | None:
+    slug = _slug(name)
+    path = LOGO_DIR / f"{slug}.png"
+    if not path.exists():
+        return None
+    try:
+        logo = Image.open(path).convert("RGBA")
+        logo.thumbnail(max_size, Image.Resampling.LANCZOS)
+        return logo
+    except Exception:
+        return None
+
+
+def _emblem(image: Image.Image, draw: ImageDraw.ImageDraw, name: str, center: Tuple[int, int], radius: int, dark, accent) -> None:
+    cx, cy = center
+    glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow, "RGBA")
+    for spread, alpha in ((52, 22), (30, 38), (15, 62)):
+        gd.ellipse((cx-radius-spread, cy-radius-spread, cx+radius+spread, cy+radius+spread), outline=(*accent, alpha), width=max(6, radius//16))
+    glow = glow.filter(ImageFilter.GaussianBlur(max(3, radius//35)))
+    image.paste(glow, (0, 0), glow)
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.ellipse((cx-radius, cy-radius, cx+radius, cy+radius), fill=(*dark, 255), outline=(*accent, 255), width=max(6, radius//18))
+    draw.ellipse((cx-radius+20, cy-radius+18, cx+radius-25, cy+radius-35), outline=(255,255,255,55), width=max(3, radius//45))
+    logo = _load_logo(name, (int(radius*1.45), int(radius*0.86)))
+    if logo:
+        image.paste(logo, (int(cx-logo.width/2), int(cy-logo.height/2)), logo)
+    else:
+        f = base._fit_font(draw, name.upper(), int(radius*1.55), max(26, int(radius*0.31)), 20)
+        draw.multiline_text((cx, cy), name.upper(), font=f, fill="white", anchor="mm", align="center", stroke_width=3, stroke_fill=(0,0,0))
+
+
+def _support_names(results: Sequence[Dict[str, Any]], focus_name: str) -> str:
+    names: List[str] = []
+    for item in results:
+        n = _norm_name(item.get("loteria")).upper()
+        if n and n.casefold() != focus_name.casefold() and n not in names:
+            names.append(n)
+    return "+ " + " • ".join(names[:4]) if names else "+ RESULTADOS COMPLETOS"
 
 
 def _power_intro(results: Sequence[Dict[str, Any]], size: Tuple[int, int]) -> Image.Image:
     width, height = size
+    portrait = height > width
     focus = dict(results[0]) if results else {}
     focus_name = _norm_name(focus.get("loteria")) if focus else "Loterias"
-    focus_contest = str(focus.get("concurso") or "").strip()
+    contest = str(focus.get("concurso") or "").strip()
     date = str(focus.get("data") or "").strip()
     primary, dark, accent = _theme(focus_name)
 
-    image = base._gradient(size, top=(1, 12, 35), bottom=(0, 3, 13))
+    image = _gradient(size)
     draw = ImageDraw.Draw(image, "RGBA")
+    for y in range(0, height, max(18, height // 55)):
+        draw.line((0, y, width, y), fill=(*primary, 18), width=2)
+    _brand(draw, size)
 
-    # Fundo elétrico / esportivo
-    for y in range(0, height, max(14, height // 55)):
-        a = max(8, 34 - int(y / max(1, height) * 22))
-        draw.line((0, y, width, y), fill=(0, 120, 255, a), width=2)
-    for x in range(width//2, width, max(28, width // 38)):
-        draw.line((x, 0, width, int((x-width//2)*0.55)), fill=(0, 170, 255, 24), width=3)
+    if portrait:
+        title_y = 245
+        title_font = base._fit_font(draw, focus_name.upper(), width-90, 100, 46)
+        draw.text((width//2, title_y), focus_name.upper(), font=title_font, fill=accent, anchor="mm", stroke_width=5, stroke_fill=(0,0,0))
+        contest_text = f"CONCURSO {contest}" if contest else "RESULTADOS DO DIA"
+        cf = base._fit_font(draw, contest_text, width-120, 64, 34)
+        draw.text((width//2, 365), contest_text, font=cf, fill="white", anchor="mm", stroke_width=4, stroke_fill=(0,0,0))
+        _emblem(image, draw, focus_name, (width//2, 760), 250, dark, accent)
+        draw = ImageDraw.Draw(image, "RGBA")
+        _glow_rect(draw, (90, 1090, width-90, 1270), fill=(*dark,245), outline=accent, width=5, radius=30)
+        rf = base._fit_font(draw, "RESULTADO DE HOJE", width-250, 66, 36)
+        draw.text((width//2, 1180), "RESULTADO DE HOJE", font=rf, fill="white", anchor="mm", stroke_width=3, stroke_fill=(0,0,0))
+        _glow_rect(draw, (90, 1350, width-90, 1450), fill=(0,8,28,238), outline=(0,153,255), width=4, radius=24)
+        draw.text((width//2, 1400), date or "HOJE", font=base._fit_font(draw, date or "HOJE", width-230, 42, 25), fill="white", anchor="mm")
+        support = _support_names(results, focus_name.upper())
+        draw.rounded_rectangle((55, height-215, width-55, height-90), radius=26, fill=(0,6,23,238), outline=(58,166,255,180), width=3)
+        draw.text((width//2, height-152), support, font=base._fit_font(draw, support, width-150, 31, 19), fill=(255,222,63), anchor="mm", stroke_width=2, stroke_fill=(0,0,0))
+    else:
+        left = int(width*0.62)
+        title_font = base._fit_font(draw, focus_name.upper(), left-90, 112, 56)
+        draw.text((55, 180), focus_name.upper(), font=title_font, fill=accent, stroke_width=6, stroke_fill=(0,0,0))
+        contest_text = f"CONCURSO {contest}" if contest else "RESULTADOS DO DIA"
+        cf = base._fit_font(draw, contest_text, left-90, 72, 40)
+        draw.text((58, 350), contest_text, font=cf, fill="white", stroke_width=5, stroke_fill=(0,0,0))
+        _glow_rect(draw, (55, 510, left, 675), fill=(*dark,245), outline=accent, width=5, radius=30)
+        rf = base._fit_font(draw, "RESULTADO DE HOJE", left-130, 70, 38)
+        draw.text(((55+left)//2, 593), "RESULTADO DE HOJE", font=rf, fill="white", anchor="mm", stroke_width=3, stroke_fill=(0,0,0))
+        _emblem(image, draw, focus_name, (width-350, 380), 265, dark, accent)
+        draw = ImageDraw.Draw(image, "RGBA")
+        _glow_rect(draw, (55, height-220, 650, height-75), fill=(0,8,28,238), outline=(0,153,255), width=4, radius=24)
+        draw.text((95, height-147), date or "HOJE", font=base._fit_font(draw, date or "HOJE", 500, 46, 28), fill="white", anchor="lm")
+        support = _support_names(results, focus_name.upper())
+        _glow_rect(draw, (700, height-220, width-55, height-75), fill=(0,8,28,238), outline=(0,153,255), width=4, radius=24)
+        draw.text(((700+width-55)//2, height-147), support, font=base._fit_font(draw, support, width-820, 37, 22), fill=(255,222,63), anchor="mm", stroke_width=2, stroke_fill=(0,0,0))
+    return image
 
-    # Marca no topo
-    draw.rounded_rectangle((42, 34, 660, 142), radius=28, fill=(0, 7, 24, 220), outline=(0, 167, 255, 160), width=3)
-    draw.ellipse((67, 52, 147, 132), fill=(0, 120, 220), outline=(150, 235, 255), width=4)
-    draw.text((107, 92), "S", font=base._font(42, True), fill="white", anchor="mm")
-    draw.text((172, 52), "PORTAL", font=base._font(27, True), fill="white")
-    draw.text((172, 83), "SIMONSPORTS", font=base._font(49, True), fill=(255,255,255))
 
-    # Grande esfera da modalidade
-    ball_r = int(min(width, height) * 0.235)
-    ball_cx = width - ball_r - 70
-    ball_cy = int(height * 0.36)
-    _ball(draw, ball_cx, ball_cy, ball_r, (*dark, 255), accent, focus_name.lower())
+def _short_result_approved(data: Dict[str, Any]) -> Image.Image:
+    size = (1080, 1920)
+    width, height = size
+    name = _norm_name(data.get("loteria"))
+    contest = str(data.get("concurso") or "").strip()
+    date = str(data.get("data") or "").strip()
+    primary, dark, accent = _theme(name)
+    image = _gradient(size)
+    draw = ImageDraw.Draw(image, "RGBA")
+    for y in range(0, height, 35):
+        draw.line((0, y, width, y), fill=(*primary, 17), width=2)
+    _brand(draw, size)
 
-    # Título gigante - linguagem das capas aprovadas
-    left_w = int(width * 0.68)
-    title = focus_name.upper()
-    title_font = base._fit_font(draw, title, left_w - 100, int(height * 0.17), 58)
-    draw.text((55, 178), title, font=title_font, fill=accent, stroke_width=7, stroke_fill=(0,0,0))
+    title = name.upper()
+    draw.text((width//2, 255), title, font=base._fit_font(draw, title, width-90, 94, 44), fill=accent, anchor="mm", stroke_width=5, stroke_fill=(0,0,0))
+    subtitle = f"CONCURSO {contest}" if contest else "RESULTADO OFICIAL"
+    draw.text((width//2, 375), subtitle, font=base._fit_font(draw, subtitle, width-120, 60, 32), fill="white", anchor="mm", stroke_width=4, stroke_fill=(0,0,0))
 
-    contest_text = f"CONCURSO {focus_contest}" if focus_contest else "RESULTADOS DO DIA"
-    contest_font = base._fit_font(draw, contest_text, left_w - 80, int(height * 0.145), 54)
-    draw.text((58, 350), contest_text, font=contest_font, fill="white", stroke_width=7, stroke_fill=(0,0,0))
+    _emblem(image, draw, name, (width//2, 690), 205, dark, accent)
+    draw = ImageDraw.Draw(image, "RGBA")
+    _glow_rect(draw, (85, 945, width-85, 1095), fill=(*dark,245), outline=accent, width=5, radius=28)
+    draw.text((width//2, 1020), "RESULTADO DE HOJE", font=base._fit_font(draw, "RESULTADO DE HOJE", width-220, 57, 32), fill="white", anchor="mm", stroke_width=3, stroke_fill=(0,0,0))
 
-    banner_y1, banner_y2 = 540, 735
-    _glow_rect(draw, (48, banner_y1, left_w, banner_y2), fill=(*dark, 245), outline=accent, width=5, radius=28)
-    result_text = "RESULTADO DE HOJE"
-    result_font = base._fit_font(draw, result_text, left_w-110, 88, 48)
-    draw.text(((48+left_w)//2, (banner_y1+banner_y2)//2), result_text, font=result_font, fill="white", anchor="mm", stroke_width=4, stroke_fill=(0,0,0))
+    # Mantém a informação do resultado no Short, mas dentro do novo padrão visual.
+    try:
+        parts = base.parse_lottery_result(name, base._raw_result(data))
+        values = list(parts.display_numbers)
+    except Exception:
+        values = []
 
-    # Bolas menores de apoio visual
-    _ball(draw, width-440, height-250, 95, (245,245,245,255), accent, "07")
-    _ball(draw, width-205, height-245, 90, (248,248,248,255), (255,209,45), "21")
+    if values:
+        # Até 20 dezenas, distribuídas em linhas compactas. Para Loteca/Federal,
+        # o fluxo base continua exibindo o conteúdo especial em outras cenas do vídeo.
+        values = [str(v).zfill(2) if str(v).isdigit() and len(str(v)) < 2 else str(v) for v in values[:20]]
+        cols = 5 if len(values) > 10 else 4 if len(values) > 6 else min(3, max(1, len(values)))
+        rows = (len(values) + cols - 1) // cols
+        area_top, area_bottom = 1160, 1620
+        cell_w = (width - 150) / cols
+        cell_h = (area_bottom - area_top) / max(1, rows)
+        r = int(min(58, cell_w*0.28, cell_h*0.32))
+        f = base._font(max(24, int(r*0.72)), True)
+        for i, value in enumerate(values):
+            row, col = divmod(i, cols)
+            row_count = min(cols, len(values)-row*cols)
+            row_w = row_count * cell_w
+            start_x = (width-row_w)/2
+            cx = start_x + (col+0.5)*cell_w
+            cy = area_top + (row+0.5)*cell_h
+            draw.ellipse((cx-r, cy-r, cx+r, cy+r), fill=(248,248,248,255), outline=(*accent,255), width=5)
+            draw.text((cx, cy), value, font=f, fill=(18,22,30), anchor="mm")
 
-    # Data e outras loterias
-    _glow_rect(draw, (48, height-215, 760, height-62), fill=(0,8,28,238), outline=(0,153,255), width=4, radius=25)
-    date_font = base._fit_font(draw, date or "HOJE", 620, 58, 34)
-    draw.text((115, height-138), "▣", font=base._font(50, True), fill=(0,170,255), anchor="mm")
-    draw.text((185, height-138), date or "HOJE", font=date_font, fill="white", anchor="lm", stroke_width=3, stroke_fill=(0,0,0))
-
-    other_names = []
-    for item in results[1:]:
-        name = _norm_name(item.get("loteria")).upper()
-        if name and name not in other_names:
-            other_names.append(name)
-    support = "+ " + " • ".join(other_names[:4]) if other_names else "+ RESULTADOS COMPLETOS"
-    _glow_rect(draw, (800, height-215, width-45, height-62), fill=(0,8,28,238), outline=(0,153,255), width=4, radius=25)
-    sup_font = base._fit_font(draw, support, width-900, 40, 24)
-    draw.text((835, height-138), support, font=sup_font, fill=(255,224,70), anchor="lm", stroke_width=2, stroke_fill=(0,0,0))
-
+    draw.rounded_rectangle((70, height-230, width-70, height-105), radius=25, fill=(0,6,23,238), outline=(58,166,255,180), width=3)
+    footer = date or "HOJE"
+    draw.text((width//2, height-167), footer, font=base._fit_font(draw, footer, width-180, 38, 23), fill=(255,222,63), anchor="mm")
     return image
 
 
 def install() -> None:
     base._intro_image = _power_intro
+    base._result_short_image = _short_result_approved
 
 
 install()
