@@ -7108,5 +7108,35 @@
     "Caption": "Timemania 2445 • Data: 22/09/2026 • Números: 07, 18, 40, 46, 57, 62, 76, -, VOLTA, REDONDA, /RJ\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
     "TelegramC1": "",
     "TelegramC2": ""
+  },
+  {
+    "id": "lotofácil-3786",
+    "Tipo": "VIDEO",
+    "Produto": "Lotofácil 3786",
+    "Loteria": "Lotofácil",
+    "Concurso": "3786",
+    "Data": "22/09/2026",
+    "Numeros": "01, 03, 06, 07, 08, 09, 12, 13, 14, 16, 18, 21, 23, 24, 25",
+    "URL": "",
+    "Logo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/logos/lotofacil.png",
+    "ImagemFundo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/fundos/lotofacil.jpg",
+    "Caption": "Lotofácil 3786 • Data: 22/09/2026 • Números: 01, 03, 06, 07, 08, 09, 12, 13, 14, 16, 18, 21, 23, 24, 25\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
+    "TelegramC1": "",
+    "TelegramC2": ""
+  },
+  {
+    "id": "mega-sena-3061",
+    "Tipo": "VIDEO",
+    "Produto": "Mega-Sena 3061",
+    "Loteria": "Mega-Sena",
+    "Concurso": "3061",
+    "Data": "22/09/2026",
+    "Numeros": "24, 25, 28, 37, 47, 55",
+    "URL": "",
+    "Logo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/logos/mega-sena.png",
+    "ImagemFundo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/fundos/mega-sena.jpg",
+    "Caption": "Mega-Sena 3061 • Data: 22/09/2026 • Números: 24, 25, 28, 37, 47, 55\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
+    "TelegramC1": "",
+    "TelegramC2": ""
   }
 ]
