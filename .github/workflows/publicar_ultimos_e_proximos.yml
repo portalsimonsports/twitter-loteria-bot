@@ -16,6 +16,8 @@ on:
       - youtube_daily_live_v22.py
       - youtube_daily_live_v22_prize_fix.py
       - youtube_thumbnail_v24.py
+      - approved_thumbnail_templates_v31.py
+      - assets/templates_aprovados/**
       - daily_queue_v19.py
       - daily_queue_v19_policy_fix.py
       - daily_growth_v20.py
@@ -72,7 +74,7 @@ jobs:
         run: |
           python -m py_compile \
             daily_calendar_api_v21.py pending_alert_fix_v27.py caixa_direct_fallback_v23.py \
-            youtube_daily_live_v22.py youtube_daily_live_v22_prize_fix.py youtube_thumbnail_v24.py \
+            youtube_daily_live_v22.py youtube_daily_live_v22_prize_fix.py youtube_thumbnail_v24.py approved_thumbnail_templates_v31.py \
             daily_video_v19.py daily_video_v19_cta_fix.py daily_video_v19_short_fix.py \
             daily_video_v19_dupla_fix.py daily_video_v19_branding_fix.py daily_video_v19_short_duration_fix_v28.py \
             daily_video_v19_power_thumbnail_v29.py daily_queue_v19.py daily_queue_v19_policy_fix.py daily_growth_v20.py lottery_result_v18.py \
@@ -99,7 +101,7 @@ jobs:
           TZ: America/Sao_Paulo
         run: |
           mkdir -p output
-          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_video_v19_short_duration_fix_v28; import daily_video_v19_cta_fix; import daily_queue_v19_policy_fix; import daily_growth_v20; import daily_video_v19_power_thumbnail_v29; import caixa_direct_fallback_v23; import youtube_daily_live_v22; import youtube_daily_live_v22_prize_fix; import daily_calendar_api_v21; import pending_alert_fix_v27; pending_alert_fix_v27.processar_resumo_por_calendario_api_v27()"
+          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_video_v19_short_duration_fix_v28; import daily_video_v19_cta_fix; import daily_queue_v19_policy_fix; import daily_growth_v20; import daily_video_v19_power_thumbnail_v29; import approved_thumbnail_templates_v31; import caixa_direct_fallback_v23; import youtube_daily_live_v22; import youtube_daily_live_v22_prize_fix; import daily_calendar_api_v21; import pending_alert_fix_v27; pending_alert_fix_v27.processar_resumo_por_calendario_api_v27()"
 
       - name: Guardar artefatos
         if: always()
