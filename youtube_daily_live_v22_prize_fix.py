@@ -13,10 +13,42 @@ from youtube_auth import get_access_token
 from youtube_upload import build_watch_url, upload_thumbnail
 from youtube_thumbnail_v24 import gerar_capa_live
 
-_ORIGINAL_ENSURE = live.ensure_daily_lives
-_ORIGINAL_PUBLISH = live.publish_day_as_live
 ALERT_SHEET_DEFAULT = "YOUTUBE_ALERTAS"
 API_CALENDAR_SHEET_ID_DEFAULT = "1gHenJLO5Qr23wWLgmRUXHldaDsUdKcICeFR1Ee621X8"
+
+
+def _list_upcoming_compat(token: str):
+    """Lista broadcasts da conta sem combinar filtros incompatíveis da API.
+
+    A API do YouTube não aceita `mine` junto com `broadcastStatus` em
+    liveBroadcasts.list. Consultamos apenas `mine=true` e filtramos localmente
+    os broadcasts ainda utilizáveis, evitando também duplicar uma Live que já
+    esteja em preparação/teste/ao vivo.
+    """
+    payload = live._request(
+        "GET",
+        f"{live.API}/liveBroadcasts",
+        token=token,
+        params={
+            "part": "id,snippet,status,contentDetails",
+            "mine": "true",
+            "maxResults": 50,
+        },
+    )
+    items = list(payload.get("items") or [])
+    active = []
+    for item in items:
+        lifecycle = str((item.get("status") or {}).get("lifeCycleStatus") or "").strip().lower()
+        if lifecycle not in {"complete", "revoked"}:
+            active.append(item)
+    return active
+
+
+# Corrige a consulta antes de capturar as funções originais abaixo.
+live._list_upcoming = _list_upcoming_compat
+
+_ORIGINAL_ENSURE = live.ensure_daily_lives
+_ORIGINAL_PUBLISH = live.publish_day_as_live
 
 
 def _account_credentials(cofre_get, account: str):
