@@ -9,6 +9,9 @@ import caixa_direct_fallback_v23 as caixa_fallback
 import daily_calendar_api_v21 as cal
 import daily_queue_v19 as queue
 import youtube_daily_live_v22 as live
+from post_video import _cofre_get_safe, listar_contas_youtube
+from youtube_auth import get_access_token
+from youtube_upload import build_watch_url
 
 ALERT_SHEET_DEFAULT = "YOUTUBE_ALERTAS"
 FINAL_WORDS = (
@@ -131,6 +134,33 @@ def _mark_alert_final(api_spreadsheet, date: str, timezone: str) -> None:
             ws.update_cell(sheet_row, idx["status"] + 1, f"FINALIZADO | {stamp} | resultado consolidado na Live do dia")
 
 
+def _existing_daily_live_urls(date: str, cofre_get, cofre_cache: Dict[str, Any]) -> List[str]:
+    """Localiza a Live diária ainda ativa para a data, inclusive de dia anterior.
+
+    Isso impede que uma Live verdadeira de ontem seja tratada como legado e abandonada
+    em estado 'Em breve'. O patch youtube_daily_live_v22_prize_fix já corrige a listagem
+    da API e mantém apenas broadcasts ainda utilizáveis.
+    """
+    urls: List[str] = []
+    for account in listar_contas_youtube(cofre_cache):
+        client_id = _cofre_get_safe(cofre_get, "YOUTUBE", "CLIENT_ID", conta=account)
+        client_secret = _cofre_get_safe(cofre_get, "YOUTUBE", "CLIENT_SECRET", conta=account)
+        refresh_token = _cofre_get_safe(cofre_get, "YOUTUBE", "REFRESH_TOKEN", conta=account)
+        if not (client_id and client_secret and refresh_token):
+            continue
+        try:
+            token = get_access_token(client_id, client_secret, refresh_token)
+            broadcast = live._find_daily_broadcast(token, date)
+            if not broadcast:
+                continue
+            video_id = str(broadcast.get("id") or "").strip()
+            if video_id:
+                urls.append(build_watch_url(video_id))
+        except Exception as error:
+            queue._log(f"[{account}] Falha ao localizar Live pendente de {date}: {error}")
+    return urls
+
+
 def _publish_legacy_recovery(
     date: str,
     rows,
@@ -141,11 +171,11 @@ def _publish_legacy_recovery(
     cofre_cache,
     config,
 ) -> int:
-    """Recupera dias antigos cujo 'alerta' foi um upload comum, não uma Live.
+    """Recupera somente alerta antigo que NÃO possui Live reutilizável.
 
-    Um MP4 de upload comum não pode receber outro arquivo no mesmo videoId. Para não deixar
-    o resultado do dia sem publicação, publica o consolidado usando o OAuth de upload já válido.
-    Este caminho existe somente para corrigir o legado de 20/08; dias novos continuam LIVE.
+    Um MP4 de upload comum não pode receber outro arquivo no mesmo videoId. Este caminho
+    permanece apenas para legado real; uma Live existente de dia anterior sempre deve ser
+    atualizada/finalizada no próprio endereço antes da criação da Live seguinte.
     """
     result = queue._publish_day(
         date,
@@ -170,11 +200,11 @@ def _publish_legacy_recovery(
 
     stamp = datetime.now(ZoneInfo(config.timezone)).strftime("%d/%m/%Y %H:%M:%S")
     status = (
-        f"RECUPERADO_EM_NOVO_VIDEO | {stamp} | alerta antigo era upload comum e não podia receber novo MP4"
+        f"RECUPERADO_EM_NOVO_VIDEO | {stamp} | alerta antigo não possuía Live reutilizável"
         + (f" | resultado={result_url}" if result_url else "")
     )
     _upsert_alert_status(api_spreadsheet, date, result_url, status, config.timezone)
-    queue._log(f"{date}: recuperação concluída por upload consolidado: {result_url or 'URL gravada nas linhas da base'}")
+    queue._log(f"{date}: recuperação legado concluída por upload consolidado: {result_url or 'URL gravada nas linhas da base'}")
     return result
 
 
@@ -199,8 +229,8 @@ def _process_date(
 
     prize_highlight = cal.largest_prize_for_date(calendar_values, date, targets) if is_today else {}
 
-    # Primeiro garante/importa os resultados; dias antigos precisam ser recuperados mesmo se
-    # a autorização de Live de hoje estiver sem o escopo youtube.
+    # Primeiro garante/importa os resultados. Uma pendência de ontem precisa ser resolvida
+    # antes de o sistema abrir uma nova Live para hoje.
     imported = cal.history_imported_map(history_values)
     waiting_history = [f"{display} {contest}" for key, display, contest in targets if imported.get(key) != contest]
     if waiting_history:
@@ -222,15 +252,60 @@ def _process_date(
     daily_index = queue._ensure_column(worksheet, headers, daily_column)
     rows, missing_rows = cal._find_today_rows(values, headers, daily_index, date, targets)
 
-    # Dia antigo: o aviso de 20/08 foi publicado como vídeo normal de 13s. Não existe como
-    # substituir esse MP4. Publica o consolidado agora usando upload scope e encerra o legado.
+    # Dia anterior com Live real ainda ativa: NÃO criar outro vídeo e NÃO abandonar a Live.
+    # Quando todos os resultados chegarem, transmite o consolidado no MESMO videoId e finaliza.
     if not is_today:
+        existing_live_urls = _existing_daily_live_urls(date, cofre_get, cofre_cache)
+
         if not rows:
             if missing_rows == ["JÁ PUBLICADO"]:
                 _mark_alert_final(api_spreadsheet, date, config.timezone)
                 return 0
-            queue._log(f"{date}: recuperação aguardando resultados: " + ", ".join(missing_rows))
+            if existing_live_urls:
+                _upsert_alert_status(
+                    api_spreadsheet,
+                    date,
+                    existing_live_urls[0],
+                    "LIVE_PENDENTE_ANTERIOR | aguardando resultados para finalizar antes da próxima Live",
+                    config.timezone,
+                )
+                queue._log(
+                    f"BLOQUEIO {date}: Live anterior ainda ativa e aguardando resultados: "
+                    + ", ".join(missing_rows)
+                )
+                return 0
+            queue._log(f"{date}: legado sem Live reutilizável aguardando resultados: " + ", ".join(missing_rows))
             return 0
+
+        if existing_live_urls:
+            _upsert_alert_status(
+                api_spreadsheet,
+                date,
+                existing_live_urls[0],
+                "FINALIZANDO_LIVE_PENDENTE_ANTERIOR",
+                config.timezone,
+            )
+            queue._log(
+                f"SINAL VERDE {date}: resultados completos; atualizando e finalizando a Live anterior no mesmo endereço."
+            )
+            result = live.publish_day_as_live(
+                date,
+                targets,
+                rows,
+                worksheet,
+                daily_index,
+                cofre_get,
+                cofre_cache,
+                dry_run=config.dry_run,
+                pause=config.pausa,
+                timezone=config.timezone,
+                prize_highlight=prize_highlight,
+            )
+            if result:
+                _mark_alert_final(api_spreadsheet, date, config.timezone)
+            return result
+
+        # Só cai no upload legado se realmente não existir Live reutilizável para a data.
         return _publish_legacy_recovery(
             date,
             rows,
@@ -242,7 +317,7 @@ def _process_date(
             config,
         )
 
-    # HOJE e próximos dias: exclusivamente LIVE, como definido pelo usuário.
+    # Hoje: cria/reutiliza uma única Live somente depois que pendências anteriores forem resolvidas.
     try:
         live_urls = live.ensure_daily_lives(
             date,
@@ -307,36 +382,49 @@ def processar_resumo_por_calendario_api_v27() -> int:
 
     today = cal._today(config.timezone)
     pending = _pending_dates(api_spreadsheet, today)
-
-    # Recupera primeiro qualquer dia anterior. Assim um erro de OAuth Live de hoje não impede
-    # a correção do resultado de ontem.
-    dates = [d for d in pending if d != today]
-    dates.append(today)
+    previous_dates = [d for d in pending if d != today]
 
     published = 0
-    first_error = None
-    for date in dates:
-        current_values = worksheet.get_all_values()
-        try:
-            published += _process_date(
-                date,
-                today=today,
-                config=config,
-                worksheet=worksheet,
-                values=current_values,
-                api_spreadsheet=api_spreadsheet,
-                calendar_values=calendar_values,
-                history_values=history_values,
-                cofre_get=cofre_get,
-                cofre_cache=cofre_cache,
-            )
-        except Exception as error:
-            # Não desfaz nem impede recuperação já executada para datas anteriores.
-            first_error = first_error or error
-            queue._log(f"{date}: erro mantido para diagnóstico após processar pendências: {error}")
 
-    if first_error:
-        raise first_error
+    # REGRA DE ORDEM: nenhuma nova Live de hoje é criada enquanto existir uma Live anterior
+    # pendente. Primeiro tenta atualizar/finalizar todas as datas anteriores, em ordem cronológica.
+    for date in previous_dates:
+        current_values = worksheet.get_all_values()
+        published += _process_date(
+            date,
+            today=today,
+            config=config,
+            worksheet=worksheet,
+            values=current_values,
+            api_spreadsheet=api_spreadsheet,
+            calendar_values=calendar_values,
+            history_values=history_values,
+            cofre_get=cofre_get,
+            cofre_cache=cofre_cache,
+        )
+
+        still_pending = _pending_dates(api_spreadsheet, today)
+        if date in still_pending:
+            queue._log(
+                f"BLOQUEIO DE NOVA LIVE: {date} continua pendente. "
+                f"A Live de {today} não será criada até a anterior ser atualizada/finalizada."
+            )
+            return published
+
+    # Somente após zerar pendências anteriores o sistema pode preparar/processar a Live de hoje.
+    current_values = worksheet.get_all_values()
+    published += _process_date(
+        today,
+        today=today,
+        config=config,
+        worksheet=worksheet,
+        values=current_values,
+        api_spreadsheet=api_spreadsheet,
+        calendar_values=calendar_values,
+        history_values=history_values,
+        cofre_get=cofre_get,
+        cofre_cache=cofre_cache,
+    )
     return published
 
 
