@@ -20,6 +20,7 @@ FINAL_WORDS = (
     "PUBLICADO YOUTUBE DIÁRIO",
     "PUBLICADO YOUTUBE DIARIO",
     "RECUPERADO_EM_NOVO_VIDEO",
+    "IGNORADO_SEM_CONCURSO_RECUPERAVEL",
 )
 
 
@@ -134,6 +135,23 @@ def _mark_alert_final(api_spreadsheet, date: str, timezone: str) -> None:
             ws.update_cell(sheet_row, idx["status"] + 1, f"FINALIZADO | {stamp} | resultado consolidado na Live do dia")
 
 
+def _mark_orphan_alert_ignored(api_spreadsheet, date: str, timezone: str) -> None:
+    """Finaliza uma pendência órfã que não possui concursos recuperáveis no calendário.
+
+    Esse status é terminal para que registros antigos/inconsistentes não bloqueiem para sempre
+    a Live atual. Não cria vídeo, não altera Live válida e deixa rastreabilidade na YOUTUBE_ALERTAS.
+    """
+    stamp = datetime.now(ZoneInfo(timezone)).strftime("%d/%m/%Y %H:%M:%S")
+    _upsert_alert_status(
+        api_spreadsheet,
+        date,
+        "",
+        f"IGNORADO_SEM_CONCURSO_RECUPERAVEL | {stamp} | pendência órfã encerrada automaticamente",
+        timezone,
+    )
+    queue._log(f"{date}: pendência órfã encerrada automaticamente; nenhum concurso recuperável encontrado.")
+
+
 def _existing_daily_live_urls(date: str, cofre_get, cofre_cache: Dict[str, Any]) -> List[str]:
     """Localiza a Live diária ainda ativa para a data, inclusive de dia anterior.
 
@@ -224,13 +242,14 @@ def _process_date(
     is_today = date == today
     targets = cal.targets_for_date(calendar_values, date) if is_today else _last_result_targets(calendar_values, date)
     if not targets:
-        queue._log(f"{date}: sem concursos recuperáveis para processamento do aviso.")
+        if not is_today:
+            _mark_orphan_alert_ignored(api_spreadsheet, date, config.timezone)
+        else:
+            queue._log(f"{date}: sem concursos recuperáveis para processamento do aviso.")
         return 0
 
     prize_highlight = cal.largest_prize_for_date(calendar_values, date, targets) if is_today else {}
 
-    # Primeiro garante/importa os resultados. Uma pendência de ontem precisa ser resolvida
-    # antes de o sistema abrir uma nova Live para hoje.
     imported = cal.history_imported_map(history_values)
     waiting_history = [f"{display} {contest}" for key, display, contest in targets if imported.get(key) != contest]
     if waiting_history:
@@ -252,8 +271,6 @@ def _process_date(
     daily_index = queue._ensure_column(worksheet, headers, daily_column)
     rows, missing_rows = cal._find_today_rows(values, headers, daily_index, date, targets)
 
-    # Dia anterior com Live real ainda ativa: NÃO criar outro vídeo e NÃO abandonar a Live.
-    # Quando todos os resultados chegarem, transmite o consolidado no MESMO videoId e finaliza.
     if not is_today:
         existing_live_urls = _existing_daily_live_urls(date, cofre_get, cofre_cache)
 
@@ -305,7 +322,6 @@ def _process_date(
                 _mark_alert_final(api_spreadsheet, date, config.timezone)
             return result
 
-        # Só cai no upload legado se realmente não existir Live reutilizável para a data.
         return _publish_legacy_recovery(
             date,
             rows,
@@ -317,7 +333,6 @@ def _process_date(
             config,
         )
 
-    # Hoje: cria/reutiliza uma única Live somente depois que pendências anteriores forem resolvidas.
     try:
         live_urls = live.ensure_daily_lives(
             date,
@@ -386,8 +401,6 @@ def processar_resumo_por_calendario_api_v27() -> int:
 
     published = 0
 
-    # REGRA DE ORDEM: nenhuma nova Live de hoje é criada enquanto existir uma Live anterior
-    # pendente. Primeiro tenta atualizar/finalizar todas as datas anteriores, em ordem cronológica.
     for date in previous_dates:
         current_values = worksheet.get_all_values()
         published += _process_date(
@@ -411,7 +424,6 @@ def processar_resumo_por_calendario_api_v27() -> int:
             )
             return published
 
-    # Somente após zerar pendências anteriores o sistema pode preparar/processar a Live de hoje.
     current_values = worksheet.get_all_values()
     published += _process_date(
         today,
@@ -426,6 +438,3 @@ def processar_resumo_por_calendario_api_v27() -> int:
         cofre_cache=cofre_cache,
     )
     return published
-
-
-cal.processar_resumo_por_calendario_api = processar_resumo_por_calendario_api_v27
