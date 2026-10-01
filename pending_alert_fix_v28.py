@@ -10,19 +10,19 @@ _original_pending_dates = base._pending_dates
 
 
 def _pending_dates_recent_only(api_spreadsheet, today: str):
-    """Mantém auditoria, mas impede pendências antigas de travarem o dia atual."""
+    """Recupera pendências dos últimos 7 dias sem permitir que elas bloqueiem o dia atual."""
     dates = _original_pending_dates(api_spreadsheet, today)
     today_dt = base._date_obj(today)
     if not today_dt:
         return dates
-    cutoff = today_dt - timedelta(days=1)
+    cutoff = today_dt - timedelta(days=7)
     filtered = []
     for date in dates:
         dt = base._date_obj(date)
         if dt and dt >= cutoff:
             filtered.append(date)
         else:
-            base.queue._log(f"{date}: pendência histórica não bloqueante ignorada pelo V28.")
+            base.queue._log(f"{date}: pendência com mais de 7 dias mantida apenas para auditoria.")
     return filtered
 
 
@@ -128,7 +128,7 @@ def _process_date_decoupled(
 
 
 def processar_resumo_por_calendario_api_v28() -> int:
-    """Executa chamada do dia + publicações independentes, sem bloqueio entre datas."""
+    """Executa chamada do dia + publicações independentes, recuperando até 7 dias sem bloqueio."""
     base._pending_dates = _pending_dates_recent_only
 
     config = base.queue.carregar_config()
