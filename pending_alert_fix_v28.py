@@ -41,7 +41,27 @@ def _process_date_decoupled(
 ) -> int:
     """Live é somente chamada; resultados usam o publicador normal e independente."""
     is_today = date == today
-    targets = base.cal.targets_for_date(calendar_values, date) if is_today else base._last_result_targets(calendar_values, date)
+    if is_today:
+        # V33: o calendário da CAIXA pode avançar para o próximo concurso logo após
+        # a apuração. Nesse intervalo, dataProximoConcurso deixa de apontar para hoje,
+        # embora dataUltimoConcurso já contenha justamente os resultados que precisam
+        # ser publicados. Unimos as duas visões para não perder concursos noturnos.
+        scheduled_targets = base.cal.targets_for_date(calendar_values, date)
+        result_targets = base._last_result_targets(calendar_values, date)
+        targets = []
+        seen = set()
+        for item in list(scheduled_targets) + list(result_targets):
+            pair = (item[0], item[2])
+            if pair in seen:
+                continue
+            seen.add(pair)
+            targets.append(item)
+        if not scheduled_targets and result_targets:
+            base.queue._log(
+                f"{date}: calendário já avançou; recuperando {len(result_targets)} concurso(s) via dataUltimoConcurso."
+            )
+    else:
+        targets = base._last_result_targets(calendar_values, date)
     if not targets:
         if not is_today:
             base._mark_orphan_alert_ignored(api_spreadsheet, date, config.timezone)
