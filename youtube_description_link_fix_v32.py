@@ -14,7 +14,7 @@ from typing import Any, Dict, Sequence
 import daily_queue_v19 as dq
 
 
-RESULTS_URL = "https://www.portalsimonsports.com/search/label/Loterias%20Caixa?m=1"
+RESULTS_URL = "https://www.portalsimonsports.com/search/label/Loterias%20Caixa"
 _ORIGINAL_METADATA = dq._metadata
 
 
