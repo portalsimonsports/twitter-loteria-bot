@@ -18,7 +18,7 @@ PORTAL_DESCRIPTION = (
     "Portal com resultados atualizados das Loterias da Caixa, esportes nacionais e internacionais, "
     "e notícias relevantes do Brasil e do mundo."
 )
-RESULTS_INDEX_URL = "https://www.portalsimonsports.com/search/label/Loterias%20Caixa?m=1"
+RESULTS_INDEX_URL = "https://www.portalsimonsports.com/search/label/Loterias%20Caixa"
 
 
 def _now_br(tz_name: str = "America/Sao_Paulo") -> dt.datetime:
