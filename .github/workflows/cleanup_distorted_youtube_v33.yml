@@ -1,0 +1,63 @@
+name: Limpar publicações YouTube distorcidas V33
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - cleanup_distorted_youtube_v33.py
+      - approved_thumbnail_templates_v31.py
+      - .github/workflows/cleanup_distorted_youtube_v33.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  limpar-e-recriar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation2
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Excluir publicações com imagem distorcida
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          TZ: America/Sao_Paulo
+        run: python cleanup_distorted_youtube_v33.py
+
+      - name: Recriar chamada atual com capa limpa
+        env:
+          GOOGLE_SERVICE_JSON: ${{ secrets.GOOGLE_SERVICE_JSON }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID || '16NcdSwX6q_EQ2XjS1KNIBe6C3Piq-lCBgA38TMszXCI' }}
+          SHEET_TAB: ${{ vars.SHEET_TAB || 'ImportadosBlogger2' }}
+          COFRE_SHEET_ID: ${{ secrets.COFRE_SHEET_ID || vars.COFRE_SHEET_ID }}
+          COFRE_ABA_CRED: ${{ vars.COFRE_ABA_CRED || 'Credenciais_Rede' }}
+          PUBLICADO_YT_DIARIO_COL: ${{ vars.PUBLICADO_YT_DIARIO_COL || 'Publicado_Youtube_Diario' }}
+          YOUTUBE_API_CALENDAR_SHEET_ID: ${{ vars.YOUTUBE_API_CALENDAR_SHEET_ID || '1gHenJLO5Qr23wWLgmRUXHldaDsUdKcICeFR1Ee621X8' }}
+          YOUTUBE_API_CALENDAR_TAB: ${{ vars.YOUTUBE_API_CALENDAR_TAB || 'API_CALENDARIO_LOTERIAS' }}
+          YOUTUBE_API_HISTORY_CONFIG_TAB: ${{ vars.YOUTUBE_API_HISTORY_CONFIG_TAB || 'CONFIG_HISTORICO_CAIXA' }}
+          YOUTUBE_DAILY_LIVE_SCHEDULE_HOUR: ${{ vars.YOUTUBE_DAILY_LIVE_SCHEDULE_HOUR || '21' }}
+          YOUTUBE_FORCE_SHORT_SINGLE_LOTTERY: "false"
+          MAX_VIDEOS_RODADA: "1"
+          PAUSA_ENTRE_VIDEOS: "3.0"
+          DRY_RUN_VIDEOS: "false"
+          VIDEO_FPS: "30"
+          TZ: America/Sao_Paulo
+        run: |
+          mkdir -p output
+          python -c "import daily_video_v19_short_fix; import daily_video_v19_dupla_fix; import daily_video_v19_branding_fix; import daily_video_v19_short_duration_fix_v28; import daily_video_v19_cta_fix; import daily_queue_v19_policy_fix; import daily_growth_v20; import daily_video_v19_power_thumbnail_v29; import approved_thumbnail_templates_v31; import youtube_description_link_fix_v32; import caixa_direct_fallback_v23; import youtube_daily_live_v22; import youtube_daily_live_v22_prize_fix; import youtube_live_call_metadata_v29; import daily_calendar_api_v21; import pending_alert_fix_v27; import pending_alert_fix_v28; pending_alert_fix_v28.processar_resumo_por_calendario_api_v28()"
