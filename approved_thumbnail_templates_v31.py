@@ -143,41 +143,33 @@ def _rounded_cover(draw: ImageDraw.ImageDraw, box, size, *, outline=(50, 145, 22
 
 
 def _render_horizontal(results: Sequence[Dict[str, Any]], size: Tuple[int, int]) -> Image.Image | None:
+    """
+    V33: NÃO amplia mais o sprite 160x90. A ampliação do sprite V31 era a causa
+    das capas pixeladas/glitchadas no YouTube. A arte agora é renderizada
+    diretamente em alta resolução pelo gerador vetorial aprovado V24 e só então
+    redimensionada, preservando nitidez e legibilidade.
+    """
     if not results:
         return None
-    focus = _primary(results)
-    slug = _slug(focus.get("loteria"))
-    if slug not in TILES:
+
+    normalized: List[Dict[str, str]] = []
+    for item in results:
+        normalized.append({
+            "loteria": _display_name(item.get("loteria")),
+            "concurso": str(item.get("concurso") or "").strip(),
+            "premio": str(item.get("premio") or "").strip(),
+        })
+
+    date = str(results[0].get("data") or "").strip()
+    mode = "resultado"
+    try:
+        image = yt._draw_approved(date, normalized, prize_highlight=None, mode=mode)
+    except Exception:
         return None
 
-    image = _approved_tile(slug).resize(size, Image.Resampling.LANCZOS).convert("RGB")
-    draw = ImageDraw.Draw(image, "RGBA")
-
-    contest = str(focus.get("concurso") or "").strip()
-    date = str(focus.get("data") or "").strip()
-    support = _support_names(results, slug)
-
-    # Mantém a própria arte aprovada como matriz. Apenas os três campos variáveis
-    # são cobertos e reescritos: concurso, data e modalidades auxiliares.
-    contest_box = _rounded_cover(draw, (42, 310, 785, 405), size, outline=(0, 0, 0, 0), radius=5)
-    contest_text = f"CONCURSO {contest}" if contest else "RESULTADO DE HOJE"
-    contest_font = _fit(draw, contest_text, contest_box[2] - contest_box[0] - 40, int(62 * size[0] / 1280), int(28 * size[0] / 1280))
-    draw.text((contest_box[0] + 18, (contest_box[1] + contest_box[3]) // 2), contest_text, font=contest_font,
-              fill="white", anchor="lm", stroke_width=max(2, int(3 * size[0] / 1280)), stroke_fill=(0, 0, 0, 255))
-
-    date_box = _rounded_cover(draw, (62, 601, 535, 695), size, outline=(45, 145, 230, 210), radius=15)
-    date_text = date or "HOJE"
-    date_font = _fit(draw, date_text, date_box[2] - date_box[0] - 38, int(42 * size[0] / 1280), int(22 * size[0] / 1280))
-    draw.text((date_box[0] + 20, (date_box[1] + date_box[3]) // 2), date_text, font=date_font,
-              fill="white", anchor="lm", stroke_width=max(1, int(2 * size[0] / 1280)), stroke_fill=(0, 0, 0, 255))
-
-    support_box = _rounded_cover(draw, (555, 601, 1242, 695), size, outline=(45, 145, 230, 210), radius=15)
-    support_font = _fit(draw, support, support_box[2] - support_box[0] - 38, int(31 * size[0] / 1280), int(17 * size[0] / 1280))
-    draw.text(((support_box[0] + support_box[2]) // 2, (support_box[1] + support_box[3]) // 2), support,
-              font=support_font, fill=(255, 222, 55, 255), anchor="mm",
-              stroke_width=max(1, int(2 * size[0] / 1280)), stroke_fill=(0, 0, 0, 255))
-    return image
-
+    if image.size != size:
+        image = image.resize(size, Image.Resampling.LANCZOS)
+    return image.convert("RGB")
 
 def _approved_intro(results: Sequence[Dict[str, Any]], size: Tuple[int, int]) -> Image.Image:
     approved = _render_horizontal(results, size)
