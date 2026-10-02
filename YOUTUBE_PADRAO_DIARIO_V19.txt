@@ -29,7 +29,7 @@ Estrutura:
 - encerramento solicitando curtida, comentário e inscrição;
 - encerramento informando: portalsimonsports.com, seção Loterias Caixa;
 - manter na descrição o link direto:
-  https://www.portalsimonsports.com/search/label/Loterias%20Caixa?m=1
+  https://www.portalsimonsports.com/search/label/Loterias%20Caixa
 
 3. IDENTIDADE VISUAL POR MODALIDADE
 
@@ -167,7 +167,7 @@ O Short deve conter #Shorts e encaminhar o público ao vídeo completo do canal 
 
 A descrição deve manter o link direto da seção Loterias Caixa:
 
-https://www.portalsimonsports.com/search/label/Loterias%20Caixa?m=1
+https://www.portalsimonsports.com/search/label/Loterias%20Caixa
 
 12. OBJETIVO
 
