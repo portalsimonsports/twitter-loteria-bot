@@ -76,7 +76,7 @@ def _alert_metadata(date: str, targets: Sequence[Tuple[str, str, str]]) -> Dict[
         "O mesmo endereço será mantido para o resultado consolidado do dia.",
         "",
         "Portal SimonSports — Loterias Caixa",
-        "https://www.portalsimonsports.com/search/label/Loterias%20Caixa?m=1",
+        "https://www.portalsimonsports.com/search/label/Loterias%20Caixa",
         "Fonte: CAIXA Loterias. Conteúdo informativo.",
         "",
         LIVE_MARKER,
