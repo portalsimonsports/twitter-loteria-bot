@@ -8443,5 +8443,35 @@
     "Caption": "Mega-Sena 3069 • Data: 11/10/2026 • Números: 05, 19, 22, 44, 47, 57\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
     "TelegramC1": "",
     "TelegramC2": ""
+  },
+  {
+    "id": "dia-de-sorte-1320",
+    "Tipo": "VIDEO",
+    "Produto": "Dia de Sorte 1320",
+    "Loteria": "Dia de Sorte",
+    "Concurso": "1320",
+    "Data": "11/10/2026",
+    "Numeros": "02, 16, 19, 24, 25, 29, 30, -, Novembro",
+    "URL": "",
+    "Logo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/logos/dia-de-sorte.png",
+    "ImagemFundo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/fundos/dia-de-sorte.jpg",
+    "Caption": "Dia de Sorte 1320 • Data: 11/10/2026 • Números: 02, 16, 19, 24, 25, 29, 30, -, Novembro\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
+    "TelegramC1": "",
+    "TelegramC2": ""
+  },
+  {
+    "id": "timemania-2453",
+    "Tipo": "VIDEO",
+    "Produto": "Timemania 2453",
+    "Loteria": "Timemania",
+    "Concurso": "2453",
+    "Data": "11/10/2026",
+    "Numeros": "02, 12, 13, 17, 20, 24, 30, -, CUIABA, /MT",
+    "URL": "",
+    "Logo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/logos/timemania.png",
+    "ImagemFundo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/fundos/timemania.jpg",
+    "Caption": "Timemania 2453 • Data: 11/10/2026 • Números: 02, 12, 13, 17, 20, 24, 30, -, CUIABA, /MT\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
+    "TelegramC1": "",
+    "TelegramC2": ""
   }
 ]
