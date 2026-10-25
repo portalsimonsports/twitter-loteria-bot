@@ -9388,5 +9388,20 @@
     "Caption": "#NAME? 401 • Data: 24/10/2026 • Números: 12, 14, 20, 26, 30, 44, Trevos:, 01, 04\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
     "TelegramC1": "",
     "TelegramC2": ""
+  },
+  {
+    "id": "loteria-federal-6112",
+    "Tipo": "VIDEO",
+    "Produto": "Loteria Federal 6112",
+    "Loteria": "Loteria Federal",
+    "Concurso": "6112",
+    "Data": "24/10/2026",
+    "Numeros": "064383, 047006, 015140, 034147, 009305",
+    "URL": "",
+    "Logo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/logos/loteria-federal.png",
+    "ImagemFundo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/fundos/loteria-federal.jpg",
+    "Caption": "Loteria Federal 6112 • Data: 24/10/2026 • Números: 064383, 047006, 015140, 034147, 009305\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
+    "TelegramC1": "",
+    "TelegramC2": ""
   }
 ]
