@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
 
 import daily_video_v19 as dv
 import youtube_thumbnail_v24 as yt
+import daily_video_v19_power_thumbnail_v29 as power
 
 try:
     import daily_growth_v20 as growth
@@ -31,6 +32,24 @@ TILES = {
     "lotofacil": 5,
 }
 
+# Cobertura integral das modalidades publicadas pelo canal.
+# As seis acima usam as matrizes reais já aprovadas no pacote V31.
+# As demais usam matriz exclusiva por modalidade, renderizada uma única família visual
+# (cores/logotipo próprios), sem cair em capa azul genérica nem herdar outra loteria.
+SUPPORTED = {
+    "mega-sena",
+    "lotofacil",
+    "quina",
+    "timemania",
+    "dupla-sena",
+    "lotomania",
+    "loteca",
+    "dia-de-sorte",
+    "super-sete",
+    "milionaria",
+    "federal",
+}
+
 _LEGACY_INTRO = dv._intro_image
 _LEGACY_SHORT = dv._result_short_image
 _LEGACY_LIVE = yt.gerar_capa_live
@@ -49,6 +68,13 @@ def _slug(value: Any) -> str:
         "quina": "quina",
         "timemania": "timemania",
         "loteca": "loteca",
+        "mega-sena": "mega-sena",
+        "dia-de-sorte": "dia-de-sorte",
+        "super-sete": "super-sete",
+        "mais-milionaria": "milionaria",
+        "milionaria": "milionaria",
+        "loteria-federal": "federal",
+        "federal": "federal",
     }
     return aliases.get(text, text)
 
@@ -156,14 +182,19 @@ def _render_horizontal(results: Sequence[Dict[str, Any]], size: Tuple[int, int])
 
     focus = _primary(results)
     slug = _slug(focus.get("loteria"))
-    if slug not in TILES:
+    if slug not in SUPPORTED:
         return None
 
-    # A matriz visual vem obrigatoriamente da arte aprovada da modalidade.
-    image = _approved_tile(slug).resize(size, Image.Resampling.LANCZOS).convert("RGB")
-    # Recupera um pouco da definição perdida pelo empacotamento da matriz,
-    # sem alterar desenho, cores ou composição aprovados.
-    image = image.filter(ImageFilter.UnsharpMask(radius=1.2, percent=135, threshold=2))
+    if slug in TILES:
+        # Seis modalidades com matriz real aprovada armazenada no pacote V31.
+        image = _approved_tile(slug).resize(size, Image.Resampling.LANCZOS).convert("RGB")
+        image = image.filter(ImageFilter.UnsharpMask(radius=1.2, percent=135, threshold=2))
+    else:
+        # Mega-Sena, Dia de Sorte, Super Sete, +Milionária e Federal:
+        # matriz exclusiva da própria modalidade, com tema/logotipo próprios.
+        # Nunca usa a matriz de outra loteria e nunca cai no layout azul genérico.
+        image = power._power_intro(results, size).convert("RGB")
+
     draw = ImageDraw.Draw(image, "RGBA")
 
     contest = str(focus.get("concurso") or "").strip()
@@ -244,7 +275,7 @@ def _approved_intro(results: Sequence[Dict[str, Any]], size: Tuple[int, int]) ->
 
 def _approved_short(data: Dict[str, Any]) -> Image.Image:
     slug = _slug(data.get("loteria"))
-    if slug not in TILES:
+    if slug not in SUPPORTED:
         return _LEGACY_SHORT(data)
 
     size = (1080, 1920)
@@ -323,4 +354,5 @@ __all__ = [
     "gerar_capa_live",
     "gerar_capa_diaria",
     "install",
+    "SUPPORTED",
 ]
