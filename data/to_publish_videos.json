@@ -9658,5 +9658,20 @@
     "Caption": "Mega-Sena 3077 • Data: 28/10/2026 • Números: 02, 14, 18, 31, 35, 40\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
     "TelegramC1": "",
     "TelegramC2": ""
+  },
+  {
+    "id": "loteria-federal-6113",
+    "Tipo": "VIDEO",
+    "Produto": "Loteria Federal 6113",
+    "Loteria": "Loteria Federal",
+    "Concurso": "6113",
+    "Data": "28/10/2026",
+    "Numeros": "003296, 071832, 034774, 050827, 036316",
+    "URL": "",
+    "Logo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/logos/loteria-federal.png",
+    "ImagemFundo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/fundos/loteria-federal.jpg",
+    "Caption": "Loteria Federal 6113 • Data: 28/10/2026 • Números: 003296, 071832, 034774, 050827, 036316\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
+    "TelegramC1": "",
+    "TelegramC2": ""
   }
 ]
