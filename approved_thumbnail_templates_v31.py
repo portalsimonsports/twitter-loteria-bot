@@ -180,8 +180,8 @@ def _render_horizontal(results: Sequence[Dict[str, Any]], size: Tuple[int, int])
     records = [
         {"loteria": _display_name(row.get("loteria")),
          "concurso": str(row.get("concurso") or "").strip(),
-         "premio": str(row.get("premio") or "").strip()}
-        for row in ordered
+         "premio": str(row.get("premio") or "").strip() if index == 0 else ""}
+        for index, row in enumerate(ordered)
     ]
     date = str(focus.get("data") or results[0].get("data") or "").strip()
     image = yt._draw_approved(
