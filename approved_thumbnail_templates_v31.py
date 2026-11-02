@@ -169,114 +169,44 @@ def _rounded_cover(draw: ImageDraw.ImageDraw, box, size, *, outline=(50, 145, 22
 
 
 def _render_horizontal(results: Sequence[Dict[str, Any]], size: Tuple[int, int]) -> Image.Image | None:
-    """
-    V34 — MATRIZ APROVADA REAL.
-
-    Usa diretamente a arte aprovada de cada modalidade armazenada em
-    assets/templates_aprovados/v31.b64.01..06. Não recria a identidade visual
-    com gerador genérico. Somente concurso, data e modalidades auxiliares são
-    atualizados sobre a própria matriz aprovada.
-    """
+    """V35 — render em resolução nativa, sem ampliar o sprite de 160x90."""
     if not results:
         return None
-
     focus = _primary(results)
     slug = _slug(focus.get("loteria"))
     if slug not in SUPPORTED:
-        return None
-
-    if slug in TILES:
-        # Seis modalidades com matriz real aprovada armazenada no pacote V31.
-        image = _approved_tile(slug).resize(size, Image.Resampling.LANCZOS).convert("RGB")
-        image = image.filter(ImageFilter.UnsharpMask(radius=1.2, percent=135, threshold=2))
-    else:
-        # Mega-Sena, Dia de Sorte, Super Sete, +Milionária e Federal:
-        # matriz exclusiva da própria modalidade, com tema/logotipo próprios.
-        # Nunca usa a matriz de outra loteria e nunca cai no layout azul genérico.
-        image = power._power_intro(results, size).convert("RGB")
-
-    draw = ImageDraw.Draw(image, "RGBA")
-
-    contest = str(focus.get("concurso") or "").strip()
-    date = str(focus.get("data") or "").strip()
-    support = _support_names(results, slug)
-
-    # Mantém a arte aprovada intacta e substitui apenas os campos variáveis.
-    contest_box = _rounded_cover(
-        draw, (42, 310, 785, 405), size,
-        outline=(0, 0, 0, 0), radius=5,
+        raise RuntimeError(f"Modalidade sem padrão visual: {focus.get('loteria')!r}")
+    ordered = [focus] + [row for row in results if _slug(row.get("loteria")) != slug]
+    records = [
+        {"loteria": _display_name(row.get("loteria")),
+         "concurso": str(row.get("concurso") or "").strip(),
+         "premio": str(row.get("premio") or "").strip()}
+        for row in ordered
+    ]
+    date = str(focus.get("data") or results[0].get("data") or "").strip()
+    image = yt._draw_approved(
+        date, records,
+        prize_highlight={"loteria": records[0]["loteria"],
+                         "concurso": records[0]["concurso"],
+                         "premio": records[0]["premio"]},
+        mode="resultado",
     )
-    contest_text = f"CONCURSO {contest}" if contest else "RESULTADO DE HOJE"
-    contest_font = _fit(
-        draw, contest_text,
-        contest_box[2] - contest_box[0] - 40,
-        int(62 * size[0] / 1280),
-        int(28 * size[0] / 1280),
-    )
-    draw.text(
-        (contest_box[0] + 18, (contest_box[1] + contest_box[3]) // 2),
-        contest_text,
-        font=contest_font,
-        fill="white",
-        anchor="lm",
-        stroke_width=max(2, int(3 * size[0] / 1280)),
-        stroke_fill=(0, 0, 0, 255),
-    )
-
-    date_box = _rounded_cover(
-        draw, (62, 601, 535, 695), size,
-        outline=(45, 145, 230, 210), radius=15,
-    )
-    date_text = date or "HOJE"
-    date_font = _fit(
-        draw, date_text,
-        date_box[2] - date_box[0] - 38,
-        int(42 * size[0] / 1280),
-        int(22 * size[0] / 1280),
-    )
-    draw.text(
-        (date_box[0] + 20, (date_box[1] + date_box[3]) // 2),
-        date_text,
-        font=date_font,
-        fill="white",
-        anchor="lm",
-        stroke_width=max(1, int(2 * size[0] / 1280)),
-        stroke_fill=(0, 0, 0, 255),
-    )
-
-    support_box = _rounded_cover(
-        draw, (555, 601, 1242, 695), size,
-        outline=(45, 145, 230, 210), radius=15,
-    )
-    support_font = _fit(
-        draw, support,
-        support_box[2] - support_box[0] - 38,
-        int(31 * size[0] / 1280),
-        int(17 * size[0] / 1280),
-    )
-    draw.text(
-        ((support_box[0] + support_box[2]) // 2, (support_box[1] + support_box[3]) // 2),
-        support,
-        font=support_font,
-        fill=(255, 222, 55, 255),
-        anchor="mm",
-        stroke_width=max(1, int(2 * size[0] / 1280)),
-        stroke_fill=(0, 0, 0, 255),
-    )
-    return image
+    if image.size != size:
+        image = image.resize(size, Image.Resampling.LANCZOS)
+    return image.convert("RGB")
 
 
 def _approved_intro(results: Sequence[Dict[str, Any]], size: Tuple[int, int]) -> Image.Image:
     approved = _render_horizontal(results, size)
     if approved is not None:
         return approved
-    return _LEGACY_INTRO(results, size)
+    raise RuntimeError("Não foi possível gerar capa: resultados ausentes")
 
 
 def _approved_short(data: Dict[str, Any]) -> Image.Image:
     slug = _slug(data.get("loteria"))
     if slug not in SUPPORTED:
-        return _LEGACY_SHORT(data)
+        raise RuntimeError(f"Short sem modalidade suportada: {data.get('loteria')!r}")
 
     size = (1080, 1920)
     approved = _render_horizontal([data], (1280, 720))
@@ -289,7 +219,7 @@ def _approved_short(data: Dict[str, Any]) -> Image.Image:
     bg = bg.filter(ImageFilter.GaussianBlur(30))
     bg = ImageEnhance.Brightness(bg).enhance(0.34).convert("RGB")
 
-    card_w = 1030
+    card_w = 1080
     card_h = round(card_w * 9 / 16)
     card = approved.resize((card_w, card_h), Image.Resampling.LANCZOS)
     x = (size[0] - card_w) // 2
@@ -319,7 +249,7 @@ def gerar_capa_live(data: str, targets: Sequence[Tuple[str, str, str]], *, prize
     loterias = [{"loteria": display, "concurso": contest, "premio": "", "data": data} for _key, display, contest in targets]
     approved = _render_horizontal(loterias, (1280, 720))
     if approved is None:
-        return _LEGACY_LIVE(data, targets, prize_highlight=prize_highlight)
+        raise RuntimeError("Live sem modalidades para capa")
     yt.OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = yt.OUT_DIR / f"thumbnail_live_aprovada_v31_{_safe_filename_date(data)}.jpg"
     approved.save(path, "JPEG", quality=95, optimize=True)
@@ -334,7 +264,7 @@ def gerar_capa_diaria(data: str, loterias: List[Dict[str, str]], *, video_id: st
         normalized.append(row)
     approved = _render_horizontal(normalized, (1280, 720))
     if approved is None:
-        return _LEGACY_DAILY(data, loterias, video_id=video_id, prize_highlight=prize_highlight)
+        raise RuntimeError("Vídeo sem modalidades para capa")
     yt.OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = yt.OUT_DIR / f"thumbnail_diaria_aprovada_v31_{_safe_filename_date(data)}_{video_id or 'novo'}.jpg"
     approved.save(path, "JPEG", quality=95, optimize=True)
