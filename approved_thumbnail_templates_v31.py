@@ -55,6 +55,7 @@ _LEGACY_SHORT = dv._result_short_image
 _LEGACY_LIVE = yt.gerar_capa_live
 _LEGACY_DAILY = yt.gerar_capa_diaria
 _SPRITE: Image.Image | None = None
+_BUILD_SHORT = dv._build_short
 
 
 def _slug(value: Any) -> str:
@@ -197,48 +198,98 @@ def _render_horizontal(results: Sequence[Dict[str, Any]], size: Tuple[int, int])
 
 
 def _approved_intro(results: Sequence[Dict[str, Any]], size: Tuple[int, int]) -> Image.Image:
+    if size[1] > size[0]:
+        if not results:
+            raise RuntimeError("Capa vertical sem resultados")
+        native = _portrait_frame(_primary(results), show_result=False)
+        from PIL import ImageOps
+        return ImageOps.pad(native, size, method=Image.Resampling.LANCZOS, color=(1, 5, 17))
     approved = _render_horizontal(results, size)
     if approved is not None:
         return approved
     raise RuntimeError("Não foi possível gerar capa: resultados ausentes")
 
 
-def _approved_short(data: Dict[str, Any]) -> Image.Image:
-    slug = _slug(data.get("loteria"))
+def _portrait_frame(data: Dict[str, Any], *, show_result: bool = True) -> Image.Image:
+    """V36: composição vertical nativa; nenhuma capa horizontal é esticada."""
+    name = _display_name(data.get("loteria"))
+    slug = _slug(name)
     if slug not in SUPPORTED:
-        raise RuntimeError(f"Short sem modalidade suportada: {data.get('loteria')!r}")
+        raise RuntimeError(f"Short sem modalidade suportada: {name!r}")
+    primary, dark, accent = power._theme(name)
+    image = power._gradient((1080, 1920))
+    draw = ImageDraw.Draw(image, "RGBA")
+    for y in range(0, 1920, 35):
+        draw.line((0, y, 1080, y), fill=(*primary, 18), width=2)
+    power._brand(draw, image.size)
+    # Área útil termina antes dos controles laterais e da legenda do Shorts.
+    left, right, cx = 65, 905, 485
+    draw.text((cx, 280), name.upper(), font=_fit(draw, name.upper(), 820, 92, 36),
+              fill=accent, anchor="mm", stroke_width=3, stroke_fill="black")
+    contest = str(data.get("concurso") or "").strip()
+    subtitle = f"CONCURSO {contest}" if contest else "RESULTADO OFICIAL"
+    draw.text((cx, 390), subtitle, font=_fit(draw, subtitle, 800, 55, 28), fill="white", anchor="mm")
+    logo = power._load_logo(name, (600, 190))
+    if logo is not None:
+        image.paste(logo, (cx - logo.width // 2, 470), logo)
+    else:
+        draw.rounded_rectangle((left, 485, right, 620), radius=24, fill=(*dark, 255), outline=accent, width=3)
+        draw.text((cx, 552), name.upper(), font=_fit(draw, name.upper(), 760, 60, 28), fill=accent, anchor="mm")
+    draw.rounded_rectangle((left, 700, right, 785), radius=22, fill=(*dark, 245), outline=accent, width=3)
+    draw.text((cx, 742), "RESULTADO DO CONCURSO", font=_fit(draw, "RESULTADO DO CONCURSO", 780, 42, 25), fill="white", anchor="mm")
 
-    size = (1080, 1920)
-    approved = _render_horizontal([data], (1280, 720))
-    if approved is None:
-        raise RuntimeError(f"Não foi possível gerar o template aprovado para {slug}.")
+    def grid(numbers, top, bottom):
+        count = len(numbers)
+        if not count:
+            return
+        columns = 5 if count > 12 else 4 if count > 6 else min(3, count)
+        rows = (count + columns - 1) // columns
+        cell_w, cell_h = (right-left)/columns, (bottom-top)/rows
+        radius = int(min(63, cell_w*.34, cell_h*.34))
+        font = _font(max(24, int(radius*.85)))
+        for index, number in enumerate(numbers):
+            row, col = divmod(index, columns)
+            row_count = min(columns, count-row*columns)
+            x = cx - row_count*cell_w/2 + (col+.5)*cell_w
+            y = top + (row+.5)*cell_h
+            draw.ellipse((x-radius, y-radius, x+radius, y+radius), fill=(248,248,248), outline=accent, width=4)
+            value = str(number).strip()
+            value = value.zfill(2) if value.isdigit() else value
+            draw.text((x, y), value, font=font, fill=(15,24,35), anchor="mm")
 
-    bg = approved.resize((3414, 1920), Image.Resampling.LANCZOS)
-    left = (bg.width - size[0]) // 2
-    bg = bg.crop((left, 0, left + size[0], size[1]))
-    bg = bg.filter(ImageFilter.GaussianBlur(30))
-    bg = ImageEnhance.Brightness(bg).enhance(0.34).convert("RGB")
+    if show_result:
+        parts = dv.parse_lottery_result(name, dv._raw_result(data))
+        if parts.second_draw_numbers:
+            for label, numbers, top, bottom in (
+                ("1º SORTEIO", parts.main_numbers, 850, 1070),
+                ("2º SORTEIO", parts.second_draw_numbers, 1150, 1370),
+            ):
+                draw.text((cx, top-22), label, font=_font(30), fill=accent, anchor="mm")
+                grid(numbers, top, bottom)
+        elif parts.loteca_games:
+            for index, game in enumerate(parts.loteca_games):
+                line = f"{game.index:02d}  {dv.team_name_without_code(game.home)} {game.home_score} x {game.away_score} {dv.team_name_without_code(game.away)}"
+                draw.text((cx, 835+index*43), line, font=_fit(draw, line, 810, 27, 16), fill="white", anchor="mm")
+        elif slug == "federal":
+            for index, prize in enumerate(dv._federal_prizes(dv._raw_result(data)), 1):
+                y = 830+(index-1)*100
+                draw.rounded_rectangle((left, y, right, y+82), radius=18, fill=(*dark,245), outline=accent, width=2)
+                draw.text((left+25,y+41), f"{index}º PRÊMIO", font=_font(31), fill=accent, anchor="lm")
+                draw.text((right-25,y+41), str(prize), font=_font(46), fill="white", anchor="rm")
+        else:
+            grid(parts.display_numbers, 825, 1360)
+        special = dv._special_display(parts)
+        if special:
+            draw.text((cx, 1420), special, font=_fit(draw, special, 810, 32, 18), fill=accent, anchor="mm")
+    date = str(data.get("data") or "").strip()
+    if date:
+        draw.text((cx, 1515), date, font=_font(42), fill="white", anchor="mm")
+    draw.text((cx, 1590), "PORTAL SIMONSPORTS", font=_font(30), fill=(180,225,255), anchor="mm")
+    return image
 
-    card_w = 1080
-    card_h = round(card_w * 9 / 16)
-    card = approved.resize((card_w, card_h), Image.Resampling.LANCZOS)
-    x = (size[0] - card_w) // 2
-    y = (size[1] - card_h) // 2
 
-    glow = Image.new("RGBA", size, (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow, "RGBA")
-    gd.rounded_rectangle((x - 15, y - 15, x + card_w + 15, y + card_h + 15), radius=30,
-                         outline=(74, 190, 255, 190), width=12)
-    glow = glow.filter(ImageFilter.GaussianBlur(16))
-    bg.paste(glow, (0, 0), glow)
-    bg.paste(card, (x, y))
-
-    draw = ImageDraw.Draw(bg, "RGBA")
-    draw.rounded_rectangle((x, y, x + card_w, y + card_h), radius=22, outline=(150, 225, 255, 230), width=4)
-    brand = "PADRÃO OFICIAL • PORTAL SIMONSPORTS"
-    font = _fit(draw, brand, 930, 34, 23)
-    draw.text((size[0] // 2, y + card_h + 105), brand, font=font, fill=(215, 240, 255, 255), anchor="mm")
-    return bg
+def _approved_short(data: Dict[str, Any]) -> Image.Image:
+    return _portrait_frame(data)
 
 
 def _safe_filename_date(value: str) -> str:
@@ -271,9 +322,21 @@ def gerar_capa_diaria(data: str, loterias: List[Dict[str, str]], *, video_id: st
     return str(path)
 
 
+def _build_short_primary_first(results, output, temp, voice):
+    focus = _primary(results)
+    ordered = list(results)
+    if focus:
+        for index, row in enumerate(ordered):
+            if row == focus:
+                ordered.insert(0, ordered.pop(index))
+                break
+    return _BUILD_SHORT(ordered, output, temp, voice)
+
+
 def install() -> None:
     dv._intro_image = _approved_intro
     dv._result_short_image = _approved_short
+    dv._build_short = _build_short_primary_first
     yt.gerar_capa_live = gerar_capa_live
     yt.gerar_capa_diaria = gerar_capa_diaria
 
