@@ -1,12 +1,6 @@
 name: Limpar publicações YouTube distorcidas V33
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - cleanup_distorted_youtube_v33.py
-      - approved_thumbnail_templates_v31.py
-      - .github/workflows/cleanup_distorted_youtube_v33.yml
   workflow_dispatch:
 
 permissions:
