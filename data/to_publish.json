@@ -1894,5 +1894,65 @@
     "Caption": "Mega-Sena 3082 • Data: 06/11/2026 • Números: 04, 16, 23, 24, 38, 44\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
     "TelegramC1": "",
     "TelegramC2": ""
+  },
+  {
+    "id": "quina-7162",
+    "Produto": "Quina 7162",
+    "Data": "08/11/2026",
+    "Descricao": "Números: 09, 29, 46, 57, 66",
+    "ImagemFundo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/fundos/quina.jpg",
+    "Logo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/logos/quina.png",
+    "URL": "",
+    "Caption": "Quina 7162 • Data: 08/11/2026 • Números: 09, 29, 46, 57, 66\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
+    "TelegramC1": "",
+    "TelegramC2": ""
+  },
+  {
+    "id": "lotofácil-3824",
+    "Produto": "Lotofácil 3824",
+    "Data": "08/11/2026",
+    "Descricao": "Números: 01, 02, 03, 07, 11, 12, 13, 14, 15, 17, 18, 19, 22, 24, 25",
+    "ImagemFundo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/fundos/lotofacil.jpg",
+    "Logo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/logos/lotofacil.png",
+    "URL": "",
+    "Caption": "Lotofácil 3824 • Data: 08/11/2026 • Números: 01, 02, 03, 07, 11, 12, 13, 14, 15, 17, 18, 19, 22, 24, 25\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
+    "TelegramC1": "",
+    "TelegramC2": ""
+  },
+  {
+    "id": "dia-de-sorte-1342",
+    "Produto": "Dia de Sorte 1342",
+    "Data": "08/11/2026",
+    "Descricao": "Números: 06, 07, 15, 17, 21, 22, 28, -, Janeiro",
+    "ImagemFundo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/fundos/dia-de-sorte.jpg",
+    "Logo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/logos/dia-de-sorte.png",
+    "URL": "",
+    "Caption": "Dia de Sorte 1342 • Data: 08/11/2026 • Números: 06, 07, 15, 17, 21, 22, 28, -, Janeiro\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
+    "TelegramC1": "",
+    "TelegramC2": ""
+  },
+  {
+    "id": "mega-sena-3083",
+    "Produto": "Mega-Sena 3083",
+    "Data": "08/11/2026",
+    "Descricao": "Números: 22, 25, 29, 37, 46, 54",
+    "ImagemFundo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/fundos/mega-sena.jpg",
+    "Logo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/logos/mega-sena.png",
+    "URL": "",
+    "Caption": "Mega-Sena 3083 • Data: 08/11/2026 • Números: 22, 25, 29, 37, 46, 54\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
+    "TelegramC1": "",
+    "TelegramC2": ""
+  },
+  {
+    "id": "timemania-2465",
+    "Produto": "Timemania 2465",
+    "Data": "08/11/2026",
+    "Descricao": "Números: 04, 16, 19, 23, 64, 69, 79, -, SAO, JOSE, /RS",
+    "ImagemFundo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/fundos/timemania.jpg",
+    "Logo": "https://raw.githubusercontent.com/portalsimonsports/twitter-loteria-bot/main/assets/logos/timemania.png",
+    "URL": "",
+    "Caption": "Timemania 2465 • Data: 08/11/2026 • Números: 04, 16, 19, 23, 64, 69, 79, -, SAO, JOSE, /RS\n\n#loterias #resultado #megasena #quina #lotofacil #lotomania #timemania #duplasena #diasorte #supersete #loteca #PortalSimonSports",
+    "TelegramC1": "",
+    "TelegramC2": ""
   }
 ]
