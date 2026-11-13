@@ -203,15 +203,40 @@ def build_segments(
 
 
 async def _synthesize_one(segment: SpeechSegment, output: Path) -> None:
+    """Repetir falhas transitórias do TTS sem trocar a voz aprovada."""
     settings = VOICE_SETTINGS[segment.voice]
-    communicator = edge_tts.Communicate(
-        text=segment.text,
-        voice=segment.voice,
-        rate=segment.rate or settings["rate"],
-        pitch=settings["pitch"],
-        volume=settings["volume"],
-    )
-    await communicator.save(str(output))
+    last_error: Exception | None = None
+    for attempt in range(1, 5):
+        output.unlink(missing_ok=True)
+        try:
+            # Criar um novo communicator a cada tentativa: uma conexão que falhou
+            # não deve ser reutilizada para os trechos seguintes.
+            communicator = edge_tts.Communicate(
+                text=segment.text,
+                voice=segment.voice,
+                rate=segment.rate or settings["rate"],
+                pitch=settings["pitch"],
+                volume=settings["volume"],
+            )
+            await communicator.save(str(output))
+            if not output.is_file() or output.stat().st_size < 1024:
+                raise RuntimeError("O serviço de voz retornou áudio vazio ou incompleto.")
+            return
+        except (Exception) as exc:
+            last_error = exc
+            output.unlink(missing_ok=True)
+            if attempt == 4:
+                break
+            print(
+                f"[VOZ V15] Falha temporária de TTS na tentativa {attempt}/4; "
+                f"nova tentativa com a mesma voz em {attempt * 3}s: {exc}",
+                flush=True,
+            )
+            await asyncio.sleep(attempt * 3)
+    raise RuntimeError(
+        f"TTS indisponível após 4 tentativas com a voz aprovada "
+        f"{voice_label(segment.voice)}: {last_error}"
+    ) from last_error
 
 
 async def _synthesize_all(segments: List[SpeechSegment], directory: Path) -> List[Path]:
