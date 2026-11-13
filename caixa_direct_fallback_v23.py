@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import requests
@@ -107,17 +108,43 @@ def fetch_official_result(key: str, display: str, contest: str, *, timeout: int 
     if not slug or not contest_digits:
         return None
 
-    response = requests.get(
-        f"{BASE_URL}/{slug}/{contest_digits}",
-        headers={
-            "Accept": "application/json, text/plain, */*",
-            "User-Agent": "PortalSimonSports-GitHubActions/2026",
-        },
-        timeout=timeout,
-    )
-    if response.status_code in (404, 204):
-        return None
-    response.raise_for_status()
+    url = f"{BASE_URL}/{slug}/{contest_digits}"
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "User-Agent": "PortalSimonSports-GitHubActions/2026",
+    }
+    # A API pública da CAIXA pode retornar 500 intermitente, inclusive
+    # na Super Sete. Repetir apenas erros transitórios, sem trocar
+    # concurso, fonte ou inventar resultado.
+    transient = {408, 425, 429, 500, 502, 503, 504}
+    response = None
+    for attempt in range(3):
+        try:
+            response = requests.get(url, headers=headers, timeout=timeout)
+            if response.status_code in (404, 204):
+                return None
+            if response.status_code in transient and attempt < 2:
+                delay = (2, 5)[attempt]
+                print(
+                    f"[CAIXA] {slug}/{contest_digits}: HTTP "
+                    f"{response.status_code}, tentativa {attempt + 1}/3; "
+                    f"repetindo em {delay}s.",
+                    flush=True,
+                )
+                time.sleep(delay)
+                continue
+            response.raise_for_status()
+            break
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as error:
+            if attempt == 2:
+                raise
+            delay = (2, 5)[attempt]
+            print(
+                f"[CAIXA] {slug}/{contest_digits}: rede indisponível "
+                f"(tentativa {attempt + 1}/3): {error}",
+                flush=True,
+            )
+            time.sleep(delay)
     payload = response.json() or {}
 
     returned_contest = _contest(payload.get("numero") or payload.get("numeroConcurso") or "")
