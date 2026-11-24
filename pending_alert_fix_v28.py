@@ -6,6 +6,139 @@ from datetime import timedelta
 import pending_alert_fix_v27 as base
 
 
+
+# V34: chamada narrada independente + recuperação da transmissão no mesmo URL.
+from pathlib import Path
+import tempfile
+from PIL import Image, ImageOps
+import daily_video_v19 as video
+from youtube_thumbnail_v24 import gerar_capa_live
+
+RESULTS_URL = "https://www.portalsimonsports.com/search/label/Loterias%20Caixa?m=1"
+
+
+def _broadcasts(token, date):
+    items = []
+    page = None
+    while True:
+        params = {"part": "id,snippet,status,contentDetails", "mine": "true", "maxResults": 50}
+        if page:
+            params["pageToken"] = page
+        payload = base.live._request("GET", f"{base.live.API}/liveBroadcasts", token=token, params=params)
+        for item in payload.get("items", []):
+            snippet = item.get("snippet", {})
+            if date in snippet.get("title", "") and base.live.LIVE_MARKER in snippet.get("description", ""):
+                items.append(item)
+        page = payload.get("nextPageToken")
+        if not page:
+            return items
+
+
+def _credentials(cofre_get, cofre_cache):
+    for account in base.listar_contas_youtube(cofre_cache):
+        get = lambda key, default="": base._cofre_get_safe(cofre_get, "YOUTUBE", key, conta=account, default=default)
+        if not all(get(k) for k in ("CLIENT_ID", "CLIENT_SECRET", "REFRESH_TOKEN")):
+            continue
+        yield account, base.get_access_token(get("CLIENT_ID"), get("CLIENT_SECRET"), get("REFRESH_TOKEN")), get("PRIVACY_STATUS", "public") or "public"
+
+
+def _scheduled_hour():
+    return max(0, min(23, int(os.getenv("YOUTUBE_DAILY_LIVE_SCHEDULE_HOUR", "21"))))
+
+
+def _find_call(token, marker):
+    api = base.live.API
+    payload = base.live._request("GET", f"{api}/channels", token=token,
+        params={"part": "contentDetails", "mine": "true"})
+    for channel in payload.get("items", []):
+        playlist = channel["contentDetails"]["relatedPlaylists"]["uploads"]
+        page = None
+        # A chamada pertence ao dia atual. Inspeciona até 250 uploads recentes.
+        for _ in range(5):
+            params = {"part": "snippet", "playlistId": playlist, "maxResults": 50}
+            if page:
+                params["pageToken"] = page
+            result = base.live._request("GET", f"{api}/playlistItems", token=token, params=params)
+            for item in result.get("items", []):
+                sn = item.get("snippet", {})
+                if marker in sn.get("description", ""):
+                    return sn.get("resourceId", {}).get("videoId", "")
+            page = result.get("nextPageToken")
+            if not page:
+                break
+    return ""
+
+
+def _render_call(date, targets, prize, hour):
+    directory = Path("output")
+    directory.mkdir(exist_ok=True)
+    cover = Path(gerar_capa_live(date, targets, prize_highlight=prize or {}))
+    output = directory / ("chamada_" + date.replace("/", "-") + "_v34.mp4")
+    names = "; ".join(f"{display}, concurso {contest}" for _, display, contest in targets)
+    speech = (f"Olá! Portal Simon Sports. Hoje, {date}, temos os seguintes concursos previstos: "
+              f"{names}. Acompanhe os resultados no nosso canal. "
+              "Inscreva-se, compartilhe e ative as notificações. "
+              "Confira também os resultados completos no Portal Simon Sports.")
+    duration = max(45.0, len(speech.split()) * 0.65 + 8.0)
+    voice = video.select_single_voice({"concurso": date, "loteria": "Resultados Diários"})
+    if not str(voice).startswith("pt-BR-"):
+        raise RuntimeError("Voz fora do padrão pt-BR; chamada bloqueada.")
+    with tempfile.TemporaryDirectory(prefix="chamada-v34-") as folder:
+        temp = Path(folder)
+        with Image.open(cover) as source:
+            frame = ImageOps.pad(source.convert("RGB"), (1920, 1080), color=(0, 18, 44))
+        music, audio = temp / "music.wav", temp / "audio.wav"
+        video.write_soundtrack(music, duration, "Resultados Diários", date, 0, duration - 5)
+        video.synthesize_custom_segments({"data": date}, duration,
+            [video.SpeechSegment(0.5, voice, speech, 1.0, video.FULL_RATE, "opening")],
+            music, audio, primary_voice=voice)
+        video._write_concat_video([(frame, duration)], audio, output, duration, temp)
+    return str(output), str(cover)
+
+
+def _ensure_call(date, targets, prize, cofre_get, cofre_cache, timezone):
+    marker = "PSS_CHAMADA_V34_" + date.replace("/", "")
+    hour = _scheduled_hour()
+    now = base.queue._now_in_timezone(timezone)
+    if now.hour < 7 or now.hour >= hour:
+        return
+    package = None
+    for account, token, privacy in _credentials(cofre_get, cofre_cache):
+        try:
+            if _find_call(token, marker):
+                continue
+            broadcasts = _broadcasts(token, date)
+            live_url = next((base.build_watch_url(b["id"]) for b in broadcasts
+                if b.get("status", {}).get("lifeCycleStatus") not in ("complete", "revoked")), "")
+            if package is None:
+                package = _render_call(date, targets, prize, hour)
+            description = "\n".join([f"Concursos previstos para {date}:", *[
+                f"{display} — concurso {contest}" for _, display, contest in targets],
+                "", "Inscreva-se e ative as notificações.",
+                f"Transmissão programada: {hour:02d}h (Brasília).",
+                live_url, "", RESULTS_URL, "", marker])
+            vid = base.live.upload_video(access_token=token, video_path=package[0],
+                title=f"Hoje tem sorteio! Loterias Caixa | {date} | Portal SimonSports",
+                description=description, tags=["Loterias Caixa", "Portal SimonSports"],
+                category_id="24", privacy_status=privacy)
+            base.live.upload_thumbnail(token, vid, package[1])
+            base.queue._log(f"[{account}] Chamada narrada publicada: {base.build_watch_url(vid)}")
+        except Exception as error:
+            base.queue._log(f"[{account}] Chamada narrada falhou: {type(error).__name__}")
+
+
+def _existing_live_state(date, cofre_get, cofre_cache):
+    active, completed = [], []
+    for account, token, _privacy in _credentials(cofre_get, cofre_cache):
+        for item in _broadcasts(token, date):
+            state = item.get("status", {}).get("lifeCycleStatus", "")
+            if state == "complete":
+                completed.append(base.build_watch_url(item["id"]))
+            elif state != "revoked":
+                active.append(base.build_watch_url(item["id"]))
+    return active, completed
+
+
 _original_pending_dates = base._pending_dates
 
 
@@ -63,7 +196,7 @@ def _process_date_decoupled(
     else:
         targets = base._last_result_targets(calendar_values, date)
     if not targets:
-        if not is_today:
+        if not is_today and not config.dry_run:
             base._mark_orphan_alert_ignored(api_spreadsheet, date, config.timezone)
         else:
             base.queue._log(f"{date}: sem concursos previstos para chamada/publicação.")
@@ -73,7 +206,7 @@ def _process_date_decoupled(
 
     imported = base.cal.history_imported_map(history_values)
     waiting_history = [f"{display} {contest}" for key, display, contest in targets if imported.get(key) != contest]
-    if waiting_history:
+    if waiting_history and not config.dry_run:
         try:
             inserted = base.caixa_fallback.append_missing_results(
                 worksheet,
@@ -92,22 +225,28 @@ def _process_date_decoupled(
     daily_index = base.queue._ensure_column(worksheet, headers, daily_column)
     rows, missing_rows = base.cal._find_today_rows(values, headers, daily_index, date, targets)
 
-    if is_today:
+    active_live = []
+    completed_live = []
+    if is_today and not config.dry_run:
         try:
-            live_urls = base.live.ensure_daily_lives(
-                date,
-                targets,
-                cofre_get,
-                cofre_cache,
-                timezone=config.timezone,
-                prize_highlight=prize_highlight,
-            )
-            live_url = live_urls[0] if live_urls else ""
+            active_live, completed_live = _existing_live_state(date, cofre_get, cofre_cache)
+            now = base.queue._now_in_timezone(config.timezone)
+            if not active_live and not completed_live and now.hour < _scheduled_hour():
+                live_urls = base.live.ensure_daily_lives(
+                    date,
+                    targets,
+                    cofre_get,
+                    cofre_cache,
+                    timezone=config.timezone,
+                    prize_highlight=prize_highlight,
+                )
+                active_live = live_urls
+            live_url = (active_live or completed_live or [""])[0]
             base._upsert_alert_status(
                 api_spreadsheet,
                 date,
                 live_url,
-                "CHAMADA_CRIADA | resultados publicados separadamente",
+                "LIVE_AGENDADA | aguardando resultados" if active_live else "SEM_LIVE_ATIVA",
                 config.timezone,
             )
             base.queue._log(f"{date}: Live/chamada independente preparada: {live_url}")
@@ -121,11 +260,39 @@ def _process_date_decoupled(
             )
             base.queue._log(f"{date}: chamada falhou, mas o fluxo de resultados continuará: {error}")
 
+    if is_today and not config.dry_run:
+        try:
+            _ensure_call(date, targets, prize_highlight, cofre_get, cofre_cache, config.timezone)
+        except Exception as error:
+            base.queue._log(f"Chamada narrada não bloqueante: {type(error).__name__}")
+
     if not rows:
         if missing_rows == ["JÁ PUBLICADO"]:
-            base._mark_alert_final(api_spreadsheet, date, config.timezone)
+            if not config.dry_run:
+                base._mark_alert_final(api_spreadsheet, date, config.timezone)
             return 0
         base.queue._log(f"{date}: aguardando resultados para publicação independente: " + ", ".join(missing_rows))
+        return 0
+
+    # Reutiliza a transmissão existente apenas após o horário previsto.
+    # A publicação individual continua em seu workflow próprio.
+    if is_today and active_live and not completed_live and not config.dry_run:
+        if base.queue._now_in_timezone(config.timezone).hour >= _scheduled_hour():
+            try:
+                result = base.live.publish_day_as_live(
+                    date, targets, rows, worksheet, daily_index, cofre_get, cofre_cache,
+                    dry_run=False, pause=config.pausa, timezone=config.timezone,
+                    prize_highlight=prize_highlight,
+                )
+                if result:
+                    base._mark_alert_final(api_spreadsheet, date, config.timezone)
+                    return result
+            except Exception as error:
+                base.queue._log(f"Falha na live; usando publicação convencional: {type(error).__name__}")
+        else:
+            return 0
+    if completed_live and not config.dry_run:
+        base.queue._log("Live já concluída; conferir gravação antes de repetir publicação.")
         return 0
 
     base.queue._log(
