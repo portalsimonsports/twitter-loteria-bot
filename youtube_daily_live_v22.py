@@ -52,7 +52,7 @@ def _scheduled_start_iso(timezone: str) -> str:
     hour = max(0, min(23, int(os.getenv("YOUTUBE_DAILY_LIVE_SCHEDULE_HOUR", "21") or "21")))
     scheduled = now.replace(hour=hour, minute=0, second=0, microsecond=0)
     if scheduled <= now:
-        scheduled = now + timedelta(minutes=10)
+        raise RuntimeError("Horário original já passou; reutilize a live existente ou publique o resultado convencional.")
     return scheduled.isoformat()
 
 
@@ -326,14 +326,32 @@ def publish_day_as_live(
             stream = _stream_details(token, stream_id)
             target = _rtmp_target(stream)
             process = _start_ffmpeg(package["completo"], target)
-            _wait_stream_active(token, stream_id)
-            _transition(token, broadcast_id, "live")
-            rc = process.wait()
-            if rc != 0:
-                raise RuntimeError(f"FFmpeg terminou com código {rc}")
-            time.sleep(8)
-            _transition(token, broadcast_id, "complete")
-            _update_video_metadata(token, broadcast_id, full_meta, category_id, full_tags)
+            try:
+                _wait_stream_active(token, stream_id)
+                _transition(token, broadcast_id, "live")
+                rc = process.wait(timeout=1800)
+                if rc != 0:
+                    raise RuntimeError(f"FFmpeg terminou com código {rc}")
+                time.sleep(8)
+                _transition(token, broadcast_id, "complete")
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+            # A gravação já foi concluída: falhas de metadados ou Shorts não podem duplicá-la.
+            full_url = build_watch_url(broadcast_id)
+            first_full_url = first_full_url or full_url
+            successes += 1
+            try:
+                final_meta = dict(full_meta)
+                final_meta["description"] = (str(full_meta.get("description", ""))[:4800] + "\n\n" + LIVE_MARKER)
+                _update_video_metadata(token, broadcast_id, final_meta, category_id, full_tags)
+            except Exception as metadata_error:
+                queue._log(f"[{account}] Replay concluído; metadados pendentes: {type(metadata_error).__name__}")
             try:
                 upload_thumbnail(token, broadcast_id, package["poster"])
             except Exception as thumbnail_error:
@@ -355,10 +373,9 @@ def publish_day_as_live(
             full_url = build_watch_url(broadcast_id)
             first_full_url = first_full_url or full_url
             first_short_url = first_short_url or short_url
-            successes += 1
             queue._log(f"[{account}] Live diária concluída no mesmo URL: {full_url}")
         except Exception as live_error:
-            queue._log(f"[{account}] ERRO LIVE — nenhuma publicação alternativa será criada: {live_error}")
+            queue._log(f"[{account}] ERRO LIVE — chamador poderá publicar alternativa: {live_error}")
             traceback.print_exc()
         time.sleep(max(0.5, min(pause, 15.0)))
 
