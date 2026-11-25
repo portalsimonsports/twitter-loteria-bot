@@ -11,6 +11,8 @@ from typing import Any, Dict, Iterable, List, Sequence, Tuple
 import edge_tts
 
 from voice_narration_v14 import (
+    APPROVED_VOICES,
+    available_approved_voices,
     VOICE_ANTONIO,
     VOICE_FRANCISCA,
     VOICE_SETTINGS,
@@ -204,7 +206,7 @@ def build_segments(
 
 async def _synthesize_one(segment: SpeechSegment, output: Path) -> None:
     """Repetir falhas transitórias do TTS sem trocar a voz aprovada."""
-    if segment.voice not in {"pt-BR-FranciscaNeural", "pt-BR-AntonioNeural", "pt-BR-ThalitaNeural"}:
+    if segment.voice not in APPROVED_VOICES:
         raise RuntimeError(f"Voz não aprovada para YouTube: {segment.voice}")
     settings = VOICE_SETTINGS[segment.voice]
     last_error: Exception | None = None
