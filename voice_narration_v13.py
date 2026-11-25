@@ -13,7 +13,7 @@ import edge_tts
 
 
 VOICE_FRANCISCA = "pt-BR-FranciscaNeural"
-VOICE_THALITA = "pt-BR-ThalitaMultilingualNeural"
+VOICE_THALITA = "pt-BR-ThalitaNeural"
 VOICE_ANTONIO = "pt-BR-AntonioNeural"
 VOICE_CYCLE = (VOICE_FRANCISCA, VOICE_THALITA, VOICE_ANTONIO)
 
