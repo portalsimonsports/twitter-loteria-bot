@@ -204,6 +204,8 @@ def build_segments(
 
 async def _synthesize_one(segment: SpeechSegment, output: Path) -> None:
     """Repetir falhas transitórias do TTS sem trocar a voz aprovada."""
+    if segment.voice not in {"pt-BR-FranciscaNeural", "pt-BR-AntonioNeural", "pt-BR-ThalitaNeural"}:
+        raise RuntimeError(f"Voz não aprovada para YouTube: {segment.voice}")
     settings = VOICE_SETTINGS[segment.voice]
     last_error: Exception | None = None
     for attempt in range(1, 5):
