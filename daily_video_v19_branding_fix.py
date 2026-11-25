@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
+import wave
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -284,7 +285,7 @@ def _build_full_branded(
                 )
                 current += base.FULL_ENGAGEMENT_DURATION
 
-    closing_duration = 19.0
+    closing_duration = 25.0
     scenes.append((_closing_image_branded(results, (1920, 1080)), closing_duration))
     segments.extend(
         [
@@ -312,13 +313,19 @@ def _build_full_branded(
     contest_seed = base._date_key(results[0].get("data") if results else "")
     base.write_soundtrack(music, duration, "Resultados Diários", contest_seed, base.FULL_INTRO_DURATION, current)
     base.synthesize_custom_segments(
-        results[0] if results else {},
+        {**(results[0] if results else {}), "_elastic_closing": True},
         duration,
         segments,
         music,
         audio,
         primary_voice=primary,
     )
+    with wave.open(str(audio), "rb") as wav:
+        actual_duration = wav.getnframes() / wav.getframerate()
+    if actual_duration > duration:
+        image, previous_duration = scenes[-1]
+        scenes[-1] = (image, previous_duration + actual_duration - duration)
+        duration = actual_duration
     render_dir = temp / "daily_full_render"
     render_dir.mkdir()
     base._write_concat_video(scenes, audio, output, duration, render_dir)
