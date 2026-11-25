@@ -34,7 +34,7 @@ TECHNICAL_VOICE_LABELS = {
 }
 
 # V37: lista exclusiva aprovada pelo titular do canal.
-ALL_VOICES: Tuple[str, ...] = (VOICE_FRANCISCA, VOICE_ANTONIO, VOICE_THALITA_NEURAL)
+ALL_VOICES: Tuple[str, ...] = v15.APPROVED_VOICES
 
 PAIR_CYCLE: Tuple[Tuple[str, str], ...] = (
     (VOICE_FRANCISCA, VOICE_ANTONIO),
@@ -71,11 +71,16 @@ def _seed(data: Dict[str, Any]) -> int:
 
 
 def select_single_voice(data: Dict[str, Any]) -> str:
-    return ALL_VOICES[_seed(data) % len(ALL_VOICES)]
+    voices = v15.available_approved_voices()
+    return voices[_seed(data) % len(voices)]
 
 
 def select_presenter_pair(data: Dict[str, Any]) -> Tuple[str, str]:
-    return PAIR_CYCLE[_seed(data) % len(PAIR_CYCLE)]
+    voices = v15.available_approved_voices()
+    if len(voices) == 1:
+        return (voices[0], voices[0])
+    index = _seed(data) % len(voices)
+    return (voices[index], voices[(index + 1) % len(voices)])
 
 
 def pair_label(pair: Sequence[str]) -> str:
