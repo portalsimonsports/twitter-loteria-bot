@@ -33,19 +33,13 @@ TECHNICAL_VOICE_LABELS = {
     VOICE_THALITA_NEURAL: "Thalita Neural",
 }
 
-ALL_VOICES: Tuple[str, ...] = (
-    VOICE_FRANCISCA,
-    VOICE_THALITA_MULTILINGUAL,
-    VOICE_ANTONIO,
-    VOICE_THALITA_NEURAL,
-)
+# V36: somente as duas vozes brasileiras anteriormente aprovadas,
+# sem seleção automática de variante multilíngue ou voz não validada.
+ALL_VOICES: Tuple[str, ...] = (VOICE_FRANCISCA, VOICE_ANTONIO)
 
 PAIR_CYCLE: Tuple[Tuple[str, str], ...] = (
     (VOICE_FRANCISCA, VOICE_ANTONIO),
-    (VOICE_THALITA_MULTILINGUAL, VOICE_ANTONIO),
-    (VOICE_FRANCISCA, VOICE_THALITA_NEURAL),
-    (VOICE_ANTONIO, VOICE_THALITA_NEURAL),
-    (VOICE_FRANCISCA, VOICE_THALITA_MULTILINGUAL),
+    (VOICE_ANTONIO, VOICE_FRANCISCA),
 )
 
 extract_numbers = v15.extract_numbers
