@@ -159,6 +159,109 @@ def _pending_dates_recent_only(api_spreadsheet, today: str):
     return filtered
 
 
+
+def _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofre_cache, config):
+    """V39: vídeo normal e Short têm identificadores independentes da transmissão."""
+    q = base.queue
+    results = [data for _, data in rows]
+    if config.dry_run:
+        q._log(f"PREVISÃO V39: vídeo normal de resultados {date}, sem upload.")
+        return 0
+    # Não confundir o replay ou a chamada antecipada com um upload de resultados.
+    markers = [str(worksheet.cell(n, daily_index + 1).value or "") for n, _ in rows]
+    import re
+    import hashlib
+    signature = hashlib.sha256("|".join(sorted(
+        f"{q._lottery_key(d.get('loteria'))}:{d.get('concurso')}" for d in results
+    )).encode()).hexdigest()[:16]
+    prefix = "PSS_RESULTADO_V39_" + date.replace("/", "") + "_" + signature
+    package = None
+    done = []
+    need_short = q._special_short(results)
+    for account, token, privacy in _credentials(cofre_get, cofre_cache):
+        try:
+            normal = _find_call(token, prefix + "_NORMAL")
+            short = _find_call(token, prefix + "_SHORT") if need_short else ""
+            # Reutiliza URLs históricas somente se o vídeo pertence ao canal,
+            # tem conteúdo de resultados na descrição e não é replay nem chamada.
+            for mark in markers:
+                for kind, vid in re.findall(r"(Completo|Short):\s*https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]+)", mark):
+                    if (kind == "Completo" and normal) or (kind == "Short" and (short or not need_short)):
+                        continue
+                    payload = base.live._request("GET", f"{base.live.API}/videos", token=token,
+                        params={"part": "snippet,status", "id": vid})
+                    channel = base.live._request("GET", f"{base.live.API}/channels", token=token,
+                        params={"part": "id", "mine": "true"})
+                    mine = {item["id"] for item in channel.get("items", [])}
+                    for item in payload.get("items", []):
+                        sn = item.get("snippet", {})
+                        desc = sn.get("description", "")
+                        if sn.get("channelId") not in mine or date not in desc:
+                            continue
+                        if "PSS_CHAMADA_" in desc or base.live.LIVE_MARKER in desc:
+                            continue
+                        if not all(q._compact_result(d) in desc for d in results):
+                            continue
+                        if item.get("status", {}).get("uploadStatus") not in ("processed", "uploaded"):
+                            continue
+                        if kind == "Completo" and "V22 LIVE" not in mark.upper():
+                            normal = vid
+                        elif kind == "Short" and need_short:
+                            short = vid
+            if not normal or (need_short and not short):
+                if package is None:
+                    package = video.gerar_pacote_diario(results, output_dir="output", gerar_short=need_short)
+                for kind in ("NORMAL", "SHORT"):
+                    if (kind == "NORMAL" and normal) or (kind == "SHORT" and (short or not need_short)):
+                        continue
+                    meta = q._metadata(results, "completo" if kind == "NORMAL" else "short")
+                    desc = meta["description"][:4500] + "\n\n" + prefix + "_" + kind
+                    vid = base.live.upload_video(access_token=token,
+                        video_path=package["completo" if kind == "NORMAL" else "short"],
+                        title=meta["title"], description=desc, tags=meta["tags"],
+                        category_id=base._cofre_get_safe(cofre_get, "YOUTUBE", "CATEGORY_ID", conta=account, default="24") or "24",
+                        privacy_status=privacy)
+                    if kind == "NORMAL":
+                        normal = vid
+                        try:
+                            base.live.upload_thumbnail(token, vid, package["poster"])
+                        except Exception as exc:
+                            q._log(f"[{account}] Capa do vídeo normal pendente: {type(exc).__name__}")
+                    else:
+                        short = vid
+            if normal and (short or not need_short):
+                done.append((normal, short))
+                q._log(f"[{account}] V39 normal={base.build_watch_url(normal)} short={base.build_watch_url(short) if short else 'não necessário'}")
+        except Exception as exc:
+            q._log(f"[{account}] V39 publicação independente pendente: {type(exc).__name__}: {exc}")
+    accounts = base.listar_contas_youtube(cofre_cache)
+    if not done or len(done) != len(accounts):
+        return 0
+    normal, short = done[0]
+    mark = f"Publicado YOUTUBE DIÁRIO V19 V39 | Completo: {base.build_watch_url(normal)}"
+    mark += f" | Short: {base.build_watch_url(short)}" if short else " | Short: não necessário"
+    q._mark_rows(worksheet, [n for n, _ in rows], daily_index, mark)
+    return 1
+
+
+def _all_result_rows(values, headers, date, targets):
+    wanted = {(k, str(n)) for k, _, n in targets}
+    found = {}
+    for n, row in enumerate(values[1:], start=2):
+        try:
+            data = base.queue._row_data(row, headers)
+            base.queue._validate_video_data(data)
+        except Exception:
+            continue
+        pair = (base.queue._lottery_key(data.get("loteria")), base.cal._contest_key(data.get("concurso")))
+        if str(data.get("data") or "").strip() == date and pair in wanted:
+            found[pair] = (n, data)
+    missing = [display for k, display, contest in targets if (k, str(contest)) not in found]
+    if missing:
+        return [], missing
+    return [found[(k, str(contest))] for k, _, contest in targets], []
+
+
 def _process_date_decoupled(
     date: str,
     *,
@@ -223,7 +326,7 @@ def _process_date_decoupled(
     headers = list(values[0])
     daily_column = os.getenv("PUBLICADO_YT_DIARIO_COL", base.queue.DAILY_COLUMN_DEFAULT)
     daily_index = base.queue._ensure_column(worksheet, headers, daily_column)
-    rows, missing_rows = base.cal._find_today_rows(values, headers, daily_index, date, targets)
+    rows, missing_rows = _all_result_rows(values, headers, date, targets)
 
     active_live = []
     completed_live = []
@@ -260,12 +363,7 @@ def _process_date_decoupled(
             )
             base.queue._log(f"{date}: chamada falhou, mas o fluxo de resultados continuará: {error}")
 
-    if is_today and not config.dry_run:
-        try:
-            _ensure_call(date, targets, prize_highlight, cofre_get, cofre_cache, config.timezone)
-        except Exception as error:
-            base.queue._log(f"Chamada narrada não bloqueante: {type(error).__name__}")
-
+    # V39: antes dos resultados somente o agendamento da live; nenhum MP4 normal de chamada.
     if not rows:
         if missing_rows == ["JÁ PUBLICADO"]:
             if not config.dry_run:
@@ -274,41 +372,28 @@ def _process_date_decoupled(
         base.queue._log(f"{date}: aguardando resultados para publicação independente: " + ", ".join(missing_rows))
         return 0
 
-    # Reutiliza a transmissão existente apenas após o horário previsto.
-    # A publicação individual continua em seu workflow próprio.
+    # Verificação explícita do resultado oficial, inclusive na recuperação.
+    if not config.dry_run:
+        for key, display, contest in targets:
+            try:
+                official = base.caixa_fallback.fetch_official_result(key, display, contest)
+                if not official or official.get("data") != date or not official.get("numeros"):
+                    base.queue._log(f"V39 bloqueado: {display} {contest} ainda sem confirmação oficial.")
+                    return 0
+            except Exception as exc:
+                base.queue._log(f"V39 aguardando CAIXA: {display} {contest}: {type(exc).__name__}")
+                return 0
     if is_today and active_live and not completed_live and not config.dry_run:
         if base.queue._now_in_timezone(config.timezone).hour >= _scheduled_hour():
             try:
-                result = base.live.publish_day_as_live(
+                base.live.publish_day_as_live(
                     date, targets, rows, worksheet, daily_index, cofre_get, cofre_cache,
                     dry_run=False, pause=config.pausa, timezone=config.timezone,
                     prize_highlight=prize_highlight,
                 )
-                if result:
-                    base._mark_alert_final(api_spreadsheet, date, config.timezone)
-                    return result
             except Exception as error:
-                base.queue._log(f"Falha na live; usando publicação convencional: {type(error).__name__}")
-        else:
-            return 0
-    if completed_live and not config.dry_run:
-        base.queue._log("Live já concluída; conferir gravação antes de repetir publicação.")
-        return 0
-
-    base.queue._log(
-        f"SINAL VERDE {date}: {len(targets)} concurso(s) completo(s); publicando resultado fora da Live/chamada."
-    )
-    result = base.queue._publish_day(
-        date,
-        rows,
-        worksheet,
-        daily_index,
-        cofre_get,
-        cofre_cache,
-        dry_run=config.dry_run,
-        pause=config.pausa,
-        timezone=config.timezone,
-    )
+                base.queue._log(f"Falha na live; vídeo normal independente continua: {type(error).__name__}")
+    result = _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofre_cache, config)
     if result:
         base._mark_alert_final(api_spreadsheet, date, config.timezone)
     return result
@@ -337,7 +422,8 @@ def processar_resumo_por_calendario_api_v28() -> int:
 
     today = base.cal._today(config.timezone)
     pending = _pending_dates_recent_only(api_spreadsheet, today)
-    previous_dates = [d for d in pending if d != today]
+    yesterday = (base._date_obj(today) - timedelta(days=1)).strftime("%d/%m/%Y")
+    previous_dates = sorted({d for d in pending if d != today} | {yesterday}, key=base._date_obj)
 
     published = 0
     for date in previous_dates:
