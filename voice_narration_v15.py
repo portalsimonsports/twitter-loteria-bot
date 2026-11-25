@@ -4,7 +4,7 @@ import asyncio
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
@@ -319,6 +319,21 @@ def synthesize_narration_mix(
         temp_dir = Path(temporary)
         try:
             clips = asyncio.run(_synthesize_all(segments, temp_dir))
+            # V36: no boletim completo, o encerramento é dimensionado pela
+            # duração REAL dos arquivos TTS, nunca por estimativa de palavras.
+            if data.get("_elastic_closing") and not compact:
+                first_closing = next((i for i, s in enumerate(segments) if s.role == "closing"), len(segments))
+                if first_closing < len(segments):
+                    cursor = 0.0
+                    if first_closing:
+                        previous = segments[first_closing - 1]
+                        cursor = previous.start + _clip_duration(clips[first_closing - 1]) + 0.35
+                    for i in range(first_closing, len(segments)):
+                        segment = segments[i]
+                        start = max(segment.start, cursor)
+                        segments[i] = replace(segment, start=start)
+                        cursor = start + _clip_duration(clips[i]) + 0.35
+                    duration = max(duration, cursor + 3.0)
             fitted = _fit_segments(segments, clips, duration, compact)
         except Exception as exc:
             raise RuntimeError(
@@ -329,7 +344,7 @@ def synthesize_narration_mix(
         for item in fitted:
             command.extend(["-i", str(item.clip)])
 
-        filters: List[str] = ["[0:a]volume=0.10,highpass=f=45,lowpass=f=14500[music]"]
+        filters: List[str] = [f"[0:a]volume=0.10,highpass=f=45,lowpass=f=14500,apad,atrim=duration={duration:.3f}[music]"]
         labels = ["[music]"]
 
         for input_index, item in enumerate(fitted, start=1):
