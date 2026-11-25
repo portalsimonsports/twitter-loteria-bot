@@ -8,7 +8,7 @@ import voice_narration_v15 as v15
 
 
 VOICE_FRANCISCA = v15.VOICE_FRANCISCA
-VOICE_THALITA_MULTILINGUAL = v15.VOICE_THALITA
+VOICE_THALITA_MULTILINGUAL = "pt-BR-ThalitaMultilingualNeural"
 VOICE_ANTONIO = v15.VOICE_ANTONIO
 VOICE_THALITA_NEURAL = "pt-BR-ThalitaNeural"
 
@@ -33,13 +33,13 @@ TECHNICAL_VOICE_LABELS = {
     VOICE_THALITA_NEURAL: "Thalita Neural",
 }
 
-# V36: somente as duas vozes brasileiras anteriormente aprovadas,
-# sem seleção automática de variante multilíngue ou voz não validada.
-ALL_VOICES: Tuple[str, ...] = (VOICE_FRANCISCA, VOICE_ANTONIO)
+# V37: lista exclusiva aprovada pelo titular do canal.
+ALL_VOICES: Tuple[str, ...] = (VOICE_FRANCISCA, VOICE_ANTONIO, VOICE_THALITA_NEURAL)
 
 PAIR_CYCLE: Tuple[Tuple[str, str], ...] = (
     (VOICE_FRANCISCA, VOICE_ANTONIO),
-    (VOICE_ANTONIO, VOICE_FRANCISCA),
+    (VOICE_ANTONIO, VOICE_THALITA_NEURAL),
+    (VOICE_THALITA_NEURAL, VOICE_FRANCISCA),
 )
 
 extract_numbers = v15.extract_numbers
