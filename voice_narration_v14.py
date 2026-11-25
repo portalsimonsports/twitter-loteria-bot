@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import re
 import subprocess
 import tempfile
@@ -28,6 +29,26 @@ VOICE_SETTINGS = {
     VOICE_THALITA: {"rate": "-1%", "pitch": "+0Hz", "volume": "+0%"},
     VOICE_ANTONIO: {"rate": "-2%", "pitch": "-1Hz", "volume": "+0%"},
 }
+
+# V38: lista autorizada; novas vozes somente se anunciadas pelo Edge TTS.
+EXTRA_VOICES = ("pt-BR-BrendaNeural", "pt-BR-ElzaNeural", "pt-BR-GiovannaNeural", "pt-BR-DonatoNeural", "pt-BR-FabioNeural", "pt-BR-HumbertoNeural",)
+APPROVED_VOICES = VOICE_CYCLE + EXTRA_VOICES
+for _voice in EXTRA_VOICES:
+    VOICE_SETTINGS[_voice] = {"rate": "-2%", "pitch": "+0Hz", "volume": "+0%"}
+    VOICE_LABELS[_voice] = _voice.removeprefix("pt-BR-").removesuffix("Neural").replace("Fabio", "Fábio")
+
+@functools.lru_cache(maxsize=1)
+def available_approved_voices():
+    try:
+        available = {item.get("ShortName") for item in asyncio.run(edge_tts.list_voices())}
+        selected = tuple(v for v in APPROVED_VOICES if v in available)
+        if selected:
+            print("[VOZ V38] Disponíveis e aprovadas:", ", ".join(selected), flush=True)
+            return selected
+    except Exception as exc:
+        print(f"[VOZ V38] Catálogo indisponível: {type(exc).__name__}; mantendo seleção anterior.", flush=True)
+    return VOICE_CYCLE
+
 
 
 @dataclass(frozen=True)
@@ -61,17 +82,18 @@ def extract_numbers(data: Dict[str, Any]) -> List[str]:
 
 def select_voice(data: Dict[str, Any]) -> str:
     """Escolhe uma voz única por resultado e alterna nos concursos seguintes."""
+    cycle = available_approved_voices()
     contest = str(data.get("concurso") or "").strip()
     digits = re.sub(r"\D+", "", contest)
     if digits:
-        index = int(digits) % len(VOICE_CYCLE)
+        index = int(digits) % len(cycle)
     else:
         seed = "|".join(
             str(data.get(key) or "").strip()
             for key in ("loteria", "produto", "data", "data_sorteio")
         )
-        index = zlib.crc32(seed.encode("utf-8")) % len(VOICE_CYCLE)
-    return VOICE_CYCLE[index]
+        index = zlib.crc32(seed.encode("utf-8")) % len(cycle)
+    return cycle[index]
 
 
 def voice_label(voice: str) -> str:
