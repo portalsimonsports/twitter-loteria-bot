@@ -271,7 +271,11 @@ def _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofr
     signature = hashlib.sha256("|".join(sorted(
         f"{q._lottery_key(d.get('loteria'))}:{d.get('concurso')}" for d in results
     )).encode()).hexdigest()[:16]
-    prefix = "PSS_RESULTADO_V39_" + date.replace("/", "") + "_" + signature
+    # Federal 6120: substituir o conteúdo visual incorreto, sem reutilizar o upload antigo.
+    federal_repair = date == "25/11/2026" and any(
+        "federal" in str(d.get("loteria", "")).lower()
+        and base.cal._contest_key(d.get("concurso")) == "6120" for d in results)
+    prefix = ("PSS_RESULTADO_V42_" if federal_repair else "PSS_RESULTADO_V39_") + date.replace("/", "") + "_" + signature
     package = None
     done = []
     need_short = q._special_short(results)
@@ -281,7 +285,7 @@ def _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofr
             short = _find_call(token, prefix + "_SHORT") if need_short else ""
             # Reutiliza URLs históricas somente se o vídeo pertence ao canal,
             # tem conteúdo de resultados na descrição e não é replay nem chamada.
-            for mark in markers:
+            for mark in ([] if federal_repair else markers):
                 for kind, vid in re.findall(r"(Completo|Short):\s*https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]+)", mark):
                     if (kind == "Completo" and normal) or (kind == "Short" and (short or not need_short)):
                         continue
