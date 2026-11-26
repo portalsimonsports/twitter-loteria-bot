@@ -259,7 +259,7 @@ def _repair_recent_descriptions(cofre_get, cofre_cache):
             base.queue._log(f"[{account}] V40 revisão indisponível: {type(exc).__name__}")
 
 
-def _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofre_cache, config):
+def _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofre_cache, config, *, consolidated=False):
     """V39: vídeo normal e Short têm identificadores independentes da transmissão."""
     q = base.queue
     results = [data for _, data in rows]
@@ -278,16 +278,19 @@ def _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofr
         "federal" in str(d.get("loteria", "")).lower()
         and base.cal._contest_key(d.get("concurso")) == "6120" for d in results)
     prefix = ("PSS_RESULTADO_V42_" if federal_repair else "PSS_RESULTADO_V39_") + date.replace("/", "") + "_" + signature
+    if consolidated:
+        prefix = "PSS_RESULTADO_V44_CONSOLIDADO_" + date.replace("/", "") + "_" + signature
     package = None
     done = []
-    need_short = q._special_short(results)
+    need_short = not consolidated
     for account, token, privacy in _credentials(cofre_get, cofre_cache):
         try:
             normal = _find_call(token, prefix + "_NORMAL")
             short = _find_call(token, prefix + "_SHORT") if need_short else ""
             # Reutiliza URLs históricas somente se o vídeo pertence ao canal,
             # tem conteúdo de resultados na descrição e não é replay nem chamada.
-            for mark in ([] if federal_repair else markers):
+            # Tags por concurso/formato sao a chave; nao reutilizar consolidado como individual.
+            for mark in []:
                 for kind, vid in re.findall(r"(Completo|Short):\s*https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]+)", mark):
                     if (kind == "Completo" and normal) or (kind == "Short" and (short or not need_short)):
                         continue
@@ -319,6 +322,12 @@ def _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofr
                         continue
                     meta = q._metadata(results, "completo" if kind == "NORMAL" else "short")
                     from youtube_description_link_fix_v32 import _fix_description
+                    if consolidated:
+                        meta["title"] = f"Resultados de Todas as Loterias Caixa | {date}"
+                    else:
+                        lottery = q._display_lottery(results[0].get("loteria"))
+                        contest = base.cal._contest_key(results[0].get("concurso"))
+                        meta["title"] = f"Resultado {lottery} {contest} | {date}" + (" #Shorts" if kind == "SHORT" else "")
                     desc = _fix_description(meta["description"])
                     vid = base.live.upload_video(access_token=token,
                         video_path=package["completo" if kind == "NORMAL" else "short"],
@@ -350,7 +359,9 @@ def _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofr
     normal, short = done[0]
     mark = f"Publicado YOUTUBE DIÁRIO V19 V39 | Completo: {base.build_watch_url(normal)}"
     mark += f" | Short: {base.build_watch_url(short)}" if short else " | Short: não necessário"
-    q._mark_rows(worksheet, [n for n, _ in rows], daily_index, mark)
+    if not consolidated:
+        q._mark_rows(worksheet, [n for n, _ in rows], daily_index, mark)
+    q._log(f"V44 {'CONSOLIDADO' if consolidated else 'INDIVIDUAL'} {date}: {base.build_watch_url(normal)}")
     return 1
 
 
@@ -501,15 +512,20 @@ def _process_date_decoupled(
     if not verified:
         return 0
     complete = len(verified) == len(targets) and not missing_rows
+    # V44: cada concurso recebe normal + Short, independentemente dos demais.
+    result = 0
+    for row in verified:
+        result += _publish_regular_results(date, [row], worksheet, daily_index, cofre_get, cofre_cache, config)
+    # Consolidado possui identificador próprio e nunca sobrescreve os individuais.
+    # Com um único concurso, o vídeo individual já representa o dia inteiro.
     if complete:
-        result = _publish_regular_results(date, verified, worksheet, daily_index, cofre_get, cofre_cache, config)
-        if result:
+        if len(verified) > 1:
+            summary = _publish_regular_results(date, verified, worksheet, daily_index, cofre_get, cofre_cache, config, consolidated=True)
+            if summary and result == len(verified):
+                base._mark_alert_final(api_spreadsheet, date, config.timezone)
+            result += summary
+        elif result:
             base._mark_alert_final(api_spreadsheet, date, config.timezone)
-    else:
-        # Cada resultado confirmado recebe publicação própria, sem fechar o dia.
-        result = 0
-        for row in verified:
-            result += _publish_regular_results(date, [row], worksheet, daily_index, cofre_get, cofre_cache, config)
     return result
 
 
