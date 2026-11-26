@@ -16,6 +16,45 @@ def _build_short_duration_safe(
     if not results:
         raise RuntimeError("Nenhum resultado informado para o Short diário.")
 
+    # Federal: medir a locução real de todos os cinco bilhetes antes de renderizar.
+    if len(results) == 1 and base._normalize_name(results[0].get("loteria")) == "Loteria Federal":
+        import subprocess
+        import sys
+        data = results[0]
+        speech = base._full_speech(data)
+        closing = "Mais resultados em Portal Simon Sports ponto com. Inscreva-se no canal e ative as notificações."
+        approved = {"pt-BR-FranciscaNeural", "pt-BR-AntonioNeural", "pt-BR-ThalitaNeural"}
+        if voice not in approved:
+            voice = "pt-BR-FranciscaNeural"
+        durations = []
+        tracks = []
+        for index, phrase in enumerate((speech, closing)):
+            mp3 = temp / f"federal_voice_{index}.mp3"
+            wav = temp / f"federal_voice_{index}.wav"
+            subprocess.run([sys.executable, "-m", "edge_tts", "--voice", voice,
+                "--text", phrase, "--write-media", str(mp3)], check=True, timeout=180)
+            seconds = float(subprocess.check_output(["ffprobe", "-v", "error",
+                "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
+                str(mp3)], text=True))
+            if seconds <= 0:
+                raise RuntimeError("Federal: locução vazia")
+            duration = seconds + 1.5
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(mp3),
+                "-af", "adelay=200:all=1,apad", "-t", str(duration),
+                "-ar", "44100", "-ac", "2", str(wav)], check=True)
+            durations.append(duration)
+            tracks.append(wav)
+        audio = temp / "federal_short_audio.wav"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(tracks[0]),
+            "-i", str(tracks[1]), "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[a]",
+            "-map", "[a]", str(audio)], check=True)
+        render_dir = temp / "federal_short_render"
+        render_dir.mkdir(exist_ok=True)
+        scenes = [(base._result_short_image(data), durations[0]),
+            (branding._closing_image_branded(results, (1080, 1920)), durations[1])]
+        base._write_concat_video(scenes, audio, output, sum(durations), render_dir)
+        return sum(durations)
+
     count = len(results)
     per_result = 24.0 if count == 1 else max(4.5, min(10.0, 50.0 / count))
 
