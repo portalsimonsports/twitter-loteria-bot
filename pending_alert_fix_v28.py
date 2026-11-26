@@ -63,6 +63,13 @@ def _find_call(token, marker):
                 sn = item.get("snippet", {})
                 if marker in sn.get("description", ""):
                     return sn.get("resourceId", {}).get("videoId", "")
+            ids = [item.get("snippet", {}).get("resourceId", {}).get("videoId", "") for item in result.get("items", [])]
+            ids = [vid for vid in ids if vid]
+            if ids:
+                details = base.live._request("GET", f"{api}/videos", token=token, params={"part": "snippet", "id": ",".join(ids)})
+                for item in details.get("items", []):
+                    if marker in item.get("snippet", {}).get("tags", []):
+                        return item["id"]
             page = result.get("nextPageToken")
             if not page:
                 break
@@ -160,6 +167,50 @@ def _pending_dates_recent_only(api_spreadsheet, today: str):
 
 
 
+def _clean_public_video(token, vid, marker=""):
+    """Migra identificadores antigos para tags e corrige URL sem reenviar vídeo."""
+    from youtube_description_link_fix_v32 import _fix_description
+    from youtube_upload import sanitize_youtube_tags
+    import re
+    api = base.live.API
+    response = base.live._request("GET", f"{api}/videos", token=token, params={"part": "snippet", "id": vid})
+    for item in response.get("items", []):
+        original = item.get("snippet", {})
+        description = original.get("description", "")
+        internal = re.findall(r"(?m)^\s*(PSS_(?:RESULTADO|CHAMADA)_[A-Za-z0-9_]+)\s*$", description)
+        tags = sanitize_youtube_tags(list(dict.fromkeys(([marker] if marker else []) + internal + original.get("tags", []))))
+        cleaned = _fix_description(description)
+        if cleaned == description and tags == original.get("tags", []):
+            continue
+        snippet = {k: original[k] for k in ("title", "categoryId", "defaultLanguage", "defaultAudioLanguage") if k in original}
+        snippet.update({"description": cleaned, "tags": tags})
+        base.live._request("PUT", f"{api}/videos", token=token, params={"part": "snippet"}, json_body={"id": vid, "snippet": snippet})
+        base.queue._log(f"V40 descrição corrigida sem reenviar: {vid}")
+
+
+def _repair_recent_descriptions(cofre_get, cofre_cache):
+    """Corrige publicações anteriores V34/V39 na conta autenticada."""
+    import re
+    for account, token, _privacy in _credentials(cofre_get, cofre_cache):
+        try:
+            api = base.live.API
+            channels = base.live._request("GET", f"{api}/channels", token=token, params={"part": "contentDetails", "mine": "true"})
+            for channel in channels.get("items", []):
+                playlist = channel["contentDetails"]["relatedPlaylists"]["uploads"]
+                result = base.live._request("GET", f"{api}/playlistItems", token=token, params={"part": "snippet", "playlistId": playlist, "maxResults": 50})
+                for item in result.get("items", []):
+                    sn = item.get("snippet", {})
+                    description = sn.get("description", "")
+                    vid = sn.get("resourceId", {}).get("videoId", "")
+                    if vid and (re.search(r"(?m)^\s*PSS_(?:RESULTADO|CHAMADA)_", description) or ("Loterias Caixa" in description and "portalsimonsports.com/search/label/Loterias" in description and RESULTS_URL not in description)):
+                        try:
+                            _clean_public_video(token, vid)
+                        except Exception as exc:
+                            base.queue._log(f"[{account}] V40 revisão pendente {vid}: {type(exc).__name__}")
+        except Exception as exc:
+            base.queue._log(f"[{account}] V40 revisão indisponível: {type(exc).__name__}")
+
+
 def _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofre_cache, config):
     """V39: vídeo normal e Short têm identificadores independentes da transmissão."""
     q = base.queue
@@ -215,10 +266,11 @@ def _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofr
                     if (kind == "NORMAL" and normal) or (kind == "SHORT" and (short or not need_short)):
                         continue
                     meta = q._metadata(results, "completo" if kind == "NORMAL" else "short")
-                    desc = meta["description"][:4500] + "\n\n" + prefix + "_" + kind
+                    from youtube_description_link_fix_v32 import _fix_description
+                    desc = _fix_description(meta["description"])
                     vid = base.live.upload_video(access_token=token,
                         video_path=package["completo" if kind == "NORMAL" else "short"],
-                        title=meta["title"], description=desc, tags=meta["tags"],
+                        title=meta["title"], description=desc, tags=[prefix + "_" + kind, *meta["tags"]],
                         category_id=base._cofre_get_safe(cofre_get, "YOUTUBE", "CATEGORY_ID", conta=account, default="24") or "24",
                         privacy_status=privacy)
                     if kind == "NORMAL":
@@ -230,6 +282,12 @@ def _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofr
                     else:
                         short = vid
             if normal and (short or not need_short):
+                for vid, marker in ((normal, prefix + "_NORMAL"), (short, prefix + "_SHORT")):
+                    if vid:
+                        try:
+                            _clean_public_video(token, vid, marker)
+                        except Exception as exc:
+                            q._log(f"[{account}] V40 limpeza pendente: {type(exc).__name__}")
                 done.append((normal, short))
                 q._log(f"[{account}] V39 normal={base.build_watch_url(normal)} short={base.build_watch_url(short) if short else 'não necessário'}")
         except Exception as exc:
@@ -406,6 +464,8 @@ def processar_resumo_por_calendario_api_v28() -> int:
     config = base.queue.carregar_config()
     client = base.queue._google_client()
     cofre_cache, cofre_get = base.queue._load_cofre(client, config)
+    if not config.dry_run:
+        _repair_recent_descriptions(cofre_get, cofre_cache)
 
     main_spreadsheet = client.open_by_key(config.google_sheet_id)
     worksheet = main_spreadsheet.worksheet(config.sheet_tab)
