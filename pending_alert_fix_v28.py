@@ -86,19 +86,25 @@ def _render_call(date, targets, prize, hour):
               f"{names}. Acompanhe os resultados no nosso canal. "
               "Inscreva-se, compartilhe e ative as notificações. "
               "Confira também os resultados completos no Portal Simon Sports.")
-    duration = max(45.0, len(speech.split()) * 0.65 + 8.0)
-    voice = video.select_single_voice({"concurso": date, "loteria": "Resultados Diários"})
-    if not str(voice).startswith("pt-BR-"):
-        raise RuntimeError("Voz fora do padrão pt-BR; chamada bloqueada.")
-    with tempfile.TemporaryDirectory(prefix="chamada-v34-") as folder:
+    # V41: narração pt-BR aprovada, sem vinheta nem música inicial.
+    import subprocess
+    import sys
+    with tempfile.TemporaryDirectory(prefix="chamada-v41-") as folder:
         temp = Path(folder)
         with Image.open(cover) as source:
             frame = ImageOps.pad(source.convert("RGB"), (1920, 1080), color=(0, 18, 44))
-        music, audio = temp / "music.wav", temp / "audio.wav"
-        video.write_soundtrack(music, duration, "Resultados Diários", date, 0, duration - 5)
-        video.synthesize_custom_segments({"data": date}, duration,
-            [video.SpeechSegment(0.5, voice, speech, 1.0, video.FULL_RATE, "opening")],
-            music, audio, primary_voice=voice)
+        speech_audio = temp / "speech.mp3"
+        audio = temp / "audio.wav"
+        subprocess.run([sys.executable, "-m", "edge_tts", "--voice", "pt-BR-FranciscaNeural",
+            "--text", speech, "--write-media", str(speech_audio)], check=True, timeout=180)
+        length = float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries",
+            "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(speech_audio)], text=True))
+        if length < 5:
+            raise RuntimeError("Narração ausente ou incompleta")
+        duration = length + 18.0
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(speech_audio),
+            "-af", "adelay=10000:all=1,apad", "-t", str(duration), "-ar", "44100",
+            "-ac", "2", str(audio)], check=True)
         video._write_concat_video([(frame, duration)], audio, output, duration, temp)
     return str(output), str(cover)
 
@@ -132,6 +138,46 @@ def _ensure_call(date, targets, prize, cofre_get, cofre_cache, timezone):
             base.queue._log(f"[{account}] Chamada narrada publicada: {base.build_watch_url(vid)}")
         except Exception as error:
             base.queue._log(f"[{account}] Chamada narrada falhou: {type(error).__name__}")
+
+
+def _transmit_narrated_call(date, targets, prize, cofre_get, cofre_cache):
+    """V41: transmite a chamada no broadcast já existente, sem criar outro."""
+    package = None
+    import time
+    import subprocess
+    for account, token, _privacy in _credentials(cofre_get, cofre_cache):
+        for item in _broadcasts(token, date):
+            state = item.get("status", {}).get("lifeCycleStatus", "")
+            if state not in ("created", "ready", "testing"):
+                continue
+            vid = item["id"]
+            try:
+                stream_id = item.get("contentDetails", {}).get("boundStreamId")
+                if not stream_id:
+                    stream_id = base.live._create_stream(token, date)["id"]
+                    base.live._bind(token, vid, stream_id)
+                if package is None:
+                    package = _render_call(date, targets, prize, _scheduled_hour())
+                stream = base.live._stream_details(token, stream_id)
+                process = base.live._start_ffmpeg(package[0], base.live._rtmp_target(stream))
+                try:
+                    base.live._wait_stream_active(token, stream_id, timeout_seconds=45)
+                    base.live._transition(token, vid, "live")
+                    if process.wait(timeout=300) != 0:
+                        raise RuntimeError("FFmpeg falhou")
+                    time.sleep(3)
+                    base.live._transition(token, vid, "complete")
+                    base.queue._log(f"V41 chamada narrada concluída no mesmo URL: {base.build_watch_url(vid)}")
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+            except Exception as exc:
+                base.queue._log(f"V41 chamada narrada pendente: {type(exc).__name__}")
 
 
 def _existing_live_state(date, cofre_get, cofre_cache):
@@ -315,9 +361,7 @@ def _all_result_rows(values, headers, date, targets):
         if str(data.get("data") or "").strip() == date and pair in wanted:
             found[pair] = (n, data)
     missing = [display for k, display, contest in targets if (k, str(contest)) not in found]
-    if missing:
-        return [], missing
-    return [found[(k, str(contest))] for k, _, contest in targets], []
+    return [found[(k, str(contest))] for k, _, contest in targets if (k, str(contest)) in found], missing
 
 
 def _process_date_decoupled(
@@ -421,39 +465,45 @@ def _process_date_decoupled(
             )
             base.queue._log(f"{date}: chamada falhou, mas o fluxo de resultados continuará: {error}")
 
-    # V39: antes dos resultados somente o agendamento da live; nenhum MP4 normal de chamada.
+    # V41: a chamada ao vivo não depende da apuração.
+    if not config.dry_run and (not is_today or base.queue._now_in_timezone(config.timezone).hour >= _scheduled_hour()):
+        try:
+            _transmit_narrated_call(date, targets, prize_highlight, cofre_get, cofre_cache)
+        except Exception as exc:
+            base.queue._log(f"V41 transmissão pendente {date}: {type(exc).__name__}")
     if not rows:
-        if missing_rows == ["JÁ PUBLICADO"]:
-            if not config.dry_run:
-                base._mark_alert_final(api_spreadsheet, date, config.timezone)
-            return 0
-        base.queue._log(f"{date}: aguardando resultados para publicação independente: " + ", ".join(missing_rows))
+        base.queue._log(f"{date}: aguardando resultados: " + ", ".join(missing_rows))
         return 0
 
-    # Verificação explícita do resultado oficial, inclusive na recuperação.
-    if not config.dry_run:
-        for key, display, contest in targets:
-            try:
-                official = base.caixa_fallback.fetch_official_result(key, display, contest)
-                if not official or official.get("data") != date or not official.get("numeros"):
-                    base.queue._log(f"V39 bloqueado: {display} {contest} ainda sem confirmação oficial.")
-                    return 0
-            except Exception as exc:
-                base.queue._log(f"V39 aguardando CAIXA: {display} {contest}: {type(exc).__name__}")
-                return 0
-    if is_today and active_live and not completed_live and not config.dry_run:
-        if base.queue._now_in_timezone(config.timezone).hour >= _scheduled_hour():
-            try:
-                base.live.publish_day_as_live(
-                    date, targets, rows, worksheet, daily_index, cofre_get, cofre_cache,
-                    dry_run=False, pause=config.pausa, timezone=config.timezone,
-                    prize_highlight=prize_highlight,
-                )
-            except Exception as error:
-                base.queue._log(f"Falha na live; vídeo normal independente continua: {type(error).__name__}")
-    result = _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofre_cache, config)
-    if result:
-        base._mark_alert_final(api_spreadsheet, date, config.timezone)
+    verified = []
+    for row in rows:
+        data = row[1]
+        key = base.queue._lottery_key(data.get("loteria"))
+        contest = base.cal._contest_key(data.get("concurso"))
+        display = next((d for k, d, c in targets if k == key and str(c) == contest), str(data.get("loteria")))
+        if config.dry_run:
+            verified.append(row)
+            continue
+        try:
+            official = base.caixa_fallback.fetch_official_result(key, display, contest)
+            if official and official.get("data") == date and official.get("numeros"):
+                verified.append(row)
+            else:
+                base.queue._log(f"V41 aguardando confirmação: {display} {contest}")
+        except Exception as exc:
+            base.queue._log(f"V41 aguardando CAIXA: {display} {contest}: {type(exc).__name__}")
+    if not verified:
+        return 0
+    complete = len(verified) == len(targets) and not missing_rows
+    if complete:
+        result = _publish_regular_results(date, verified, worksheet, daily_index, cofre_get, cofre_cache, config)
+        if result:
+            base._mark_alert_final(api_spreadsheet, date, config.timezone)
+    else:
+        # Cada resultado confirmado recebe publicação própria, sem fechar o dia.
+        result = 0
+        for row in verified:
+            result += _publish_regular_results(date, [row], worksheet, daily_index, cofre_get, cofre_cache, config)
     return result
 
 
