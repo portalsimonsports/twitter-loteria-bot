@@ -248,7 +248,9 @@ def _repair_recent_descriptions(cofre_get, cofre_cache):
                     sn = item.get("snippet", {})
                     description = sn.get("description", "")
                     vid = sn.get("resourceId", {}).get("videoId", "")
-                    if vid and (re.search(r"(?m)^\s*PSS_(?:RESULTADO|CHAMADA)_", description) or ("Loterias Caixa" in description and "portalsimonsports.com/search/label/Loterias" in description and RESULTS_URL not in description)):
+                    if vid and "loterias caixa" in description.lower() and RESULTS_URL in description:
+                        base.queue._log(f"V43 URL integral confirmada na descrição retornada pelo YouTube: {vid} | {RESULTS_URL}")
+                    if vid and (re.search(r"(?m)^\s*PSS_(?:RESULTADO|CHAMADA)_", description) or ("loterias caixa" in description.lower() and RESULTS_URL not in description and ("portalsimo" in description.lower() or "outros resultados" in description.lower()))):
                         try:
                             _clean_public_video(token, vid)
                         except Exception as exc:
