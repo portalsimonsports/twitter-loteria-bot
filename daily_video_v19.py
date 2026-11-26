@@ -171,7 +171,12 @@ def _special_speech(parts) -> str:
 
 
 def _federal_prizes(raw: str) -> List[str]:
-    return [item.strip() for item in raw.split("|") if item.strip()][:5]
+    # Federal: cinco bilhetes em ordem oficial, sem converter em inteiros.
+    import re
+    prizes = [item.strip() for item in re.split(r"[|,;\n]+", str(raw or "")) if item.strip()]
+    if len(prizes) != 5 or any(not re.fullmatch(r"\d{5,6}", item) for item in prizes):
+        raise ValueError("Loteria Federal: esperados cinco bilhetes individuais válidos")
+    return [item.zfill(6) for item in prizes]
 
 
 def _number_grid(
@@ -265,9 +270,6 @@ def _federal_result_image(data: Dict[str, Any], size: Tuple[int, int]) -> Image.
         draw.text((155, y + (row_height - 22) / 2), f"{index}º PRÊMIO", font=_font(30 if width > height else 28, True), fill=(180, 238, 255), anchor="lm")
         draw.text((width - 155, y + (row_height - 22) / 2), prize, font=_font(55 if width > height else 52, True), fill="white", anchor="rm")
         y += row_height
-    optional = _optional_line(data)
-    if optional:
-        draw.text((width / 2, height - 90), optional, font=_fit_font(draw, optional, width - 180, 25, 17), fill=(220, 245, 255), anchor="mm")
     return image
 
 
@@ -359,7 +361,7 @@ def _full_speech(data: Dict[str, Any], *, loteca_games: Sequence[Any] | None = N
         prizes = _federal_prizes(raw)
         ordinals = ("Primeiro", "Segundo", "Terceiro", "Quarto", "Quinto")
         phrases = [f"Loteria Federal, concurso {contest}."]
-        phrases.extend(f"{ordinals[index]} prêmio: {value}." for index, value in enumerate(prizes))
+        phrases.extend(f"{ordinals[index]} prêmio: {', '.join(value)}." for index, value in enumerate(prizes))
         return " ".join(phrases)
     parts = parse_lottery_result(lottery, raw)
     numbers = ", ".join(str(int(value)) if str(value).isdigit() else str(value) for value in parts.display_numbers)
@@ -405,7 +407,7 @@ def _result_full_scenes(data: Dict[str, Any]) -> List[Tuple[Image.Image, float, 
         return output
     if lottery == "Loteria Federal":
         speech = _full_speech(data)
-        return [(_federal_result_image(data, size), _estimated_scene_duration(speech, 22.0, 32.0), speech)]
+        return [(_federal_result_image(data, size), _estimated_scene_duration(speech, 38.0, 55.0), speech)]
     speech = _full_speech(data)
     minimum = 17.0 if len(parts.display_numbers) > 10 else 13.0
     return [(_standard_result_image(data, size), _estimated_scene_duration(speech, minimum, 28.0), speech)]
