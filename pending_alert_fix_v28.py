@@ -381,6 +381,54 @@ def _all_result_rows(values, headers, date, targets):
     return [found[(k, str(contest))] for k, _, contest in targets if (k, str(contest)) in found], missing
 
 
+
+def _history_result(api_spreadsheet, history_values, key, display, contest, date):
+    """V45: use the actual official JSON stored in history, never just the counter."""
+    import json
+    import re
+    f = base.caixa_fallback
+    slug = f._slug(key, display)
+    if not slug:
+        return None
+    # A provisional source must not be treated as official.
+    for line in history_values[1:]:
+        record = dict(zip(history_values[0], line))
+        if record.get("loteria") == slug and str(record.get("status", "")).upper().startswith("PROVIS") and str(record.get("ultimoImportado")) == str(contest):
+            return None
+    try:
+        ws = api_spreadsheet.worksheet(f"API_HIST_{slug.upper()}_RESUMO")
+        headers = ws.row_values(1)
+        ci, ji, ui = (headers.index(name) for name in ("concurso", "json_extra", "url_fonte"))
+        from gspread.utils import rowcol_to_a1
+        # Exact contest lookup; only read a single matching row, no full JSON history.
+        cell = ws.find(re.compile(r"^" + re.escape(str(contest)) + r"$"), in_column=ci + 1)
+        if cell is None:
+            return None
+        line = ws.row_values(cell.row)
+        if line[ui].strip() != f"{f.BASE_URL}/{slug}/{contest}":
+            return None
+        payload = json.loads(line[ji])
+        if str(payload.get("numero")) != str(contest) or payload.get("dataApuracao") != date:
+            return None
+        counts = {"quina":5,"lotofacil":15,"diadesorte":7,"megasena":6,"timemania":7,"duplasena":6,"supersete":7,"lotomania":20,"maismilionaria":6}
+        nums = payload.get("listaDezenas") or []
+        if slug not in counts or len(nums) != counts[slug] or not all(re.fullmatch(r"\d{1,2}", str(n)) for n in nums):
+            return None
+        if slug == "duplasena" and len(payload.get("listaDezenasSegundoSorteio") or []) != 6:
+            return None
+        if slug in ("diadesorte", "timemania") and not str(payload.get("nomeTimeCoracaoMesSorte") or "").strip("\\x00 "):
+            return None
+        if slug == "maismilionaria" and len(payload.get("trevosSorteados") or payload.get("listaTrevos") or []) != 2:
+            return None
+        numbers = f._extract_numbers(payload, slug)
+        if numbers:
+            base.queue._log(f"V45 HISTORICO_CAIXA confirmado: {display} {contest} {date}")
+            return {"loteria":display,"concurso":str(contest),"data":date,"numeros":numbers,"fonte":line[ui]}
+    except Exception as exc:
+        base.queue._log(f"V45 histórico indisponível {display} {contest}: {type(exc).__name__}")
+    return None
+
+
 def _process_date_decoupled(
     date: str,
     *,
@@ -426,26 +474,43 @@ def _process_date_decoupled(
 
     prize_highlight = base.cal.largest_prize_for_date(calendar_values, date, targets) if is_today else {}
 
-    imported = base.cal.history_imported_map(history_values)
-    waiting_history = [f"{display} {contest}" for key, display, contest in targets if imported.get(key) != contest]
-    if waiting_history and not config.dry_run:
-        try:
-            inserted = base.caixa_fallback.append_missing_results(
-                worksheet,
-                values,
-                targets,
-                expected_date=date,
-                log=base.queue._log,
-            )
-            if inserted:
-                values = worksheet.get_all_values()
-        except Exception as error:
-            base.queue._log(f"Fallback CAIXA {date} falhou: {error}")
-
     headers = list(values[0])
     daily_column = os.getenv("PUBLICADO_YT_DIARIO_COL", base.queue.DAILY_COLUMN_DEFAULT)
     daily_index = base.queue._ensure_column(worksheet, headers, daily_column)
     rows, missing_rows = _all_result_rows(values, headers, date, targets)
+    official_cache = {}
+    f = base.caixa_fallback
+    existing = {(base.queue._lottery_key(d.get("loteria")), base.cal._contest_key(d.get("concurso"))): n for n,d in rows}
+    for key, display, contest in targets:
+        pair = (key, str(contest))
+        if config.dry_run:
+            continue
+        official = _history_result(api_spreadsheet, history_values, key, display, str(contest), date)
+        if official is None:
+            try:
+                official = f.fetch_official_result(key, display, contest)
+            except Exception as exc:
+                base.queue._log(f"V45 aguardando fonte oficial {display} {contest}: {type(exc).__name__}")
+        if not official or official.get("data") != date or not official.get("numeros"):
+            continue
+        official_cache[pair] = official
+        if pair not in existing:
+            # Preserve existing source rows and avoid inserting duplicate contest keys.
+            indices = [f._header_index(headers, *aliases) for aliases in (
+                ("Produto","Loteria"), ("Concurso",), ("Data","Data Sorteio"), ("Numeros","Descricao","Resultado"))]
+            if None in indices:
+                raise RuntimeError("V45: colunas mínimas ausentes")
+            il, ic, idate, inu = indices
+            if any(base.queue._lottery_key(line[il] if il < len(line) else "") == key and base.cal._contest_key(line[ic] if ic < len(line) else "") == str(contest) for line in values[1:]):
+                base.queue._log(f"V45 linha existente incompleta: {display} {contest}; sem duplicar")
+                continue
+            new_row = [""] * len(headers)
+            new_row[il], new_row[ic], new_row[idate], new_row[inu] = display, str(contest), date, official["numeros"]
+            worksheet.append_row(new_row, value_input_option="RAW")
+    if not config.dry_run:
+        values = worksheet.get_all_values()
+        headers = list(values[0])
+        rows, missing_rows = _all_result_rows(values, headers, date, targets)
 
     active_live = []
     completed_live = []
@@ -489,6 +554,8 @@ def _process_date_decoupled(
         except Exception as exc:
             base.queue._log(f"V41 transmissão pendente {date}: {type(exc).__name__}")
     if not rows:
+        if not config.dry_run:
+            base._upsert_alert_status(api_spreadsheet, date, "", "PENDENTE_RESULTADOS_V45", config.timezone)
         base.queue._log(f"{date}: aguardando resultados: " + ", ".join(missing_rows))
         return 0
 
@@ -501,15 +568,15 @@ def _process_date_decoupled(
         if config.dry_run:
             verified.append(row)
             continue
-        try:
-            official = base.caixa_fallback.fetch_official_result(key, display, contest)
-            if official and official.get("data") == date and official.get("numeros"):
-                verified.append(row)
-            else:
-                base.queue._log(f"V41 aguardando confirmação: {display} {contest}")
-        except Exception as exc:
-            base.queue._log(f"V41 aguardando CAIXA: {display} {contest}: {type(exc).__name__}")
+        official = official_cache.get((key, contest))
+        if official:
+            # Render from the verified numbers, not a stale Blogger description.
+            data = dict(data)
+            data["numeros"] = official["numeros"]
+            verified.append((row[0], data))
     if not verified:
+        if not config.dry_run:
+            base._upsert_alert_status(api_spreadsheet, date, "", "PENDENTE_RESULTADOS_V45", config.timezone)
         return 0
     complete = len(verified) == len(targets) and not missing_rows
     # V44: cada concurso recebe normal + Short, independentemente dos demais.
@@ -526,6 +593,8 @@ def _process_date_decoupled(
             result += summary
         elif result:
             base._mark_alert_final(api_spreadsheet, date, config.timezone)
+    if not config.dry_run and (not complete or result < len(verified) + (1 if len(verified) > 1 else 0)):
+        base._upsert_alert_status(api_spreadsheet, date, "", "PENDENTE_PUBLICACAO_V45", config.timezone)
     return result
 
 
