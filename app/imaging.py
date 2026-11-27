@@ -345,8 +345,9 @@ def _strip_index_prefix(s: str) -> str:
     s2 = str(s or "")
     # casos com pontuação (1. ou 1))
     s2 = re.sub(r"^\s*\d{1,2}[.)]\s*", "", s2)
-    # dois dígitos puros (01, 02 ... 14)
-    s2 = re.sub(r"^\s*(?:(0\d)|([1-9]\d))\s+", "", s2)
+    # Um número inicial isolado é o placar (inclusive 00, 01, 02).
+    # Só remove índice sem pontuação quando outro número de gols vem a seguir.
+    s2 = re.sub(r"^\s*(?:0?[1-9]|1[0-4])\s+(?=\d+\s+)", "", s2)
     return s2
 
 def _extract_goals_and_name(token: str):
