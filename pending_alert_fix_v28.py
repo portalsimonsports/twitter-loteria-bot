@@ -231,11 +231,14 @@ def _clean_public_video(token, vid, marker=""):
         snippet = {k: original[k] for k in ("title", "categoryId", "defaultLanguage", "defaultAudioLanguage") if k in original}
         snippet.update({"description": cleaned, "tags": tags})
         base.live._request("PUT", f"{api}/videos", token=token, params={"part": "snippet"}, json_body={"id": vid, "snippet": snippet})
-        base.queue._log(f"V40 descrição corrigida sem reenviar: {vid}")
+        confirmed = base.live._request("GET", f"{api}/videos", token=token, params={"part": "snippet", "id": vid})
+        if not any(RESULTS_URL in x.get("snippet", {}).get("description", "").splitlines() for x in confirmed.get("items", [])):
+            raise RuntimeError("V46: URL integral não confirmada pelo YouTube")
+        base.queue._log(f"V46 descrição corrigida e confirmada sem reenviar: {vid} | {RESULTS_URL}")
 
 
 def _repair_recent_descriptions(cofre_get, cofre_cache):
-    """Corrige publicações anteriores V34/V39 na conta autenticada."""
+    """V46: read actual video snippets, repair links without uploading again."""
     import re
     for account, token, _privacy in _credentials(cofre_get, cofre_cache):
         try:
@@ -243,20 +246,37 @@ def _repair_recent_descriptions(cofre_get, cofre_cache):
             channels = base.live._request("GET", f"{api}/channels", token=token, params={"part": "contentDetails", "mine": "true"})
             for channel in channels.get("items", []):
                 playlist = channel["contentDetails"]["relatedPlaylists"]["uploads"]
-                result = base.live._request("GET", f"{api}/playlistItems", token=token, params={"part": "snippet", "playlistId": playlist, "maxResults": 50})
-                for item in result.get("items", []):
-                    sn = item.get("snippet", {})
-                    description = sn.get("description", "")
-                    vid = sn.get("resourceId", {}).get("videoId", "")
-                    if vid and "loterias caixa" in description.lower() and RESULTS_URL in description:
-                        base.queue._log(f"V43 URL integral confirmada na descrição retornada pelo YouTube: {vid} | {RESULTS_URL}")
-                    if vid and (re.search(r"(?m)^\s*PSS_(?:RESULTADO|CHAMADA)_", description) or ("loterias caixa" in description.lower() and RESULTS_URL not in description and ("portalsimo" in description.lower() or "outros resultados" in description.lower()))):
-                        try:
-                            _clean_public_video(token, vid)
-                        except Exception as exc:
-                            base.queue._log(f"[{account}] V40 revisão pendente {vid}: {type(exc).__name__}")
+                page = None
+                for _ in range(3):
+                    params = {"part": "snippet", "playlistId": playlist, "maxResults": 50}
+                    if page:
+                        params["pageToken"] = page
+                    result = base.live._request("GET", f"{api}/playlistItems", token=token, params=params)
+                    ids = [item.get("snippet", {}).get("resourceId", {}).get("videoId", "") for item in result.get("items", [])]
+                    ids = [vid for vid in ids if vid]
+                    if ids:
+                        details = base.live._request("GET", f"{api}/videos", token=token, params={"part": "snippet", "id": ",".join(ids)})
+                        for item in details.get("items", []):
+                            sn = item.get("snippet", {})
+                            desc, title = sn.get("description", ""), sn.get("title", "")
+                            tags = sn.get("tags", [])
+                            is_lottery = any(str(t).startswith(("PSS_RESULTADO_", "PSS_CHAMADA_")) for t in tags) or bool(re.search(r"(?i)loterias? caixa|lotof[aá]cil|mega[- ]sena|timemania|dia de sorte|dupla sena|lotomania|super sete|milion[aá]ria|loteria federal|\bquina\b|\bloteca\b", title))
+                            if not is_lottery:
+                                continue
+                            vid = item["id"]
+                            broken = any("portalsimo" in line.lower() and ("..." in line or "…" in line or (RESULTS_URL not in line and ("outros resultados" in line.lower() or "/search/label/loterias" in line.lower()))) for line in desc.splitlines())
+                            try:
+                                if broken or RESULTS_URL not in desc.splitlines() or re.search(r"(?m)^\s*PSS_(?:RESULTADO|CHAMADA)_", desc):
+                                    _clean_public_video(token, vid)
+                                else:
+                                    base.queue._log(f"V46 descrição API confirmada: {vid} | {RESULTS_URL}")
+                            except Exception as exc:
+                                base.queue._log(f"V46 descrição pendente {vid}: {type(exc).__name__}")
+                    page = result.get("nextPageToken")
+                    if not page:
+                        break
         except Exception as exc:
-            base.queue._log(f"[{account}] V40 revisão indisponível: {type(exc).__name__}")
+            base.queue._log(f"V46 revisão indisponível: {type(exc).__name__}")
 
 
 def _publish_regular_results(date, rows, worksheet, daily_index, cofre_get, cofre_cache, config, *, consolidated=False):
